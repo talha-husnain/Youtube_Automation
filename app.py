@@ -2940,6 +2940,7 @@ async def process_endpoint(
     caption_script: Optional[str] = Form(None),
     frame_outro: Optional[str] = Form(None),
     frame_handle: Optional[str] = Form(None),
+    frame_outro_seconds: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2982,6 +2983,7 @@ async def process_endpoint(
         caption_script = body.get("caption_script")
         frame_outro = body.get("frame_outro")
         frame_handle = body.get("frame_handle")
+        frame_outro_seconds = body.get("frame_outro_seconds")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square", "framed"):
@@ -3155,6 +3157,9 @@ async def process_endpoint(
             env["FRAME_TITLE"] = "0"
         if frame_outro is not None and str(frame_outro).lower() in ("0", "false", "no"):
             env["FRAME_OUTRO"] = "0"
+        outro_secs = _gen_control(frame_outro_seconds, "frame_outro_seconds", 1, 3)
+        if outro_secs is not None:
+            env["FRAME_OUTRO_SECONDS"] = str(outro_secs)
         if frame_handle:
             import framed_layout
             handle = framed_layout.clean_handle(frame_handle)

@@ -1058,6 +1058,7 @@ function App() {
           frame_zoom: data.frameZoom || null,
           frame_title: data.frameTitle === false ? '0' : '1',
           frame_outro: data.frameOutro === false ? '0' : '1',
+          frame_outro_seconds: data.frameOutro === false ? null : (data.frameOutroSeconds || null),
           frame_handle: data.frameHandle || null,
         } : {}),
         caption_script: data.captionScript || null,

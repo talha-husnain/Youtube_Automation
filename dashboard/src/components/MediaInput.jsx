@@ -57,6 +57,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [frameOutro, setFrameOutro] = useState(() => {
         try { return localStorage.getItem('os_frame_outro') !== '0'; } catch { return true; }
     });
+    const [frameOutroSeconds, setFrameOutroSeconds] = useState(() => {
+        try { return localStorage.getItem('os_frame_outro_s') || '3'; } catch { return '3'; }
+    });
     const [frameTitle, setFrameTitle] = useState(() => {
         try { return localStorage.getItem('os_frame_title') !== '0'; } catch { return true; }
     });
@@ -151,6 +154,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             frameTitle,
             frameHandle,
             frameOutro,
+            frameOutroSeconds,
             captionScript,
         };
         try {
@@ -159,6 +163,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             localStorage.setItem('os_frame_bg_v2', frameBg);
             localStorage.setItem('os_frame_handle', frameHandle);
             localStorage.setItem('os_frame_outro', frameOutro ? '1' : '0');
+            localStorage.setItem('os_frame_outro_s', frameOutroSeconds);
             localStorage.setItem('os_frame_crop', frameCrop);
             localStorage.setItem('os_frame_zoom', frameZoom);
             localStorage.setItem('os_frame_title', frameTitle ? '1' : '0');
@@ -382,8 +387,16 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
                                 <input type="checkbox" checked={frameOutro} onChange={(e) => setFrameOutro(e.target.checked)}
                                     className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer" />
-                                2 s end card: &quot;follow for more&quot; + channel
+                                animated end card: &quot;follow for more&quot; + channel
                             </label>
+                            {frameOutro && (
+                                <select value={frameOutroSeconds} onChange={(e) => setFrameOutroSeconds(e.target.value)}
+                                    className="input-field !w-auto text-xs py-1.5" aria-label="end card length">
+                                    <option value="1">1 second</option>
+                                    <option value="2">2 seconds</option>
+                                    <option value="3">3 seconds</option>
+                                </select>
+                            )}
                             <p className="text-[11px] leading-relaxed text-muted">
                                 Captions are added under the video automatically. Zoom also trims logos and
                                 subtitles already burned into the source.

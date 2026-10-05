@@ -36,10 +36,11 @@ CAPTION_GAP_PX = 45
 CROP_TOP_SHARE = 0.25
 CROP_ASPECTS = {"wide": 16 / 9, "classic": 4 / 3, "square": 1.0}
 DEFAULT_BG = "#14142B"
-# End card: the clip's last frame held and dimmed, with "follow for more" and
-# the handle. Holding the real frame avoids a cut to a blank screen; 2 s is
-# long enough to read two lines.
-OUTRO_SECONDS = 2.0
+# End card: the clip's last frame held, blurred and tinted, under an animated
+# "follow for more" with the handle on a pulsing button. Holding the real
+# frame avoids a cut to a blank screen. FRAME_OUTRO_SECONDS picks 1-3 s.
+OUTRO_SECONDS = 3.0
+GOLD = "#FFD23F"
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 
 
@@ -86,8 +87,13 @@ def settings(job_dir=None):
     title = os.environ.get("FRAME_TITLE", "0" if job.get("title") is False else "1").strip() != "0"
     outro = os.environ.get("FRAME_OUTRO", "0" if job.get("outro") is False else "1").strip() != "0"
     handle = clean_handle(os.environ.get("FRAME_HANDLE") or job.get("handle") or "")
+    try:
+        outro_s = float(os.environ.get("FRAME_OUTRO_SECONDS") or job.get("outro_seconds")
+                        or OUTRO_SECONDS)
+    except ValueError:
+        outro_s = OUTRO_SECONDS
     return {"bg": "#" + bg.lstrip("#").upper(), "crop": crop, "zoom": zoom, "title": title,
-            "outro": outro, "handle": handle}
+            "outro": outro, "handle": handle, "outro_seconds": min(max(outro_s, 1.0), 3.0)}
 
 
 def clean_handle(text):
@@ -156,7 +162,105 @@ def _ts(seconds):
     return f"{int(seconds // 3600)}:{int(seconds % 3600 // 60):02d}:{seconds % 60:05.2f}"
 
 
-def overlay_ass(path, geo, bg, duration, title="", handle="", outro=False):
+_K = 0.5523  # bezier handle length for a quarter circle
+
+
+def _round_rect(w, h, r):
+    """ASS drawing of a w x h rounded rectangle (origin top-left)."""
+    c = r * _K
+    return (f"m {r} 0 l {w - r} 0 b {w - r + c:.0f} 0 {w} {r - c:.0f} {w} {r} "
+            f"l {w} {h - r} b {w} {h - r + c:.0f} {w - r + c:.0f} {h} {w - r} {h} "
+            f"l {r} {h} b {r - c:.0f} {h} 0 {h - r + c:.0f} 0 {h - r} "
+            f"l 0 {r} b 0 {r - c:.0f} {r - c:.0f} 0 {r} 0")
+
+
+def _circle(rad):
+    c = rad * _K
+    d = 2 * rad
+    return (f"m {rad} 0 b {rad + c:.0f} 0 {d} {rad - c:.0f} {d} {rad} "
+            f"b {d} {rad + c:.0f} {rad + c:.0f} {d} {rad} {d} "
+            f"b {rad - c:.0f} {d} 0 {rad + c:.0f} 0 {rad} "
+            f"b 0 {rad - c:.0f} {rad - c:.0f} 0 {rad} 0")
+
+
+END_CARD_STYLES = [
+    "Style: OutroBig,Anton,200,&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,"
+    "0,0,0,0,100,100,4,0,1,9,6,5,40,40,0,1",
+    "Style: OutroSub,Anton,130,{gold},{gold},&H00000000,&H96000000,"
+    "0,0,0,0,100,100,3,0,1,7,5,5,40,40,0,1",
+    "Style: Pill,Montserrat ExtraBold,62,{ink},{ink},&H00000000,&H00000000,"
+    "1,0,0,0,100,100,0,0,1,0,0,5,40,40,0,1",
+    "Style: Shape,Arial,20,{gold},{gold},{gold},&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
+    "Style: OutroNote,Montserrat ExtraBold,44,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,"
+    "1,0,0,0,100,100,1,0,1,0,3,5,40,40,0,1",
+]
+
+
+def end_card_events(t0, secs, handle, bg):
+    """Dialogue lines of the animated end card starting at t0 for secs seconds.
+
+    0.0 s "FOLLOW" slams in and shakes; 0.18 s "FOR MORE" slides in; 0.35 s
+    the gold handle button rises, then pulses with ripple rings and a
+    bouncing arrow until the end. Times inside tags are ms from each event.
+    """
+    t1 = t0 + secs
+    cx = OUT_W // 2
+    gold = _ass_colour(GOLD)
+    pill_text = handle or "NEW CLIPS DAILY"
+    pill_w = min(980, max(560, 40 * len(pill_text) + 160))
+    pill_h, py = 150, 1090
+    ev = []
+
+    def add(layer, start, style, text, end=None):
+        ev.append(f"Dialogue: {layer},{_ts(start)},{_ts(min(end or t1, t1))},{style},,0,0,0,,{text}")
+
+    add(5, t0, "OutroBig",
+        rf"{{\pos({cx},640)\fscx320\fscy320\alpha&HFF&\t(0,180,\fscx100\fscy100\alpha&H00&)"
+        r"\t(180,240,\frz-5)\t(240,300,\frz4)\t(300,360,\frz0)}FOLLOW")
+    add(5, t0 + 0.18, "OutroSub",
+        rf"{{\move({OUT_W + 500},830,{cx},830,0,300)}}FOR MORE")
+    # The button: shape and text share the same rise and pulses.
+    pulse = "".join(rf"\t({a},{a + 200},\fscx108\fscy108)\t({a + 200},{a + 400},\fscx100\fscy100)"
+                    for a in range(650, int(secs * 1000) - 350, 600))
+    rise = rf"\move({cx},{OUT_H + 200},{cx},{py},0,350)"
+    add(3, t0 + 0.35, "Shape",
+        rf"{{\an5{rise}{pulse}\1c{gold}\bord0\shad0\p1}}{_round_rect(pill_w, pill_h, pill_h // 2)}{{\p0}}")
+    add(4, t0 + 0.35, "Pill", rf"{{\an5{rise}{pulse}}}{pill_text}")
+    # Ripple rings behind the button, one every 0.6 s after it lands.
+    t = t0 + 0.75
+    while t < t1 - 0.3:
+        add(2, t, "Shape",
+            rf"{{\an5\pos({cx},{py})\1a&HFF&\3c{gold}\bord6\shad0\fscx40\fscy40"
+            rf"\t(0,700,\fscx120\fscy120\alpha&HFF&)\p1}}{_round_rect(pill_w, pill_h, pill_h // 2)}{{\p0}}",
+            end=t + 0.7)
+        t += 0.6
+    # Arrow under the button, bouncing toward it.
+    arrow = "m 0 40 l 36 0 l 72 40 l 58 40 l 36 16 l 14 40"
+    t, up = t0 + 0.8, True
+    while t < t1 - 0.05:
+        y_from, y_to = (1250, 1220) if up else (1220, 1250)
+        add(4, t, "Shape",
+            rf"{{\an5\move({cx},{y_from},{cx},{y_to})\1c&HFFFFFF&\bord0\shad0\p1}}{arrow}{{\p0}}",
+            end=t + 0.25)
+        t, up = t + 0.25, not up
+    if handle:
+        add(4, t0 + 0.9, "OutroNote", rf"{{\pos({cx},1360)\fad(250,0)}}New clips every day")
+    return ev
+
+
+def end_card_audio(secs):
+    """aevalsrc expression: a rising swoosh into a soft two-tone ding.
+
+    Synthesised, so there is no sound file to license or ship.
+    """
+    swoosh = "if(lt(t,0.35),0.45*sin(2*PI*(260*t+1500*t*t))*(t/0.35)*(1-t/0.35)*4,0)"
+    ding = ("if(gte(t,0.62),0.55*sin(2*PI*1318*(t-0.62))*exp(-5*(t-0.62))"
+            "+0.25*sin(2*PI*1975*(t-0.62))*exp(-7*(t-0.62)),0)")
+    return f"aevalsrc='{swoosh}+{ding}':s=48000:d={secs:g}"
+
+
+def overlay_ass(path, geo, bg, duration, title="", handle="", outro=False,
+                outro_seconds=OUTRO_SECONDS):
     """The frame's text layer: title, handle tag and end card, all animated.
 
     The title pops in over the first ~0.4 s instead of a separate intro card:
@@ -178,10 +282,9 @@ def overlay_ass(path, geo, bg, duration, title="", handle="", outro=False):
         "1,0,0,0,100,100,0,0,1,0,3,5,70,70,0,1",
         f"Style: Handle,Montserrat ExtraBold,34,{colour},{colour},&H00000000,&H00000000,"
         "1,0,0,0,100,100,1,0,1,0,0,5,40,40,0,1",
-        "Style: Outro,Anton,118,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,"
-        "0,0,0,0,100,100,2,0,1,7,0,5,60,60,0,1",
-        "Style: OutroHandle,Montserrat ExtraBold,64,&H0000E5FF,&H0000E5FF,&H00000000,"
-        "&H00000000,1,0,0,0,100,100,0,0,1,5,0,5,60,60,0,1",
+        *(s.format(gold=_ass_colour(GOLD),
+                   ink=_ass_colour(bg if _luminance(bg) < 0.4 else "#000000"))
+          for s in END_CARD_STYLES),
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
@@ -194,15 +297,7 @@ def overlay_ass(path, geo, bg, duration, title="", handle="", outro=False):
         lines.append(f"Dialogue: 1,{_ts(0)},{_ts(duration)},Handle,,0,0,0,,"
                      f"{{\\pos({OUT_W // 2},44)\\alpha&H40&}}{handle}")
     if outro:
-        t0, t1 = duration, duration + OUTRO_SECONDS
-        y = int(OUT_H * 0.44)
-        lines.append(f"Dialogue: 2,{_ts(t0)},{_ts(t1)},Outro,,0,0,0,,"
-                     f"{{\\pos({OUT_W // 2},{y})"
-                     r"\fscx40\fscy40\t(0,220,\fscx110\fscy110)\t(220,340,\fscx100\fscy100)}"
-                     r"FOLLOW\NFOR MORE")
-        if handle:
-            lines.append(f"Dialogue: 2,{_ts(t0 + 0.25)},{_ts(t1)},OutroHandle,,0,0,0,,"
-                         f"{{\\pos({OUT_W // 2},{y + 230})\\fad(200,0)}}{handle}")
+        lines += end_card_events(duration, outro_seconds, handle, bg)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -235,23 +330,34 @@ def render(input_video, output_video, title=None):
           f"pad={OUT_W}:{OUT_H}:{geo['x']}:{geo['y']}:color=0x{cfg['bg'].lstrip('#')},setsar=1")
     ass_path = None
     title = clean_title(title) if cfg["title"] else ""
-    audio = []
+    secs = cfg["outro_seconds"]
     if cfg["outro"]:
-        # Hold the last frame, dimmed, under the end card; silence pads the audio.
-        vf += (f",tpad=stop_mode=clone:stop_duration={OUTRO_SECONDS:g}"
-               f",drawbox=x=0:y=0:w=iw:h=ih:color=0x{cfg['bg'].lstrip('#')}@0.72:t=fill"
+        # Hold the last frame, blurred and tinted, under the end card.
+        vf += (f",tpad=stop_mode=clone:stop_duration={secs:g}"
+               f",gblur=sigma=14:enable='gte(t,{duration:.3f})'"
+               f",drawbox=x=0:y=0:w=iw:h=ih:color=0x{cfg['bg'].lstrip('#')}@0.68:t=fill"
                f":enable='gte(t,{duration:.3f})'")
-        audio = ["-af", f"apad=pad_dur={OUTRO_SECONDS:g}"]
     if title or cfg["handle"] or cfg["outro"]:
         ass_path = os.path.join(os.path.dirname(os.path.abspath(output_video)),
                                 f"frametitle_{uuid.uuid4().hex[:8]}.ass")
         overlay_ass(ass_path, geo, cfg["bg"], duration, title=title,
-                    handle=cfg["handle"], outro=cfg["outro"])
+                    handle=cfg["handle"], outro=cfg["outro"], outro_seconds=secs)
         vf += (f",ass=filename='{escape_filter_value(ass_path)}'"
                f":fontsdir='{escape_filter_value(FONTS_DIR)}'")
+    graph = f"[0:v]{vf}[v]"
+    if cfg["outro"]:
+        # Silence pads the clip's audio and the end card's sound mixes in on top.
+        delay = int(duration * 1000)
+        graph += (f";[0:a]apad=pad_dur={secs:g}[a0]"
+                  f";{end_card_audio(secs)},aformat=channel_layouts=stereo,"
+                  f"adelay={delay}|{delay}[sfx]"
+                  f";[a0][sfx]amix=inputs=2:duration=first:normalize=0[a]")
+        maps = ["-map", "[v]", "-map", "[a]"]
+    else:
+        maps = ["-map", "[v]", "-map", "0:a?"]
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-i", input_video, "-vf", vf, *audio,
+            ["ffmpeg", "-y", "-i", input_video, "-filter_complex", graph, *maps,
              *video_encode_args(QUALITY), "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "192k", *METADATA_SCRUB,
              "-movflags", "+faststart", output_video],

@@ -70,14 +70,14 @@ def test_portrait_source_is_never_widened():
 
 def test_settings_fall_back_to_the_job_file(tmp_path, monkeypatch):
     for k in ("FRAME_BG_COLOR", "FRAME_CROP", "FRAME_ZOOM", "FRAME_TITLE",
-              "FRAME_OUTRO", "FRAME_HANDLE"):
+              "FRAME_OUTRO", "FRAME_HANDLE", "FRAME_OUTRO_SECONDS"):
         monkeypatch.delenv(k, raising=False)
     fl.write_job(str(tmp_path), {"bg": "#7B1E3A", "crop": "square", "zoom": 1.25, "title": False,
                                  "outro": False, "handle": "@PunchlineBazaar"},
                  200, {"x_clip_1.mp4": "Title"})
     cfg = fl.settings(str(tmp_path))
     assert cfg == {"bg": "#7B1E3A", "crop": "square", "zoom": 1.25, "title": False,
-                   "outro": False, "handle": "@PunchlineBazaar"}
+                   "outro": False, "handle": "@PunchlineBazaar", "outro_seconds": 3.0}
     assert fl.job_caption_margin(str(tmp_path)) == 200
     assert fl.job_caption_margin(str(tmp_path / "missing")) is None
 
@@ -210,9 +210,24 @@ def test_overlay_has_title_handle_and_end_card(tmp_path):
     geo = fl.geometry(1920, 1080)
     fl.overlay_ass(str(p), geo, "#2B0F3D", 40.0, title="Hello", handle="@PunchlineBazaar", outro=True)
     text = p.read_text(encoding="utf-8")
-    assert "Hello" in text and "FOLLOW" in text and text.count("@PunchlineBazaar") == 2
-    # The end card starts where the clip ends and lasts OUTRO_SECONDS.
-    assert "0:00:40.00,0:00:42.00,Outro" in text
+    assert "Hello" in text and "FOLLOW" in text and "FOR MORE" in text
+    assert text.count("@PunchlineBazaar") == 2  # top tag + the end card button
+    # The end card starts where the clip ends and lasts OUTRO_SECONDS (3 s).
+    assert "0:00:40.00,0:00:43.00,OutroBig" in text
+    assert "\p1" in text  # the button and rings are drawn shapes
+
+
+def test_end_card_length_is_clamped(monkeypatch):
+    monkeypatch.setenv("FRAME_OUTRO_SECONDS", "9")
+    assert fl.settings()["outro_seconds"] == 3.0
+    monkeypatch.setenv("FRAME_OUTRO_SECONDS", "0.2")
+    assert fl.settings()["outro_seconds"] == 1.0
+
+
+def test_end_card_events_stay_inside_the_card():
+    ev = fl.end_card_events(10.0, 1.0, "@x", "#2B0F3D")
+    ends = [e.split(",")[2] for e in ev]
+    assert all(e <= "0:00:11.00" for e in ends)
 
 
 def test_no_end_card_when_off(tmp_path):
