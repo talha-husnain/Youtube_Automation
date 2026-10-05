@@ -77,12 +77,10 @@ function Root() {
     if (hash.startsWith('#/oauth/authorize')) return 'oauth';
     if (hash.startsWith('#/account')) return 'account';
     if (hash.startsWith('#/deleted')) return 'deleted';
-    if (hash.startsWith('#/pricing')) return 'pricing';
     if (hash === '#legal') return 'legal';
-    // #landing = explicit landing view (app logo); section anchors keep the landing mounted
-    if (['#landing', '#features', '#how-it-works', '#pricing', '#comparison', '#faq'].includes(hash)) return 'landing';
-    if (hash === '#app' || hash.startsWith('#app?') || localStorage.getItem('openshorts_skip_landing') === '1') return 'app';
-    return 'landing';
+    if (hash === '#landing') return 'landing';
+    // By default, always land directly in the App (bypassing cloud promotional landing and paywalls)
+    return 'app';
   };
 
   const [view, setView] = useState(resolveView);

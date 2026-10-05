@@ -32,6 +32,14 @@ import tempfile
 import threading
 import time
 
+for _s in ("stdout", "stderr"):
+    _stream = getattr(sys, _s, None)
+    if _stream and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 from subtitles import (
     get_whisper_config,
     WHISPER_TRANSCRIBE_PARAMS,

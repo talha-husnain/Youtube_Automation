@@ -5,6 +5,17 @@ import shutil
 import argparse
 import re
 import sys
+import os
+
+# Ensure UTF-8 output on Windows to prevent UnicodeEncodeError on emojis and special characters
+for _stream_name in ("stdout", "stderr"):
+    _stream = getattr(sys, _stream_name, None)
+    if _stream and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 import threading
 import unicodedata
 import uuid
@@ -91,9 +102,14 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
 model = YOLO(os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt"))
 
 # --- MediaPipe Setup ---
-# Use standard Face Detection (BlazeFace) for speed
-mp_face_detection = mp.solutions.face_detection
-face_detection = mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+# Use standard Face Detection (BlazeFace) for speed if available, or YOLO person fallback
+face_detection = None
+try:
+    if hasattr(mp, "solutions") and hasattr(mp.solutions, "face_detection"):
+        mp_face_detection = mp.solutions.face_detection
+        face_detection = mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+except Exception as e:
+    face_detection = None
 
 # Consecutive detections a large target move must survive before the camera
 # follows it (see SmoothedCameraman.update_target). Env-overridable so the
@@ -436,30 +452,34 @@ def detect_face_candidates(frame):
     Boxes are in ORIGINAL frame coordinates (detection runs downscaled;
     MediaPipe's relative coords make the mapping exact).
     """
-    height, width, _ = frame.shape
-    small, _scale = _detection_frame(frame)
-    rgb_frame = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-    with DETECT_LOCK:
-        results = face_detection.process(rgb_frame)
-    
-    candidates = []
-    
-    if not results.detections:
-        return []
+    if face_detection is not None:
+        height, width, _ = frame.shape
+        small, _scale = _detection_frame(frame)
+        rgb_frame = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        with DETECT_LOCK:
+            results = face_detection.process(rgb_frame)
         
-    for detection in results.detections:
-        bboxC = detection.location_data.relative_bounding_box
-        x = int(bboxC.xmin * width)
-        y = int(bboxC.ymin * height)
-        w = int(bboxC.width * width)
-        h = int(bboxC.height * height)
-        
-        candidates.append({
-            'box': [x, y, w, h],
-            'score': w * h # Area as score
-        })
+        candidates = []
+        if not results.detections:
+            return []
             
-    return candidates
+        for detection in results.detections:
+            bboxC = detection.location_data.relative_bounding_box
+            x = int(bboxC.xmin * width)
+            y = int(bboxC.ymin * height)
+            w = int(bboxC.width * width)
+            h = int(bboxC.height * height)
+            candidates.append({
+                'box': [x, y, w, h],
+                'score': w * h # Area as score
+            })
+        return candidates
+
+    # Fallback: estimate face/upper-body box using YOLO person detection
+    person_box = detect_person_yolo(frame)
+    if person_box:
+        return [{'box': person_box, 'score': person_box[2] * person_box[3]}]
+    return []
 
 def detect_person_yolo(frame):
     """
@@ -932,6 +952,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
             # playlist's), paying for all of them and keeping the last.
             'noplaylist': True,
             'extractor_args': extractor_args,
+            'js_runtimes': {'node': {}},
             'http_headers': {
                 'User-Agent': (
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '

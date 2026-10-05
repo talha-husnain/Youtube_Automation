@@ -1,19 +1,35 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import seo from './vite-plugin-seo'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
-// Backend target for the dev proxy. Defaults to the docker-compose service
-// name; set VITE_PROXY_TARGET=http://localhost:8000 to run the dev server on
-// the host against a backend reachable at localhost (no CORS, same-origin).
-const backend = process.env.VITE_PROXY_TARGET || 'http://backend:8000'
-const renderer = process.env.VITE_RENDER_TARGET || 'http://renderer:3100'
+const __dirname = path.dirname(fileURLToPath(import.meta.url)).replace(/\\/g, '/')
+
+// Backend target for the dev proxy. Defaults to localhost:8000 for local dev;
+// in Docker Compose, VITE_PROXY_TARGET=http://backend:8000 is passed.
+const backend = process.env.VITE_PROXY_TARGET || 'http://localhost:8000'
+const renderer = process.env.VITE_RENDER_TARGET || 'http://localhost:3100'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  // seo() runs on build only. It injects the crawler-visible homepage content
-  // into #root and emits the static /alternatives pages, sitemap.xml and
-  // llms.txt. See vite-plugin-seo.js.
-  plugins: [react(), seo()],
+  appType: 'spa',
+  root: __dirname,
+  plugins: [
+    react(),
+    seo(),
+    {
+      name: 'html-fallback',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (req.url === '/' || req.url === '') {
+            req.url = '/index.html';
+          }
+          next();
+        });
+      },
+    },
+  ],
   // The free tools (/youtube-transcript-generator and friends) are static
   // pages emitted by seo(); their behaviour ships as small standalone entries
   // with no React in them. vite-plugin-seo.js finds each entry's hashed file

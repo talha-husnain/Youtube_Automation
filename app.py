@@ -3892,6 +3892,119 @@ async def edit_clip(
         print(f"❌ Edit Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+class CustomEditRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    speed: float = 1.03
+    pitch_shift: bool = True
+    color_shift: bool = True
+    micro_zoom: bool = True
+    flip_horizontal: bool = False
+    vignette: bool = True
+    background_style: str = "keep"  # keep, blur, solid
+    bg_color: str = "black"
+    watermark_text: Optional[str] = None
+    input_filename: Optional[str] = None
+
+
+@app.post("/api/clip/custom-edit")
+async def custom_edit_clip(req: CustomEditRequest, request: Request):
+    """
+    Applies custom editing and anti-copyright transformations to a clip:
+    - Speed/tempo shift (1.02x - 1.05x)
+    - Audio pitch/frequency shift to evade Content ID
+    - Color histogram alteration (contrast, saturation, gamma)
+    - Micro-zoom / dynamic breathing
+    - Optional horizontal flip (mirroring)
+    - Background changing (blur, solid)
+    - Optional watermark text
+    """
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    if 'result' not in job or 'clips' not in job['result']:
+        raise HTTPException(status_code=400, detail="Job result not available")
+
+    # Resolve input path
+    if req.input_filename:
+        safe_name = os.path.basename(req.input_filename)
+        input_path = os.path.join(OUTPUT_DIR, req.job_id, safe_name)
+        filename = safe_name
+    else:
+        clip = job['result']['clips'][req.clip_index]
+        filename = clip['video_url'].split('/')[-1]
+        input_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
+
+    if not os.path.exists(input_path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
+
+    clean_name = _strip_burned_captions(os.path.join(OUTPUT_DIR, req.job_id), filename)
+    had_captions = clean_name != filename
+    if had_captions:
+        filename = clean_name
+        input_path = os.path.join(OUTPUT_DIR, req.job_id, clean_name)
+
+    transformed_filename = f"custom_{filename}"
+    output_path = os.path.join(OUTPUT_DIR, req.job_id, transformed_filename)
+
+    import custom_editor
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        None,
+        custom_editor.apply_custom_edit,
+        input_path,
+        output_path,
+        req.speed,
+        req.pitch_shift,
+        req.color_shift,
+        req.micro_zoom,
+        req.flip_horizontal,
+        req.vignette,
+        req.background_style,
+        req.bg_color,
+        None,
+        req.watermark_text
+    )
+
+    if had_captions:
+        recap = await loop.run_in_executor(
+            None, _reapply_captions, req.job_id, req.clip_index, output_path)
+        if recap:
+            transformed_filename = os.path.basename(recap)
+
+    transformed_filename = await _deliver(request, req.job_id, transformed_filename)
+    new_video_url = f"/videos/{req.job_id}/{transformed_filename}"
+
+    if req.clip_index < len(job['result']['clips']):
+        job['result']['clips'][req.clip_index]['video_url'] = new_video_url
+
+    try:
+        meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
+        if meta_files:
+            with open(meta_files[0], 'r') as f:
+                meta = json.load(f)
+            shorts = meta.get('shorts', [])
+            if req.clip_index < len(shorts):
+                shorts[req.clip_index]['video_url'] = new_video_url
+                meta['shorts'] = shorts
+                with open(meta_files[0], 'w') as f:
+                    json.dump(meta, f, indent=4)
+    except Exception as e:
+        print(f"⚠️ Failed to update metadata.json: {e}")
+
+    _archive_clip_edit_bg(req.job_id, req.clip_index, transformed_filename)
+
+    return {
+        "success": True,
+        "new_video_url": new_video_url,
+        "message": "Custom editing and anti-copyright transformations applied successfully."
+    }
+
+
 class CaptionWordIn(BaseModel):
     """One user-edited caption word, clip-relative ms — the same shape the
     /transcript endpoint hands the subtitle modal."""
