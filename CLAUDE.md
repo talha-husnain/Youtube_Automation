@@ -142,8 +142,11 @@ never finished:
 - **Branding** (framed only): `FRAME_HANDLE` shows the channel handle at the
   top, the title pops in over the first 0.4 s (no separate intro card, which
   costs the first second on Shorts), and `FRAME_OUTRO` (default on) holds the
-  last frame 2 s, tinted with the background colour, under "FOLLOW FOR MORE"
-  + handle. Same single ffmpeg pass. Dashboard defaults are the user's brand
+  last frame `FRAME_OUTRO_SECONDS` (1-3, default 3), blurred and tinted, under
+  an animated end card (`end_card_events`: FOLLOW slam, FOR MORE slide, gold
+  handle button pulsing with ripples and a bouncing arrow) and a synthesised
+  swoosh + ding (`end_card_audio`, aevalsrc: no sound file to license). Same
+  single ffmpeg pass, now a `-filter_complex`. Dashboard defaults are the user's brand
   (`BRAND` in MediaInput.jsx: Punchline Bazaar, #2B0F3D).
 - **Clips stay under 2 minutes**: `main.cap_clip_lengths` (`MAX_CLIP_SECONDS`,
   119) trims every pick, before the section fetch too; the API caps
