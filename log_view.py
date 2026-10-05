@@ -34,6 +34,9 @@ _RULES = [
     (re.compile(r'Audio ready ahead of the video'),
      '🎧 Audio ready — transcribing while the video downloads', None),
     # Live transcription progress emitted by transcribe_backends.
+    (re.compile(r"Using YouTube's \w+ captions"), "📝 Using the video's own captions — no transcription needed", None),
+    (re.compile(r'Fetching only the (\d+) picked clip'), '📥 Downloading only the {0} picked clips…', None),
+    (re.compile(r'Section (\d+) fetched'), '📥 Clip {0} downloaded', None),
     (re.compile(r'Transcribing… (\d+)%'), '🎙️ Transcribing audio… {0}%', 'asr'),
     (re.compile(r'Transcribing (video|audio)'), '🎙️ Transcribing audio…', 'asr'),
     (re.compile(r'Analyzing with (?:Gemini|local LLM)'), '🤖 Finding the best moments…', None),

@@ -2933,6 +2933,11 @@ async def process_endpoint(
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
     max_minutes: Optional[str] = Form(None),
+    frame_bg_color: Optional[str] = Form(None),
+    frame_crop: Optional[str] = Form(None),
+    frame_zoom: Optional[str] = Form(None),
+    frame_title: Optional[str] = Form(None),
+    caption_script: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2968,9 +2973,14 @@ async def process_endpoint(
         captions = body.get("captions")
         upload_id = body.get("upload_id")
         max_minutes = body.get("max_minutes")
+        frame_bg_color = body.get("frame_bg_color")
+        frame_crop = body.get("frame_crop")
+        frame_zoom = body.get("frame_zoom")
+        frame_title = body.get("frame_title")
+        caption_script = body.get("caption_script")
 
     # Normalize output format (auto = keep pipeline default).
-    if output_format not in ("vertical", "horizontal", "square"):
+    if output_format not in ("vertical", "horizontal", "square", "framed"):
         output_format = "auto"
 
     # Accepts a JSON list or a comma-separated form field.
@@ -3100,8 +3110,9 @@ async def process_endpoint(
         return int(val) if integer else val
 
     n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
-    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
-    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
+    # Clips stay under 2 minutes (main.MAX_CLIP_SECONDS trims anything longer).
+    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 114)
+    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 119)
     if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
         raise HTTPException(status_code=400,
                             detail="clip_max_seconds must be at least 5s above clip_min_seconds")
@@ -3120,6 +3131,26 @@ async def process_endpoint(
     if captions is not None and str(captions).lower() in ("0", "false", "no"):
         env["AUTO_CAPTIONS"] = "0"
         print(f"[captions] job={job_id} auto-captions off")
+
+    # Caption/title language (caption_script.py): roman (Roman Urdu /
+    # Hinglish), english or original.
+    if caption_script in ("roman", "english", "original"):
+        env["CAPTION_SCRIPT"] = caption_script
+
+    # FRAMED look (framed_layout.py): bad values fall back to its defaults
+    # there, so only shape-check here.
+    if output_format == "framed":
+        if frame_bg_color and re.fullmatch(r"#?[0-9A-Fa-f]{6}", str(frame_bg_color).strip()):
+            env["FRAME_BG_COLOR"] = "#" + str(frame_bg_color).strip().lstrip("#")
+        if frame_crop in ("wide", "classic", "square"):
+            env["FRAME_CROP"] = frame_crop
+        zoom = _gen_control(frame_zoom, "frame_zoom", 1.0, 1.5)
+        if zoom is not None:
+            env["FRAME_ZOOM"] = str(zoom)
+        if frame_title is not None and str(frame_title).lower() in ("0", "false", "no"):
+            env["FRAME_TITLE"] = "0"
+        print(f"[framed] job={job_id} bg={env.get('FRAME_BG_COLOR', 'default')} "
+              f"crop={env.get('FRAME_CROP', 'classic')} zoom={env.get('FRAME_ZOOM', 'default')}")
 
     input_path = None
     if url:
@@ -4488,6 +4519,10 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
         raise HTTPException(
             status_code=400,
             detail="Horizontal clips keep the full frame; there is no crop to reframe.")
+    if data.get('output_format') == 'framed':
+        raise HTTPException(
+            status_code=400,
+            detail="Framed clips show the whole picture on a colour background; there is no crop to reframe.")
 
     clip = clips[clip_index]
     segments, _canonical_range = _clip_recipe_parts(clip)
@@ -4678,6 +4713,10 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
         raise HTTPException(
             status_code=400,
             detail="Horizontal clips keep the full frame; there is no crop to reframe.")
+    if data.get('output_format') == 'framed':
+        raise HTTPException(
+            status_code=400,
+            detail="Framed clips show the whole picture on a colour background; there is no crop to reframe.")
 
     segments, canonical_range = _clip_recipe_parts(clip)
     source_path = _locate_source(req.job_id)

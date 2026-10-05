@@ -5,6 +5,9 @@ torch==2.11.0
 torchvision==0.26.0
 tqdm==4.67.3
 yt-dlp
+# YouTube JS-challenge solver scripts (run by Node). Without them every
+# download got HTTP 403 after the first few MB (5-oct-2026).
+yt-dlp-ejs
 faster-whisper==1.2.1
 py3langid==0.3.0
 google-genai==1.75.0

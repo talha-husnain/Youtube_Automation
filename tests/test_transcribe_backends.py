@@ -171,17 +171,30 @@ def fake_faster_whisper(monkeypatch):
     created = []
 
     class FakeModel:
-        def __init__(self, model_size, device=None, compute_type=None):
+        def __init__(self, model_size, device=None, compute_type=None, **kwargs):
             self.model_size = model_size
             self.device = device
+            self.kwargs = kwargs
+            self.calls = []
             created.append(self)
 
         def transcribe(self, path, **params):
+            self.calls.append(("sequential", params))
             segs = (s for s in [SimpleNamespace(
                 start=0.0, end=1.0, text=" hola", words=None)])
             return segs, SimpleNamespace(language="es")
 
-    fake_module = types.SimpleNamespace(WhisperModel=FakeModel)
+    class FakeBatched:
+        def __init__(self, model):
+            self.model = model
+
+        def transcribe(self, path, **params):
+            segs, info = self.model.transcribe(path, **params)
+            self.model.calls[-1] = ("batched", params)
+            return segs, info
+
+    fake_module = types.SimpleNamespace(WhisperModel=FakeModel,
+                                        BatchedInferencePipeline=FakeBatched)
     monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
     monkeypatch.setattr(tb, "_whisper_model", None)
     monkeypatch.setattr(tb, "_whisper_key", None)
@@ -210,6 +223,28 @@ def test_run_whisper_transcription_materializes_segments(fake_faster_whisper, mo
     segments, info = tb.run_whisper_transcription("video.mp4")
     assert isinstance(segments, list)
     assert info.language == "es"
+
+
+def test_cpu_whisper_runs_batched_with_repetition_guard(fake_faster_whisper, monkeypatch):
+    # Sequential beam-5 ran slower than real time on a laptop CPU; plain
+    # batched decoding looped on one word. Both guards must stay on.
+    monkeypatch.delenv("WHISPER_MODEL", raising=False)
+    monkeypatch.setenv("WHISPER_DEVICE", "cpu")
+    monkeypatch.delenv("WHISPER_BATCHED", raising=False)
+    tb.run_whisper_transcription("video.mp4", word_timestamps=True)
+    model = fake_faster_whisper[-1]
+    mode, params = model.calls[-1]
+    assert mode == "batched"
+    assert params["no_repeat_ngram_size"] >= 2
+    assert model.kwargs.get("cpu_threads") == 4
+
+
+def test_cpu_whisper_batched_can_be_turned_off(fake_faster_whisper, monkeypatch):
+    monkeypatch.delenv("WHISPER_MODEL", raising=False)
+    monkeypatch.setenv("WHISPER_DEVICE", "cpu")
+    monkeypatch.setenv("WHISPER_BATCHED", "0")
+    tb.run_whisper_transcription("video.mp4", beam_size=5)
+    assert fake_faster_whisper[-1].calls[-1] == ("sequential", {"beam_size": 5})
 
 
 # --- release_models: the API process must not keep the models resident ------
