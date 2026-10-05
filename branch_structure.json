@@ -1,0 +1,21 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "feature/auto-shorts",
+    "feature/channel-autopilot",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "feature/auto-shorts": "main",
+    "feature/channel-autopilot": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "feature/auto-shorts",
+    "feature/channel-autopilot",
+    "origin"
+  ]
+}

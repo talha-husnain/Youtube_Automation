@@ -1051,6 +1051,14 @@ function App() {
         // Set when the user took the quota wall's "clip the first N minutes"
         // offer: the server reserves N minutes and cuts the source to them.
         max_minutes: data.maxMinutes || null,
+        // Framed look (colour background, title, captions under the video).
+        ...(data.outputFormat === 'framed' ? {
+          frame_bg_color: data.frameBg || null,
+          frame_crop: data.frameCrop || null,
+          frame_zoom: data.frameZoom || null,
+          frame_title: data.frameTitle === false ? '0' : '1',
+        } : {}),
+        caption_script: data.captionScript || null,
       };
 
       if (data.type === 'url') {

@@ -29,16 +29,30 @@ const readVideoDuration = (file) => new Promise((resolve) => {
     } catch { resolve(null); }
 });
 
+// Background presets for the framed look.
+const FRAME_COLORS = ['#14142B', '#000000', '#FFFFFF', '#0F3D3E', '#7B1E3A', '#F2C14E', '#1D4ED8'];
+
 export default function MediaInput({ onProcess, isProcessing }) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
     // File upload is the primary path; the link is secondary.
-    const [mode, setMode] = useState('file'); // 'file' | 'url'
+    const [mode, setMode] = useState('url'); // 'file' | 'url'
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
     const [fileSeconds, setFileSeconds] = useState(null);
     const fileTooShort = fileSeconds != null && fileSeconds < MIN_SOURCE_SECONDS;
     const [acknowledged, setAcknowledged] = useState(false);
-    const [outputFormat, setOutputFormat] = useState('vertical'); // vertical | horizontal | square
+    // framed (colour background + title + captions) is the default look.
+    const [outputFormat, setOutputFormat] = useState((() => { try { return localStorage.getItem('os_output_format') || 'framed'; } catch { return 'framed'; } })); // framed | vertical | horizontal | square
+    const [frameBg, setFrameBg] = useState((() => { try { return localStorage.getItem('os_frame_bg') || '#14142B'; } catch { return '#14142B'; } }));
+    const [frameCrop, setFrameCrop] = useState((() => { try { return localStorage.getItem('os_frame_crop') || 'classic'; } catch { return 'classic'; } })); // wide | classic | square
+    const [frameZoom, setFrameZoom] = useState((() => { try { return localStorage.getItem('os_frame_zoom') || '1.12'; } catch { return '1.12'; } }));
+    // Caption + title language: roman (Roman Urdu / Hinglish), english, original.
+    const [captionScript, setCaptionScript] = useState(() => {
+        try { return localStorage.getItem('os_caption_script') || 'roman'; } catch { return 'roman'; }
+    });
+    const [frameTitle, setFrameTitle] = useState(() => {
+        try { return localStorage.getItem('os_frame_title') !== '0'; } catch { return true; }
+    });
     const [showInfo, setShowInfo] = useState(false);
     // Advanced generation controls — empty string means "let the AI decide",
     // which keeps the default pipeline behavior untouched.
@@ -124,8 +138,19 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHook,
             autoHookStyle,
             layout,
+            frameBg,
+            frameCrop,
+            frameZoom,
+            frameTitle,
+            captionScript,
         };
         try {
+            localStorage.setItem('os_caption_script', captionScript);
+            localStorage.setItem('os_output_format', outputFormat);
+            localStorage.setItem('os_frame_bg', frameBg);
+            localStorage.setItem('os_frame_crop', frameCrop);
+            localStorage.setItem('os_frame_zoom', frameZoom);
+            localStorage.setItem('os_frame_title', frameTitle ? '1' : '0');
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
             localStorage.setItem('os_layout', layout);
@@ -257,9 +282,10 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 {/* Output format selector */}
                 <div className="mt-5" data-tutorial="output-format">
                     <p className="eyebrow mb-2">Output format</p>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         {[
-                            { value: 'vertical', label: '9:16', hint: 'Shorts · Reels · TikTok', w: 18, h: 32 },
+                            { value: 'framed', label: 'Framed', hint: 'Colour bg · title · captions', w: 18, h: 32 },
+                            { value: 'vertical', label: '9:16', hint: 'Face-tracked crop', w: 18, h: 32 },
                             { value: 'square', label: '1:1', hint: 'Feed posts', w: 28, h: 28 },
                             { value: 'horizontal', label: '16:9', hint: 'Keep landscape · YouTube', w: 36, h: 20 },
                         ].map((f) => {
@@ -288,6 +314,84 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             );
                         })}
                     </div>
+                    {outputFormat === 'framed' && (
+                        <div className="mt-3 space-y-3 rounded-input border border-rule p-3 animate-fade">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs text-ink2 w-24">background</span>
+                                {FRAME_COLORS.map((c) => (
+                                    <button
+                                        key={c}
+                                        type="button"
+                                        aria-label={`background ${c}`}
+                                        onClick={() => setFrameBg(c)}
+                                        className={`w-7 h-7 rounded-full border-2 ${frameBg.toUpperCase() === c ? 'border-[color:var(--color-accent)]' : 'border-rule2'}`}
+                                        style={{ backgroundColor: c }}
+                                    />
+                                ))}
+                                <input
+                                    type="color"
+                                    value={frameBg}
+                                    onChange={(e) => setFrameBg(e.target.value.toUpperCase())}
+                                    aria-label="custom background colour"
+                                    className="w-8 h-8 cursor-pointer bg-transparent"
+                                />
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs text-ink2 w-24">crop</span>
+                                <select value={frameCrop} onChange={(e) => setFrameCrop(e.target.value)}
+                                    className="input-field !w-auto text-xs py-1.5" aria-label="crop shape">
+                                    <option value="classic">4:3 (bigger subject)</option>
+                                    <option value="wide">16:9 (whole width)</option>
+                                    <option value="square">1:1 (tightest)</option>
+                                </select>
+                                <select value={frameZoom} onChange={(e) => setFrameZoom(e.target.value)}
+                                    className="input-field !w-auto text-xs py-1.5" aria-label="zoom">
+                                    <option value="1.0">No zoom</option>
+                                    <option value="1.12">Zoom 12%</option>
+                                    <option value="1.25">Zoom 25%</option>
+                                </select>
+                            </div>
+                            <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                                <input type="checkbox" checked={frameTitle} onChange={(e) => setFrameTitle(e.target.checked)}
+                                    className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer" />
+                                title above the video
+                            </label>
+                            <p className="text-[11px] leading-relaxed text-muted">
+                                Captions are added under the video automatically. Zoom also trims logos and
+                                subtitles already burned into the source.
+                            </p>
+                        </div>
+                    )}
+                </div>
+
+                {/* How many shorts: visible, since it is the main choice after the link. */}
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <span className="eyebrow mr-1">number of shorts</span>
+                    {['', '3', '5', '8', '10'].map((n) => (
+                        <button
+                            key={n || 'auto'}
+                            type="button"
+                            onClick={() => setTargetClips(n)}
+                            className={`px-3 py-1.5 rounded-input border text-xs ${targetClips === n ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                        >
+                            {n || 'Auto (best)'}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span className="eyebrow mr-1">subtitles</span>
+                    <select
+                        value={captionScript}
+                        onChange={(e) => setCaptionScript(e.target.value)}
+                        className="input-field !w-auto text-xs py-1.5"
+                        aria-label="subtitle language"
+                    >
+                        <option value="roman">Roman Urdu / Hinglish</option>
+                        <option value="english">English</option>
+                        <option value="original">As spoken (original script)</option>
+                    </select>
+                    <span className="text-[11px] text-muted">titles use the same language · clips stay under 2 min</span>
                 </div>
 
                 {/* Advanced generation controls — collapsed by default; blank = AI decides */}
@@ -320,7 +424,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             <div>
                                 <p className="eyebrow mb-1.5">min length (s)</p>
                                 <input
-                                    type="number" min="5" max="175" step="1"
+                                    type="number" min="5" max="114" step="1"
                                     value={clipMinSeconds}
                                     onChange={(e) => setClipMinSeconds(e.target.value)}
                                     placeholder="15"
@@ -330,7 +434,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             <div>
                                 <p className="eyebrow mb-1.5">max length (s)</p>
                                 <input
-                                    type="number" min="10" max="180" step="1"
+                                    type="number" min="10" max="119" step="1"
                                     value={clipMaxSeconds}
                                     onChange={(e) => setClipMaxSeconds(e.target.value)}
                                     placeholder="60"

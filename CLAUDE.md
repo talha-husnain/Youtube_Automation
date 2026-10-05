@@ -110,6 +110,41 @@ answers describe the paid product as free.
   (`redirectregex.permanent=true`, patched 23-sep-2026). The nginx 301 block
   below never sees the apex while that Traefik middleware exists.
 
+### CPU-only machines: captions, sections, framed (5-oct-2026)
+
+Measured on an i7-1360P laptop with no NVIDIA GPU, where a 1 h 49 min job
+never finished:
+- **YouTube captions replace Whisper** (`youtube_captions.py`): the video's own
+  track (json3 has per-word offsets) arrives in ~4 s. Whisper `small` beam-5
+  ran slower than real time there. `YT_CAPTIONS=0` turns it off. It must not
+  import `free_tools` (that pulls in `cloud/`, see test_audit_hardening).
+- **Only the picked clips are downloaded** (`section_fetch.py`): with captions
+  the clips are known first, so ffmpeg cuts each one straight from the stream
+  URLs (40 s in ~28 s) instead of downloading 1.3 GB (~15 min at 1.5 MB/s).
+  The job then has no full source (`source_video` is null). `DOWNLOAD_SECTIONS=0`
+  restores the full download; any section failure falls back to it.
+- **`yt-dlp-ejs` is required**: without the JS-challenge solver every download
+  got HTTP 403 after the first few MB and left a `.part` file.
+- **Whisper fallback on CPU** runs batched, 4 threads, `no_repeat_ngram_size=3`
+  (35 s per 5 min of audio). Plain batched looped on one word; 8 threads were
+  slower (efficiency cores). `WHISPER_BATCHED=0` restores sequential.
+- **`output_format=framed`** (`framed_layout.py`, dashboard default): source
+  cropped (4:3, 12% zoom, trim taken mostly from the bottom so burned-in
+  subtitles go) on a solid colour 1080x1920 canvas, title in the top band,
+  captions in the band below. One ffmpeg pass, no face tracking. Per-job look
+  is saved in `frame.json` so editor re-renders keep colour, title and caption
+  position.
+- **Caption + title language** (`caption_script.py`, `CAPTION_SCRIPT`,
+  dashboard "subtitles"): `roman` (default) transliterates each caption word
+  1:1 into Roman Urdu / Hinglish so word timing survives; when the word count
+  does not come back equal (1 clip in 10 on a real job) it converts line by
+  line instead. `english` translates per line. Latin-script sources skip it.
+- **Clips stay under 2 minutes**: `main.cap_clip_lengths` (`MAX_CLIP_SECONDS`,
+  119) trims every pick, before the section fetch too; the API caps
+  `clip_max_seconds` at 119.
+- Windows tests: `TestHostAsrSlot` (fcntl) and two cp1252 file reads fail on
+  Windows before and after these changes.
+
 ### Cómo se elige el layout
 
 `POST /api/process` acepta `layouts`: una lista (JSON) o cadena separada por

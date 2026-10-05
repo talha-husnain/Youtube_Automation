@@ -1203,7 +1203,7 @@ def finalize_clip_passthrough(input_video, final_output_video):
 
 
 def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None,
-                      plan_only=False):
+                      plan_only=False, margin_v=None):
     """Burn the default caption style onto a finished clip.
 
     ``split_ranges``: (start, end) stretches, in clip seconds, rendered with
@@ -1266,11 +1266,18 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         if split_ranges is None:
             import layout_ranges as _layouts
             split_ranges = _layouts.split_ranges(_layouts.read(clip_path))
+        # margin_v: the FRAMED layout hangs the captions from the top of the
+        # colour band under the picture instead of the frame's bottom edge.
+        if margin_v is None:
+            import framed_layout
+            margin_v = framed_layout.job_caption_margin(os.path.dirname(clip_path))
+        placement = ({"alignment": "top", "margin_v": margin_v} if margin_v is not None
+                     else {"alignment": style["alignment"]})
         if not _subs.generate_ass(
                 transcript, clip_start, clip_end, ass_path,
                 split_ranges=split_ranges,
                 max_chars=style["max_chars"], max_duration=style["max_duration"],
-                alignment=style["alignment"], fontsize=style["font_size"],
+                fontsize=style["font_size"], **placement,
                 font_name=style["font_name"], font_color=style["font_color"],
                 border_color=style["border_color"], border_width=style["border_width"],
                 highlight_color=style["highlight_color"], effect=style["effect"],
@@ -1364,7 +1371,7 @@ def auto_hook_clip(clip_path, clip, captions=None):
 
 
 def render_clip(input_video, final_output_video, output_format="auto",
-                force_strategy=None, crop_overrides=None, watermark=False):
+                force_strategy=None, crop_overrides=None, watermark=False, title=None):
     """Route a cut clip through the right renderer for the chosen output format.
     vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep.
     ``force_strategy`` (e.g. 'WIDE'/'TRACK') pins every scene's layout — the
@@ -1373,6 +1380,10 @@ def render_clip(input_video, final_output_video, output_format="auto",
     ``force_strategy`` for the scenes it names.
     ``watermark`` burns the free-plan mark into the result: inside the reframe
     encode on the v2 path, as a separate pass (apply_watermark) otherwise."""
+    if output_format == "framed":
+        import framed_layout
+        framed_layout.render(input_video, final_output_video, title=title)
+        return True
     if output_format == "horizontal":
         ok = finalize_clip_passthrough(input_video, final_output_video)
         if ok and watermark:
@@ -2100,6 +2111,22 @@ MIN_SPEECH_WORDS_PER_MIN = float(os.environ.get("MIN_SPEECH_WORDS_PER_MIN", "5")
 MIN_SPEECH_WORDS = int(os.environ.get("MIN_SPEECH_WORDS", "8"))
 
 
+# Hard ceiling on a clip's length, whatever the model or the requested band
+# says: the user's channels take nothing of 2 minutes or more (5-oct-2026).
+MAX_CLIP_SECONDS = float(os.environ.get("MAX_CLIP_SECONDS", "119"))
+
+
+def cap_clip_lengths(clips_data):
+    """Trim any clip longer than MAX_CLIP_SECONDS from its end. In place; returns it."""
+    for c in (clips_data or {}).get("shorts") or []:
+        try:
+            if float(c["end"]) - float(c["start"]) > MAX_CLIP_SECONDS:
+                c["end"] = round(float(c["start"]) + MAX_CLIP_SECONDS, 3)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return clips_data
+
+
 def speech_is_sparse(transcript, duration):
     """True when the transcript is too thin to drive clip selection."""
     words = sum(len((seg.get("text") or "").split())
@@ -2208,8 +2235,9 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output', type=str, help="Output directory or file (if processing whole video).")
     parser.add_argument('--keep-original', action='store_true', help="Keep the downloaded YouTube video.")
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
-    parser.add_argument('--format', type=str, default="auto", choices=["auto", "vertical", "horizontal", "square"],
-                        help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1).")
+    parser.add_argument('--format', type=str, default="auto", choices=["auto", "vertical", "horizontal", "square", "framed"],
+                        help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1), "
+                             "framed (9:16 colour background, title above, captions below).")
     parser.add_argument('--transcript', type=str,
                         help="Path to a precomputed transcript JSON (transcribe_media shape); skips transcription.")
 
@@ -2277,8 +2305,52 @@ if __name__ == '__main__':
                      and os.environ.get("EARLY_AUDIO", "1").strip() != "0"
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
-        input_video, video_title = download_youtube_video(
-            args.url, output_dir, on_audio=_on_audio if use_early else None)
+
+        # The video's own YouTube captions, when it has them, replace the whole
+        # transcription (see youtube_captions.py: Whisper on a CPU-only box ran
+        # slower than real time). They arrive in seconds, so the clip pick runs
+        # on them while the video downloads, through the same early slot the
+        # audio-first path uses.
+        pre_cut = None  # clip index -> section file, see section_fetch.py
+        if use_early and is_youtube_url(args.url):
+            import youtube_captions
+            captions = youtube_captions.fetch(args.url)
+            if captions:
+                early["started"] = True
+
+                def _caption_work(t):
+                    try:
+                        early["transcript"] = t
+                        dur = t.get("duration") or (t["segments"][-1]["end"] if t["segments"] else 0)
+                        if dur and not speech_is_sparse(t, dur):
+                            early["clips"] = cap_clip_lengths(get_viral_clips(t, dur))
+                    except Exception as e:
+                        print(f"   ℹ️ Early clip pick skipped ({type(e).__name__}: {e}).")
+                        early["clips"] = None
+                    finally:
+                        early["done"].set()
+
+                import section_fetch
+                if section_fetch.enabled():
+                    # Pick now: the clips decide which minutes get downloaded.
+                    _caption_work(captions)
+                    picked = (early.get("clips") or {}).get("shorts") or []
+                    got = section_fetch.fetch(
+                        args.url, [(float(c["start"]), float(c["end"])) for c in picked],
+                        output_dir) if picked else None
+                    if got:
+                        _title, pre_cut = got
+                else:
+                    threading.Thread(target=_caption_work, args=(captions,), daemon=True).start()
+                use_early = False  # the audio-first path would only duplicate it
+        if pre_cut:
+            # No full source: input_video only stands in for the probes below
+            # (resolution, existence); every clip is cut from its own section.
+            video_title = sanitize_filename(_title)
+            input_video = pre_cut[0]
+        else:
+            input_video, video_title = download_youtube_video(
+                args.url, output_dir, on_audio=_on_audio if use_early else None)
     else:
         input_video = args.input
         video_title = os.path.splitext(os.path.basename(input_video))[0]
@@ -2322,7 +2394,7 @@ if __name__ == '__main__':
     # instead of one per clip, and the answer is a property of the material
     # ("this is a screencast"), which does not change between its own clips.
     # It runs before any render so the modules are switched on in time.
-    if layout_picker.ENABLED:
+    if layout_picker.ENABLED and output_format != "framed" and not globals().get("pre_cut"):
         try:
             _cap = cv2.VideoCapture(input_video)
             _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -2429,6 +2501,12 @@ if __name__ == '__main__':
                 "Clip detection failed — the AI model did not return usable clips for this video.")
         else:
             print(f"🔥 Found {len(clips_data['shorts'])} clips!")
+            cap_clip_lengths(clips_data)
+            # Captions and titles in Roman Urdu / English (caption_script.py),
+            # before anything is rendered or written to metadata.
+            if transcript is not None:
+                import caption_script
+                caption_script.apply(transcript, clips_data['shorts'])
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).
@@ -2437,11 +2515,22 @@ if __name__ == '__main__':
             # again and reproduce the render settings, so record both. The
             # basename is enough — the file sits in the job dir (URL jobs with
             # --keep-original) or in uploads/ (upload jobs).
-            clips_data['source_video'] = os.path.basename(input_video)
+            # A section-only job has no full source to record (section_fetch.py).
+            clips_data['source_video'] = (None if globals().get("pre_cut")
+                                          else os.path.basename(input_video))
             clips_data['output_format'] = output_format
             metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
             with open(metadata_file, 'w') as f:
                 json.dump(clips_data, f, indent=2)
+            if output_format == "framed":
+                import framed_layout
+                _cfg = framed_layout.settings()
+                framed_layout.write_job(
+                    output_dir, _cfg,
+                    framed_layout.caption_margin_units(framed_layout.geometry(
+                        *get_video_resolution(input_video), _cfg["crop"], _cfg["zoom"])),
+                    {f"{video_title}_clip_{i+1}.mp4": c.get('video_title_for_youtube_short') or ""
+                     for i, c in enumerate(clips_data['shorts'])})
             print(f"   Saved metadata to {metadata_file}")
 
             # 5. Process clips in parallel: each worker cuts + renders one
@@ -2459,7 +2548,13 @@ if __name__ == '__main__':
 
                 try:
                     # ffmpeg cut — re-encoding for precision on strict seconds
-                    cut_clip(input_video, clip_temp_path, start, end, i + 1)
+                    sections = globals().get("pre_cut") or {}
+                    if sections.get(i):
+                        # Already cut and encoded straight from the stream. Copied,
+                        # not moved: a retry of this clip needs it again.
+                        shutil.copyfile(sections[i], clip_temp_path)
+                    else:
+                        cut_clip(input_video, clip_temp_path, start, end, i + 1)
 
                     # Layer order: the canonical reframe stays CLEAN, the hook
                     # is a derived hooked_ file, captions go last on top of
@@ -2469,7 +2564,8 @@ if __name__ == '__main__':
                     # permanent: paying could not remove it from clips already
                     # made. Each worker writes only its own clip dict, so the
                     # re-dump after the pool is race-free.
-                    success = render_clip(clip_temp_path, clip_final_path, output_format)
+                    success = render_clip(clip_temp_path, clip_final_path, output_format,
+                                          title=clip.get('video_title_for_youtube_short'))
                     if success:
                         print(f"   🎞️ Clip {i+1} framed")
                     deliver_path = clip_final_path
@@ -2484,7 +2580,10 @@ if __name__ == '__main__':
                         hook_grounding.reground(clip_final_path, clip, transcript, start, end)
                     captioned = None
                     split_ranges = _layouts.split_ranges(clip['layout_ranges'])
-                    if success and os.environ.get("AUTO_HOOK") == "1":
+                    # FRAMED clips carry their title in the top band already;
+                    # the hook would land on top of the picture.
+                    framed = output_format == "framed"
+                    if success and os.environ.get("AUTO_HOOK") == "1" and not framed:
                         # Captions ride the hook's ffmpeg (one decode, two
                         # outputs) when both are on; see auto_hook_clip.
                         plan = None
@@ -2557,6 +2656,12 @@ if __name__ == '__main__':
                         print(f"   ❌ Clip {i+1} failed again.")
                 except Exception as e:
                     print(f"   ❌ Clip {i+1} failed again: {type(e).__name__}: {e}")
+
+            for _section in (globals().get("pre_cut") or {}).values():
+                try:
+                    os.remove(_section)
+                except OSError:
+                    pass
 
             # Persist per-clip render results added by the workers (auto_hook)
             # so the editor can see what is already burned into each clip.
