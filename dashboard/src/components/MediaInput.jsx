@@ -30,7 +30,8 @@ const readVideoDuration = (file) => new Promise((resolve) => {
 });
 
 // Background presets for the framed look.
-const FRAME_COLORS = ['#14142B', '#000000', '#FFFFFF', '#0F3D3E', '#7B1E3A', '#F2C14E', '#1D4ED8'];
+const BRAND = { handle: '@PunchlineBazaar', bg: '#2B0F3D' };
+const FRAME_COLORS = ['#2B0F3D', '#14142B', '#000000', '#FFFFFF', '#0F3D3E', '#7B1E3A', '#F2C14E', '#1D4ED8'];
 
 export default function MediaInput({ onProcess, isProcessing }) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
@@ -43,12 +44,18 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [acknowledged, setAcknowledged] = useState(false);
     // framed (colour background + title + captions) is the default look.
     const [outputFormat, setOutputFormat] = useState((() => { try { return localStorage.getItem('os_output_format') || 'framed'; } catch { return 'framed'; } })); // framed | vertical | horizontal | square
-    const [frameBg, setFrameBg] = useState((() => { try { return localStorage.getItem('os_frame_bg') || '#14142B'; } catch { return '#14142B'; } }));
+    const [frameBg, setFrameBg] = useState((() => { try { return localStorage.getItem('os_frame_bg_v2') || BRAND.bg; } catch { return BRAND.bg; } }));
     const [frameCrop, setFrameCrop] = useState((() => { try { return localStorage.getItem('os_frame_crop') || 'classic'; } catch { return 'classic'; } })); // wide | classic | square
     const [frameZoom, setFrameZoom] = useState((() => { try { return localStorage.getItem('os_frame_zoom') || '1.12'; } catch { return '1.12'; } }));
     // Caption + title language: roman (Roman Urdu / Hinglish), english, original.
     const [captionScript, setCaptionScript] = useState(() => {
         try { return localStorage.getItem('os_caption_script') || 'roman'; } catch { return 'roman'; }
+    });
+    const [frameHandle, setFrameHandle] = useState(() => {
+        try { return localStorage.getItem('os_frame_handle') ?? BRAND.handle; } catch { return BRAND.handle; }
+    });
+    const [frameOutro, setFrameOutro] = useState(() => {
+        try { return localStorage.getItem('os_frame_outro') !== '0'; } catch { return true; }
     });
     const [frameTitle, setFrameTitle] = useState(() => {
         try { return localStorage.getItem('os_frame_title') !== '0'; } catch { return true; }
@@ -142,12 +149,16 @@ export default function MediaInput({ onProcess, isProcessing }) {
             frameCrop,
             frameZoom,
             frameTitle,
+            frameHandle,
+            frameOutro,
             captionScript,
         };
         try {
             localStorage.setItem('os_caption_script', captionScript);
             localStorage.setItem('os_output_format', outputFormat);
-            localStorage.setItem('os_frame_bg', frameBg);
+            localStorage.setItem('os_frame_bg_v2', frameBg);
+            localStorage.setItem('os_frame_handle', frameHandle);
+            localStorage.setItem('os_frame_outro', frameOutro ? '1' : '0');
             localStorage.setItem('os_frame_crop', frameCrop);
             localStorage.setItem('os_frame_zoom', frameZoom);
             localStorage.setItem('os_frame_title', frameTitle ? '1' : '0');
@@ -355,6 +366,23 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 <input type="checkbox" checked={frameTitle} onChange={(e) => setFrameTitle(e.target.checked)}
                                     className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer" />
                                 title above the video
+                            </label>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs text-ink2 w-24">channel</span>
+                                <input
+                                    type="text"
+                                    value={frameHandle}
+                                    maxLength={30}
+                                    onChange={(e) => setFrameHandle(e.target.value)}
+                                    placeholder="@yourchannel"
+                                    aria-label="channel handle"
+                                    className="input-field !w-48 text-xs py-1.5"
+                                />
+                            </div>
+                            <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                                <input type="checkbox" checked={frameOutro} onChange={(e) => setFrameOutro(e.target.checked)}
+                                    className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer" />
+                                2 s end card: &quot;follow for more&quot; + channel
                             </label>
                             <p className="text-[11px] leading-relaxed text-muted">
                                 Captions are added under the video automatically. Zoom also trims logos and

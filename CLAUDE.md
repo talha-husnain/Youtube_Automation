@@ -139,6 +139,12 @@ never finished:
   1:1 into Roman Urdu / Hinglish so word timing survives; when the word count
   does not come back equal (1 clip in 10 on a real job) it converts line by
   line instead. `english` translates per line. Latin-script sources skip it.
+- **Branding** (framed only): `FRAME_HANDLE` shows the channel handle at the
+  top, the title pops in over the first 0.4 s (no separate intro card, which
+  costs the first second on Shorts), and `FRAME_OUTRO` (default on) holds the
+  last frame 2 s, tinted with the background colour, under "FOLLOW FOR MORE"
+  + handle. Same single ffmpeg pass. Dashboard defaults are the user's brand
+  (`BRAND` in MediaInput.jsx: Punchline Bazaar, #2B0F3D).
 - **Clips stay under 2 minutes**: `main.cap_clip_lengths` (`MAX_CLIP_SECONDS`,
   119) trims every pick, before the section fetch too; the API caps
   `clip_max_seconds` at 119.

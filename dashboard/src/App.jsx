@@ -1057,6 +1057,8 @@ function App() {
           frame_crop: data.frameCrop || null,
           frame_zoom: data.frameZoom || null,
           frame_title: data.frameTitle === false ? '0' : '1',
+          frame_outro: data.frameOutro === false ? '0' : '1',
+          frame_handle: data.frameHandle || null,
         } : {}),
         caption_script: data.captionScript || null,
       };

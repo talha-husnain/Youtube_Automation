@@ -2938,6 +2938,8 @@ async def process_endpoint(
     frame_zoom: Optional[str] = Form(None),
     frame_title: Optional[str] = Form(None),
     caption_script: Optional[str] = Form(None),
+    frame_outro: Optional[str] = Form(None),
+    frame_handle: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2978,6 +2980,8 @@ async def process_endpoint(
         frame_zoom = body.get("frame_zoom")
         frame_title = body.get("frame_title")
         caption_script = body.get("caption_script")
+        frame_outro = body.get("frame_outro")
+        frame_handle = body.get("frame_handle")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square", "framed"):
@@ -3149,6 +3153,13 @@ async def process_endpoint(
             env["FRAME_ZOOM"] = str(zoom)
         if frame_title is not None and str(frame_title).lower() in ("0", "false", "no"):
             env["FRAME_TITLE"] = "0"
+        if frame_outro is not None and str(frame_outro).lower() in ("0", "false", "no"):
+            env["FRAME_OUTRO"] = "0"
+        if frame_handle:
+            import framed_layout
+            handle = framed_layout.clean_handle(frame_handle)
+            if handle:
+                env["FRAME_HANDLE"] = handle
         print(f"[framed] job={job_id} bg={env.get('FRAME_BG_COLOR', 'default')} "
               f"crop={env.get('FRAME_CROP', 'classic')} zoom={env.get('FRAME_ZOOM', 'default')}")
 

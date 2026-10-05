@@ -69,12 +69,15 @@ def test_portrait_source_is_never_widened():
 
 
 def test_settings_fall_back_to_the_job_file(tmp_path, monkeypatch):
-    for k in ("FRAME_BG_COLOR", "FRAME_CROP", "FRAME_ZOOM", "FRAME_TITLE"):
+    for k in ("FRAME_BG_COLOR", "FRAME_CROP", "FRAME_ZOOM", "FRAME_TITLE",
+              "FRAME_OUTRO", "FRAME_HANDLE"):
         monkeypatch.delenv(k, raising=False)
-    fl.write_job(str(tmp_path), {"bg": "#7B1E3A", "crop": "square", "zoom": 1.25, "title": False},
+    fl.write_job(str(tmp_path), {"bg": "#7B1E3A", "crop": "square", "zoom": 1.25, "title": False,
+                                 "outro": False, "handle": "@PunchlineBazaar"},
                  200, {"x_clip_1.mp4": "Title"})
     cfg = fl.settings(str(tmp_path))
-    assert cfg == {"bg": "#7B1E3A", "crop": "square", "zoom": 1.25, "title": False}
+    assert cfg == {"bg": "#7B1E3A", "crop": "square", "zoom": 1.25, "title": False,
+                   "outro": False, "handle": "@PunchlineBazaar"}
     assert fl.job_caption_margin(str(tmp_path)) == 200
     assert fl.job_caption_margin(str(tmp_path / "missing")) is None
 
@@ -193,3 +196,26 @@ def test_roman_falls_back_to_lines_when_words_do_not_align(monkeypatch):
     w = t["segments"][0]["words"]
     assert "".join(x["word"] for x in w).strip() == "main ne kaha"
     assert w[0]["start"] == 1.0 and abs(w[-1]["end"] - 2.0) < 1e-6
+
+
+def test_handle_is_cleaned():
+    assert fl.clean_handle("PunchlineBazaar") == "@PunchlineBazaar"
+    assert fl.clean_handle("{b1}bad'name") == "@b1badname"
+    assert fl.clean_handle("Punchline Bazaar") == "Punchline Bazaar"
+    assert len(fl.clean_handle("x" * 80)) <= 31
+
+
+def test_overlay_has_title_handle_and_end_card(tmp_path):
+    p = tmp_path / "o.ass"
+    geo = fl.geometry(1920, 1080)
+    fl.overlay_ass(str(p), geo, "#2B0F3D", 40.0, title="Hello", handle="@PunchlineBazaar", outro=True)
+    text = p.read_text(encoding="utf-8")
+    assert "Hello" in text and "FOLLOW" in text and text.count("@PunchlineBazaar") == 2
+    # The end card starts where the clip ends and lasts OUTRO_SECONDS.
+    assert "0:00:40.00,0:00:42.00,Outro" in text
+
+
+def test_no_end_card_when_off(tmp_path):
+    p = tmp_path / "o.ass"
+    fl.overlay_ass(str(p), fl.geometry(1920, 1080), "#000000", 10.0, title="Hi")
+    assert "FOLLOW" not in p.read_text(encoding="utf-8")
