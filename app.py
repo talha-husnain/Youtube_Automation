@@ -2944,6 +2944,8 @@ async def process_endpoint(
     frame_outro: Optional[str] = Form(None),
     frame_handle: Optional[str] = Form(None),
     frame_outro_seconds: Optional[str] = Form(None),
+    urls: Optional[str] = Form(None),
+    compile_seconds: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2987,6 +2989,32 @@ async def process_endpoint(
         frame_outro = body.get("frame_outro")
         frame_handle = body.get("frame_handle")
         frame_outro_seconds = body.get("frame_outro_seconds")
+        urls = body.get("urls")
+        compile_seconds = body.get("compile_seconds")
+
+    # Two or more links: one short made of their best moments (compilation.py),
+    # always in the framed style. One link stays a normal job.
+    compile_urls = []
+    if urls:
+        if isinstance(urls, list):
+            raw = urls
+        else:
+            try:
+                raw = json.loads(urls)
+            except (TypeError, ValueError):
+                raw = re.split(r"[\s,]+", str(urls))
+        raw = ([url] if url else []) + [str(u) for u in (raw if isinstance(raw, list) else [raw])]
+        compile_urls = list(dict.fromkeys(u.strip() for u in raw if u and u.strip()))
+        if len(compile_urls) > 5:
+            raise HTTPException(status_code=400, detail="At most 5 links can be combined into one short.")
+        if len(compile_urls) >= 2:
+            url = compile_urls[0]
+            output_format = "framed"
+            for extra_url in compile_urls[1:]:
+                await _validate_source_url(extra_url)
+        else:
+            url = compile_urls[0] if compile_urls else url
+            compile_urls = []
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square", "framed"):
@@ -3170,6 +3198,14 @@ async def process_endpoint(
                 env["FRAME_HANDLE"] = handle
         print(f"[framed] job={job_id} bg={env.get('FRAME_BG_COLOR', 'default')} "
               f"crop={env.get('FRAME_CROP', 'classic')} zoom={env.get('FRAME_ZOOM', 'default')}")
+
+    if compile_urls:
+        env["COMPILE_URLS"] = json.dumps(compile_urls)
+        # Shorts stop at 3 minutes; compilation.py also leaves room for the end card.
+        secs = _gen_control(compile_seconds, "compile_seconds", 30, 178)
+        if secs is not None:
+            env["COMPILE_SECONDS"] = str(secs)
+        print(f"[compilation] job={job_id} videos={len(compile_urls)} seconds={secs or 'auto'}")
 
     input_path = None
     if url:

@@ -1074,6 +1074,9 @@ function App() {
           output_format: data.outputFormat || 'auto',
           force_low_quality: forceLowQuality,
           ...Object.fromEntries(Object.entries(advanced).filter(([, v]) => v != null)),
+          // Several links -> one compilation short; absent for a normal job.
+          ...(data.urls && data.urls.length > 1
+            ? { urls: data.urls, compile_seconds: data.compileSeconds || null } : {}),
         });
       } else if (data.type === 'thumbnail_session') {
         // Handover from Thumbnail Studio (issue #68): the video and transcript

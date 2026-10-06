@@ -2266,7 +2266,16 @@ if __name__ == '__main__':
                 output_dir = os.path.dirname(args.output) or "."
             else:
                 output_dir = "."
-        
+
+        # Several links -> one short made of their best moments (compilation.py).
+        # Only when app.py set COMPILE_URLS; a normal job never enters here.
+        if os.environ.get("COMPILE_URLS"):
+            import compilation
+            compilation.run(json.loads(os.environ["COMPILE_URLS"]), output_dir,
+                            sys.modules[__name__])
+            print(f"\n⏱️  Total execution time: {time.time() - script_start_time:.2f}s")
+            sys.exit(0)
+
         # Transcription (and the Gemini pick) start on the audio track while the
         # video is still downloading; see download_youtube_video(on_audio=).
         # Not for a MAX_SOURCE_MINUTES job (the video is always cut, so the

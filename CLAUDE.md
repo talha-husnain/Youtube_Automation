@@ -163,6 +163,19 @@ never finished:
   hook and summary in the caption language. ResultCard shows all of it with
   copy buttons; "copy everything" adds no extra hashtags because YouTube
   ignores every hashtag in a description that carries more than 15.
+- **Compilation** (`compilation.py`, branch feature/compilation): 2-5 links
+  (`urls` on /api/process, dashboard "add another link") become ONE framed
+  short of their best moments. app.py starts main.py with the first link and
+  `COMPILE_URLS`; main.py hands over before anything else, so a normal job
+  never enters it. Picks per video in parallel, each video's best moment
+  first, then by score, up to `COMPILE_SECONDS` (Shorts max 3 min, end card
+  included); moments joined with 0.4 s crossfades on 1920x1080/30 fps. The
+  join encodes plain AAC: `audio_encode_args` adds `-af`, which ffmpeg
+  refuses next to `-filter_complex`. A link without YouTube captions falls
+  back to a full download + Whisper (slower, worse Hindi subtitles). Real run
+  6-oct-2026: 2 videos, 5 moments, 170 s, 8 min.
+- Flaky on this laptop: tests posting a YouTube URL to /api/process can 400
+  in a full run, because `assert_public_url` does a live DNS lookup.
 - **Section fetch retries with fresh links**: YouTube sometimes 403s every
   request on one set of stream URLs; each retry round re-resolves
   (`RESOLVE_ROUNDS`, 3) before the full-download fallback.

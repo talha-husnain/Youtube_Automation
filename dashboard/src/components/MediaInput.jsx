@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link2, Info, Loader2, ChevronDown } from 'lucide-react';
+import { Link2, Info, Loader2, ChevronDown, Plus, X } from 'lucide-react';
 import { getApiUrl } from '../config';
 
 const SUPPORTED_PLATFORMS = [
@@ -15,6 +15,12 @@ export default function MediaInput({ onProcess, isProcessing }) {
     // Links only: the file upload path was removed from this dashboard.
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
     const [url, setUrl] = useState('');
+    // More links: the best moments of all of them become ONE short
+    // (compilation.py). Empty = the normal one-link job, unchanged.
+    const [extraUrls, setExtraUrls] = useState([]);
+    const [compileSeconds, setCompileSeconds] = useState(() => {
+        try { return localStorage.getItem('os_compile_seconds') || '170'; } catch { return '170'; }
+    });
     const [acknowledged, setAcknowledged] = useState(false);
     // framed (colour background + title + captions) is the default look.
     const [outputFormat, setOutputFormat] = useState((() => { try { return localStorage.getItem('os_output_format') || 'framed'; } catch { return 'framed'; } })); // framed | vertical | horizontal | square
@@ -125,7 +131,14 @@ export default function MediaInput({ onProcess, isProcessing }) {
             localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
             localStorage.setItem('os_layout', layout);
         } catch { /* ignore */ }
-        if (url) {
+        const links = [url, ...extraUrls].map((u) => u.trim()).filter(Boolean);
+        if (links.length >= 2) {
+            try { localStorage.setItem('os_compile_seconds', compileSeconds); } catch { /* ignore */ }
+            onProcess({
+                type: 'url', payload: links[0], urls: links, compileSeconds,
+                acknowledged: true, ...advanced, targetClips: null, outputFormat: 'framed',
+            });
+        } else if (url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
         }
     };
@@ -180,6 +193,54 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 )}
                             </div>
                         </div>
+
+                        {extraUrls.map((u, i) => (
+                            <div key={i} className="relative">
+                                <input
+                                    type="url"
+                                    value={u}
+                                    onChange={(e) => setExtraUrls((list) => list.map((x, j) => (j === i ? e.target.value : x)))}
+                                    placeholder={`link ${i + 2}`}
+                                    className="input-field pr-11"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setExtraUrls((list) => list.filter((_, j) => j !== i))}
+                                    aria-label={`remove link ${i + 2}`}
+                                    className="absolute inset-y-0 right-2 flex items-center p-1.5 text-muted hover:text-danger transition-colors"
+                                >
+                                    <X size={16} />
+                                </button>
+                            </div>
+                        ))}
+                        {extraUrls.length < 4 && (
+                            <button
+                                type="button"
+                                onClick={() => setExtraUrls((list) => [...list, ''])}
+                                className="flex items-center gap-1.5 text-xs lowercase text-muted hover:text-brass transition-colors"
+                            >
+                                <Plus size={14} /> add another link to combine into one short
+                            </button>
+                        )}
+                        {extraUrls.some((u) => u.trim()) && (
+                            <div className="rounded-input border border-rule bg-paper px-3 py-2.5 text-xs text-ink2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                                <span>
+                                    {1 + extraUrls.filter((u) => u.trim()).length} links: their best moments become one framed short.
+                                </span>
+                                <label className="flex items-center gap-2">
+                                    <span className="text-muted">length</span>
+                                    <select
+                                        value={compileSeconds}
+                                        onChange={(e) => setCompileSeconds(e.target.value)}
+                                        className="input-field py-1 px-2 text-xs w-auto"
+                                    >
+                                        <option value="60">up to 1 min</option>
+                                        <option value="120">up to 2 min</option>
+                                        <option value="170">up to 3 min (Shorts max)</option>
+                                    </select>
+                                </label>
+                            </div>
+                        )}
                     </div>
                 )}
 

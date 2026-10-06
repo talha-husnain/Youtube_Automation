@@ -266,7 +266,7 @@ def _scrub(text, names):
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 
-def apply(clips, transcript, source_title=""):
+def apply(clips, transcript, source_title="", context="", text_limit=1200):
     """Add SEO copy to every clip in place. Returns the number of clips updated."""
     if not clips or os.environ.get("SEO_COPY", "1").strip() == "0":
         return 0
@@ -282,15 +282,18 @@ def apply(clips, transcript, source_title=""):
     # kept its bookish wording ("apratyashit ant") despite the rules.
     items = [{"index": i,
               "seconds": round(float(c["end"]) - float(c["start"])),
-              "what_is_said": _clip_text(transcript, c)}
+              "what_is_said": _clip_text(transcript, c, text_limit)}
              for i, c in enumerate(clips)]
     print(f"🏷️ Writing SEO titles, descriptions and hashtags for {len(clips)} clip(s)...")
     source = source_title.replace('"', "'")
+    # Extra context for a special clip (compilation.py); empty for a normal
+    # job, which keeps its prompt exactly as before.
+    note = f"\n{context}\n" if context else ""
     try:
         from google import genai
         client = genai.Client(api_key=key)
         model = os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
-        got = _ask(client, model, items, handle, source, style, latin)
+        got = _ask(client, model, items, handle, source, style, latin, note)
     except Exception as e:  # noqa: BLE001 — the old copy stays
         print(f"   ⚠️ SEO copy failed ({type(e).__name__}: {str(e)[:200]}) — keeping the generated copy.")
         return 0
@@ -310,7 +313,8 @@ def apply(clips, transcript, source_title=""):
                  "hashtag), and every field must use Latin letters and everyday words only "
                  "(never \"ant\", \"apratyashit\", \"rahasya\").\n")
         try:
-            for i, it in _ask(client, model, redo, handle, source, style, latin, extra).items():
+            for i, it in _ask(client, model, redo, handle, source, style, latin,
+                              note + extra).items():
                 if i not in got or _quality(it, latin, names) > _quality(got[i], latin, names):
                     got[i] = it
         except Exception as e:  # noqa: BLE001 — keep the first answer
