@@ -2507,6 +2507,10 @@ if __name__ == '__main__':
             if transcript is not None:
                 import caption_script
                 caption_script.apply(transcript, clips_data['shorts'])
+            # Publishing copy: SEO title, description, hashtags, tags (seo_copy.py).
+            import seo_copy
+            seo_copy.apply(clips_data['shorts'], transcript,
+                           source_title=video_title.replace("_", " "))
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).

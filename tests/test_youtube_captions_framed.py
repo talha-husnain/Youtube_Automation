@@ -234,3 +234,51 @@ def test_no_end_card_when_off(tmp_path):
     p = tmp_path / "o.ass"
     fl.overlay_ass(str(p), fl.geometry(1920, 1080), "#000000", 10.0, title="Hi")
     assert "FOLLOW" not in p.read_text(encoding="utf-8")
+
+
+def test_seo_hashtags_cleaned_deduped_and_lead_with_shorts():
+    import seo_copy
+    tags = seo_copy._clean_tags(["comedy", "#Comedy", "#stand up", "", "#namanjain"], hashtag=True)
+    assert tags[0] == "#shorts" and "#standup" in tags and len(tags) == 4
+
+
+def test_seo_description_gets_its_lines(monkeypatch):
+    import seo_copy
+    d = seo_copy.format_description(
+        "Hook here? More words. Credit: Naman Jain Follow @PunchlineBazaar for clips #comedy #funny")
+    lines = d.split("\n")
+    assert lines[0] == "Hook here?" and "Credit: Naman Jain" in lines
+    assert lines[-1] == "#comedy #funny"
+
+
+def test_seo_copy_off_or_without_key_changes_nothing(monkeypatch):
+    import seo_copy
+    clips = [{"start": 0, "end": 10, "video_title_for_youtube_short": "x"}]
+    monkeypatch.setenv("SEO_COPY", "0")
+    assert seo_copy.apply(clips, None) == 0
+    monkeypatch.setenv("SEO_COPY", "1")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert seo_copy.apply(clips, None) == 0 and "seo_title" not in clips[0]
+
+
+def test_section_fetch_retries_with_fresh_links(monkeypatch, tmp_path):
+    import types as _t
+    import section_fetch as sf
+    resolves = []
+
+    def fake_resolve(url):
+        resolves.append(url)
+        return "T", [{"url": f"https://v{len(resolves)}"}]
+
+    def fake_run(cmd, **kw):
+        out = cmd[-1]
+        # The first set of links is refused for section 2 only.
+        if "https://v1" in cmd and out.endswith("section_2.mp4"):
+            return _t.SimpleNamespace(returncode=1, stderr="403 Forbidden")
+        open(out, "wb").write(b"x" * (sf.MIN_CUT_BYTES + 1))
+        return _t.SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(sf, "resolve", fake_resolve)
+    monkeypatch.setattr(sf.subprocess, "run", fake_run)
+    title, got = sf.fetch("u", [(0, 10), (20, 30)], str(tmp_path))
+    assert title == "T" and sorted(got) == [0, 1] and len(resolves) == 2

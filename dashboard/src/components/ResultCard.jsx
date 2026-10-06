@@ -55,7 +55,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
-    const { plan } = useAuth();
+    const { plan, serverGeminiKey } = useAuth();
     const videoRef = React.useRef(null);
     // Pristine base clip (no burned subtitles/hook), stable regardless of how
     // clip.video_url mutates after server edits. Used as the compositing base
@@ -197,6 +197,17 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [postResult, setPostResult] = useState(null);
     const [copied, setCopied] = useState(null);
 
+    // Publishing copy from seo_copy.py; older jobs fall back to the detail pass.
+    const ytTitle = clip.seo_title || clip.video_title_for_youtube_short || "Viral Short Video";
+    const socialCaption = clip.video_description_for_tiktok || clip.video_description_for_instagram || "";
+    const hashtagLine = (clip.hashtags || []).join(' ');
+    const ytDescription = clip.seo_description || clip.video_description_for_instagram || socialCaption;
+    const tagLine = (clip.seo_tags || []).join(', ');
+    // No extra hashtag list: the description already ends with 4-5, and YouTube
+    // ignores every hashtag in a description that carries more than 15.
+    const copyAll = [ytTitle, '', ytDescription,
+        tagLine && '', tagLine && `Tags: ${tagLine}`].filter((x) => x !== undefined && x !== false).join('\n').trim();
+
     const handleCopy = async (field, text) => {
         try {
             await navigator.clipboard.writeText(text || '');
@@ -272,7 +283,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // Initialize/Reset form when modal opens
     useEffect(() => {
         if (showModal) {
-            setPostTitle(clip.video_title_for_youtube_short || "Viral Short");
+            setPostTitle(clip.seo_title || clip.video_title_for_youtube_short || "Viral Short");
             setPostDescription(clip.video_description_for_instagram || clip.video_description_for_tiktok || "");
             setIsScheduling(false);
             setScheduleDate("");
@@ -299,7 +310,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
 
             // Managed (paid) users get the Gemini key resolved server-side;
             // only BYOK/self-host needs a local key.
-            if (!apiKey && !isManaged) {
+            if (!apiKey && !isManaged && !serverGeminiKey) {
                 throw new Error("Gemini API Key is missing. Please set it in Settings.");
             }
             const geminiHeaders = apiKey ? { 'X-Gemini-Key': apiKey } : {};
@@ -864,8 +875,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     <div className="flex flex-wrap gap-1.5">
                         {durationReadout && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{durationReadout}</span>}
                         {resolution && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{resolution}</span>}
-                        <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#shorts</span>
-                        <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#viral</span>
+                        {((clip.hashtags && clip.hashtags.length) ? clip.hashtags.slice(0, 3) : ['#shorts', '#viral']).map((h) => (
+                            <span key={h} className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{h}</span>
+                        ))}
                     </div>
                 </div>
 
@@ -874,10 +886,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     <div className="bg-paper rounded-input px-3 py-2 border border-rule flex items-center gap-2 min-w-0 overflow-hidden">
                         <span className="eyebrow shrink-0">YOUTUBE</span>
                         <p className="text-xs text-ink2 truncate flex-1 min-w-0">
-                            {clip.video_title_for_youtube_short || "Viral Short Video"}
+                            {ytTitle}
                         </p>
                         <button
-                            onClick={() => handleCopy('youtube', clip.video_title_for_youtube_short || "Viral Short Video")}
+                            onClick={() => handleCopy('youtube', ytTitle)}
                             aria-label="copy youtube title"
                             className="p-1 rounded-full text-muted hover:text-brass transition-colors shrink-0"
                         >
@@ -888,10 +900,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     <div className="bg-paper rounded-input px-3 py-2 border border-rule flex items-center gap-2 min-w-0 overflow-hidden">
                         <span className="eyebrow shrink-0">TIKTOK · IG</span>
                         <p className="text-xs text-ink2 truncate flex-1 min-w-0">
-                            {clip.video_description_for_tiktok || clip.video_description_for_instagram}
+                            {socialCaption}
                         </p>
                         <button
-                            onClick={() => handleCopy('caption', clip.video_description_for_tiktok || clip.video_description_for_instagram)}
+                            onClick={() => handleCopy('caption', socialCaption)}
                             aria-label="copy caption"
                             className="p-1 rounded-full text-muted hover:text-brass transition-colors shrink-0"
                         >
@@ -1007,37 +1019,36 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 size="md"
             >
                 <div className="space-y-4">
-                    <div>
-                        <div className="flex items-center justify-between gap-2 mb-1.5">
-                            <label className="eyebrow">YOUTUBE TITLE</label>
-                            <button
-                                onClick={() => handleCopy('youtube', clip.video_title_for_youtube_short || "Viral Short Video")}
-                                aria-label="copy youtube title"
-                                className="p-1 rounded-full text-muted hover:text-brass transition-colors shrink-0"
-                            >
-                                {copied === 'youtube' ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
-                            </button>
+                    {[
+                        { key: 'youtube', label: 'YOUTUBE TITLE', text: ytTitle },
+                        { key: 'ytdesc', label: 'YOUTUBE DESCRIPTION', text: ytDescription },
+                        { key: 'hashtags', label: 'HASHTAGS', text: hashtagLine },
+                        { key: 'tags', label: 'YOUTUBE TAGS', text: tagLine },
+                        { key: 'caption', label: 'TIKTOK · IG CAPTION', text: socialCaption },
+                    ].filter((f) => f.text).map((f) => (
+                        <div key={f.key}>
+                            <div className="flex items-center justify-between gap-2 mb-1.5">
+                                <label className="eyebrow">{f.label}</label>
+                                <button
+                                    onClick={() => handleCopy(f.key, f.text)}
+                                    aria-label={`copy ${f.label.toLowerCase()}`}
+                                    className="p-1 rounded-full text-muted hover:text-brass transition-colors shrink-0"
+                                >
+                                    {copied === f.key ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
+                                </button>
+                            </div>
+                            <p className="text-sm text-ink2 select-all break-words bg-paper rounded-input p-3 border border-rule whitespace-pre-wrap">
+                                {f.text}
+                            </p>
                         </div>
-                        <p className="text-sm text-ink2 select-all break-words bg-paper rounded-input p-3 border border-rule">
-                            {clip.video_title_for_youtube_short || "Viral Short Video"}
-                        </p>
-                    </div>
-
-                    <div>
-                        <div className="flex items-center justify-between gap-2 mb-1.5">
-                            <label className="eyebrow">TIKTOK · IG CAPTION</label>
-                            <button
-                                onClick={() => handleCopy('caption', clip.video_description_for_tiktok || clip.video_description_for_instagram)}
-                                aria-label="copy caption"
-                                className="p-1 rounded-full text-muted hover:text-brass transition-colors shrink-0"
-                            >
-                                {copied === 'caption' ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
-                            </button>
-                        </div>
-                        <p className="text-sm text-ink2 select-all break-words bg-paper rounded-input p-3 border border-rule whitespace-pre-wrap">
-                            {clip.video_description_for_tiktok || clip.video_description_for_instagram}
-                        </p>
-                    </div>
+                    ))}
+                    <button
+                        onClick={() => handleCopy('all', copyAll)}
+                        className="w-full flex items-center justify-center gap-2 py-2 rounded-input border border-rule text-xs lowercase text-ink2 hover:text-brass hover:border-rule2 transition-colors"
+                    >
+                        {copied === 'all' ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
+                        copy everything for youtube
+                    </button>
                 </div>
             </Modal>
 

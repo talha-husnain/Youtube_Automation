@@ -148,6 +148,20 @@ never finished:
   swoosh + ding (`end_card_audio`, aevalsrc: no sound file to license). Same
   single ffmpeg pass, now a `-filter_complex`. Dashboard defaults are the user's brand
   (`BRAND` in MediaInput.jsx: Punchline Bazaar, #2B0F3D).
+- **SEO copy** (`seo_copy.py`, `SEO_COPY=0` off): one Gemini call per job after
+  `caption_script` writes per clip `seo_title`, `seo_description` (hook line,
+  keywords, "Credit: <creator>", follow CTA with `FRAME_HANDLE`, 4-5 hashtags;
+  `format_description` forces the line breaks the model sometimes drops),
+  `hashtags`, `seo_tags`, the TikTok/IG captions, and a short on-screen title,
+  hook and summary in the caption language. ResultCard shows all of it with
+  copy buttons; "copy everything" adds no extra hashtags because YouTube
+  ignores every hashtag in a description that carries more than 15.
+- **Section fetch retries with fresh links**: YouTube sometimes 403s every
+  request on one set of stream URLs; each retry round re-resolves
+  (`RESOLVE_ROUNDS`, 3) before the full-download fallback.
+- **Dashboard is links-only and uses the server key**: the upload tab is gone
+  (the API still accepts uploads), and `/api/config.serverGeminiKey` tells the
+  dashboard that `.env` has `GEMINI_API_KEY`, so it never asks for one.
 - **Clips stay under 2 minutes**: `main.cap_clip_lengths` (`MAX_CLIP_SECONDS`,
   119) trims every pick, before the section fetch too; the API caps
   `clip_max_seconds` at 119.

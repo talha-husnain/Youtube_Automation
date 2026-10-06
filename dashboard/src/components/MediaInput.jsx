@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown } from 'lucide-react';
-import { track } from '../lib/analytics';
+import { Link2, Info, Loader2, ChevronDown } from 'lucide-react';
 import { getApiUrl } from '../config';
 
 const SUPPORTED_PLATFORMS = [
@@ -8,39 +7,14 @@ const SUPPORTED_PLATFORMS = [
     'Facebook', 'Instagram', 'Dailymotion', 'Reddit', 'Streamable',
 ];
 
-// Mirrors the server's MIN_SOURCE_SECONDS: shorter sources are rejected with a
-// 400 after the whole file was uploaded. Checking the duration in the browser
-// says so the moment the file is picked (a 27 s upload used to end in a bare
-// "That run failed").
-const MIN_SOURCE_SECONDS = 45;
-
-// Duration of a local video file in seconds, or null when the browser cannot
-// read it (unsupported codec): then the server stays the judge.
-const readVideoDuration = (file) => new Promise((resolve) => {
-    try {
-        const url = URL.createObjectURL(file);
-        const v = document.createElement('video');
-        v.preload = 'metadata';
-        const done = (d) => { URL.revokeObjectURL(url); resolve(d); };
-        v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : null);
-        v.onerror = () => done(null);
-        setTimeout(() => done(null), 8000);
-        v.src = url;
-    } catch { resolve(null); }
-});
-
 // Background presets for the framed look.
 const BRAND = { handle: '@PunchlineBazaar', bg: '#2B0F3D' };
 const FRAME_COLORS = ['#2B0F3D', '#14142B', '#000000', '#FFFFFF', '#0F3D3E', '#7B1E3A', '#F2C14E', '#1D4ED8'];
 
 export default function MediaInput({ onProcess, isProcessing }) {
+    // Links only: the file upload path was removed from this dashboard.
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
-    // File upload is the primary path; the link is secondary.
-    const [mode, setMode] = useState('url'); // 'file' | 'url'
     const [url, setUrl] = useState('');
-    const [file, setFile] = useState(null);
-    const [fileSeconds, setFileSeconds] = useState(null);
-    const fileTooShort = fileSeconds != null && fileSeconds < MIN_SOURCE_SECONDS;
     const [acknowledged, setAcknowledged] = useState(false);
     // framed (colour background + title + captions) is the default look.
     const [outputFormat, setOutputFormat] = useState((() => { try { return localStorage.getItem('os_output_format') || 'framed'; } catch { return 'framed'; } })); // framed | vertical | horizontal | square
@@ -98,27 +72,10 @@ export default function MediaInput({ onProcess, isProcessing }) {
     }, [showInfo]);
 
     useEffect(() => {
-        let cancelled = false;
-        setFileSeconds(null);
-        if (!file) return undefined;
-        readVideoDuration(file).then((d) => {
-            if (cancelled) return;
-            setFileSeconds(d);
-            if (d != null && d < MIN_SOURCE_SECONDS) {
-                track('SourceTooShort', { props: { seconds: String(Math.round(d)) } });
-            }
-        });
-        return () => { cancelled = true; };
-    }, [file]);
-
-    useEffect(() => {
         fetch(getApiUrl('/api/config'))
             .then((r) => r.ok ? r.json() : null)
             .then((cfg) => {
-                if (cfg && cfg.youtubeUrlEnabled === false) {
-                    setYoutubeUrlEnabled(false);
-                    setMode('file');
-                }
+                if (cfg && cfg.youtubeUrlEnabled === false) setYoutubeUrlEnabled(false);
             })
             .catch(() => {});
     }, []);
@@ -132,10 +89,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             pending = localStorage.getItem('os_pending_url');
             if (pending) localStorage.removeItem('os_pending_url');
         } catch { /* ignore */ }
-        if (pending) {
-            setMode('url');
-            setUrl(pending);
-        }
+        if (pending) setUrl(pending);
     }, []);
 
     const handleSubmit = (e) => {
@@ -171,50 +125,25 @@ export default function MediaInput({ onProcess, isProcessing }) {
             localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
             localStorage.setItem('os_layout', layout);
         } catch { /* ignore */ }
-        if (mode === 'url' && url) {
+        if (url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
-        } else if (mode === 'file' && file && !fileTooShort) {
-            onProcess({ type: 'file', payload: file, acknowledged: true, outputFormat, ...advanced });
-        }
-    };
-
-    const handleDrop = (e) => {
-        e.preventDefault();
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            setFile(e.dataTransfer.files[0]);
-            setMode('file');
         }
     };
 
     return (
         <div className="card p-4 sm:p-6 animate-fade">
-            <div className="flex gap-4 sm:gap-6 mb-6 border-b border-rule" data-tutorial="source-tabs">
-                <button
-                    onClick={() => setMode('file')}
-                    className={`flex items-center gap-2 pb-3 px-1 -mb-px border-b-2 text-sm lowercase whitespace-nowrap transition-colors ${mode === 'file'
-                        ? 'text-ink border-brass'
-                        : 'text-muted border-transparent hover:text-ink2'
-                        }`}
-                >
-                    <Upload size={16} className={`hidden sm:block ${mode === 'file' ? 'text-brass' : ''}`} />
-                    Upload File
-                </button>
-                {youtubeUrlEnabled && (
-                    <button
-                        onClick={() => setMode('url')}
-                        className={`flex items-center gap-2 pb-3 px-1 -mb-px border-b-2 text-sm lowercase whitespace-nowrap transition-colors ${mode === 'url'
-                            ? 'text-ink border-brass'
-                            : 'text-muted border-transparent hover:text-ink2'
-                            }`}
-                    >
-                        <Link2 size={16} className={`hidden sm:block ${mode === 'url' ? 'text-brass' : ''}`} />
-                        Video URL
-                    </button>
-                )}
+            <div className="flex items-center gap-2 pb-3 mb-6 border-b border-rule text-sm lowercase text-ink" data-tutorial="source-tabs">
+                <Link2 size={16} className="text-brass" />
+                YouTube link
             </div>
 
             <form onSubmit={handleSubmit}>
-                {mode === 'url' ? (
+                {!youtubeUrlEnabled && (
+                    <p className="text-sm text-danger mb-3" role="alert">
+                        Video links are disabled on this server (DISABLE_YOUTUBE_URL).
+                    </p>
+                )}
+                {(
                     <div className="space-y-4" data-tutorial="drop-zone">
                         <div className="relative">
                             <input
@@ -251,47 +180,6 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 )}
                             </div>
                         </div>
-                    </div>
-                ) : (
-                    <div
-                        data-tutorial="drop-zone"
-                        className={`border-2 border-dashed rounded-card p-6 sm:p-8 text-center transition-colors ${file ? 'border-brass' : 'border-rule2 hover:border-brass'
-                            }`}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={handleDrop}
-                    >
-                        {file ? (
-                            <div className="flex items-center justify-center gap-3 text-ok min-w-0">
-                                <FileVideo size={18} className="shrink-0" />
-                                <span className="font-medium truncate">{file.name}</span>
-                                <button
-                                    type="button"
-                                    onClick={() => setFile(null)}
-                                    className="p-1 text-muted hover:text-ink hover:bg-paper3 rounded-full transition-colors"
-                                >
-                                    <X size={16} />
-                                </button>
-                            </div>
-                        ) : null}
-                        {file && fileTooShort ? (
-                            <p className="text-danger text-sm mt-3" role="alert">
-                                This video is {Math.round(fileSeconds)}s long. Clip generation needs at least {MIN_SOURCE_SECONDS}s
-                                of footage to cut from: it already is a short. Pick a longer video.
-                            </p>
-                        ) : null}
-                        {!file && (
-                            <label className="cursor-pointer block">
-                                <input
-                                    type="file"
-                                    accept="video/*"
-                                    onChange={(e) => setFile(e.target.files?.[0] || null)}
-                                    className="hidden"
-                                />
-                                <Upload className="mx-auto mb-3 text-muted" size={18} />
-                                <p className="text-ink2 lowercase">Click to upload or drag and drop</p>
-                                <p className="readout mt-2">MP4, MOV up to 500MB · at least {MIN_SOURCE_SECONDS}s long</p>
-                            </label>
-                        )}
                     </div>
                 )}
 
@@ -551,7 +439,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 <button
                     type="submit"
                     data-tutorial="generate"
-                    disabled={isProcessing || !acknowledged || (mode === 'url' && !url) || (mode === 'file' && (!file || fileTooShort))}
+                    disabled={isProcessing || !acknowledged || !url || !youtubeUrlEnabled}
                     className="w-full btn-primary mt-4"
                 >
                     {isProcessing ? (
