@@ -242,13 +242,39 @@ def test_seo_hashtags_cleaned_deduped_and_lead_with_shorts():
     assert tags[0] == "#shorts" and "#standup" in tags and len(tags) == 4
 
 
-def test_seo_description_gets_its_lines(monkeypatch):
+def test_seo_description_is_assembled_in_order():
     import seo_copy
-    d = seo_copy.format_description(
-        "Hook here? More words. Credit: Naman Jain Follow @PunchlineBazaar for clips #comedy #funny")
-    lines = d.split("\n")
-    assert lines[0] == "Hook here?" and "Credit: Naman Jain" in lines
-    assert lines[-1] == "#comedy #funny"
+    d = seo_copy.build_description(
+        "Hook here?", "Para one.\nPara two.\n\n\nPara three. #stray #tags", "Naman Jain",
+        "@PunchlineBazaar", ["#shorts", "#comedy", "#funny", "#a", "#b", "#c"])
+    blocks = d.split("\n\n")
+    assert blocks[0] == "Hook here?" and blocks[1:4] == ["Para one.", "Para two.", "Para three."]
+    assert blocks[4] == ("Credit: Naman Jain (full video on their channel)\n"
+                         "Follow @PunchlineBazaar for daily clips")
+    assert blocks[5] == "#shorts #comedy #funny #a #b"
+    assert "Credit" not in seo_copy.build_description("h", "b", "", "this channel", [])
+
+
+def test_seo_word_count_counts_roman_urdu_words():
+    import seo_copy
+    assert seo_copy.word_count("Naman Jain ne bataya, kya scene tha! Don't miss.") == 9
+
+
+def test_seo_retry_prefers_latin_everyday_long_copy():
+    import seo_copy
+
+    def item(body, title="Goa mein panga #shorts"):
+        return seo_copy.ClipSEO(index=0, on_screen_title="t", hook="h", summary="s",
+                                youtube_title=title, description_hook="hook", description_body=body,
+                                creator="", hashtags=["#shorts"], tags=[], tiktok_caption="c")
+    long_body = "word " * 160
+    good = seo_copy._quality(item(long_body), latin=True)
+    assert all(good[:2])
+    assert not seo_copy._quality(item("word " * 20), latin=True)[1]
+    assert not seo_copy._quality(item(long_body + "राय"), latin=True)[0]
+    assert not seo_copy._quality(item(long_body, "Ladai ka apratyashit ant"), latin=True)[0]
+    assert seo_copy._quality(item(long_body + "राय"), latin=False)[0]
+    assert good > seo_copy._quality(item("word " * 20), latin=True)
 
 
 def test_seo_copy_off_or_without_key_changes_nothing(monkeypatch):

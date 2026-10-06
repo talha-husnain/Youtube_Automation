@@ -32,13 +32,20 @@ LANGUAGE_STYLE = {
 }
 
 
+# A description under ~150 words gives YouTube search little to match and
+# reads as auto-generated; the first jobs' came back at 40-60 words.
+MIN_DESCRIPTION_WORDS = 150
+
+
 class ClipSEO(BaseModel):
     index: int
     on_screen_title: str
     hook: str
     summary: str
     youtube_title: str
-    youtube_description: str
+    description_hook: str
+    description_body: str
+    creator: str
     hashtags: List[str]
     tags: List[str]
     tiktok_caption: str
@@ -48,62 +55,90 @@ class SEOResponse(BaseModel):
     clips: List[ClipSEO]
 
 
-PROMPT = """You write publishing copy for a YouTube Shorts / TikTok / Reels clip channel.
+PROMPT = """You are the growth writer for a YouTube Shorts / TikTok / Reels clip channel.
 Channel handle: {handle}
 Source video title: "{source}"
 Write everything in {style}.
+Use everyday spoken words, the way people comment and search. Never formal or bookish
+Hindi / Urdu: write "unexpected", "ending", "funny", "kahani", "scene", "secret",
+"opinion", not "apratyashit", "ant", "haasya", "vrittant", "rahasya".
+{script_rule}
+Every clip of this job is posted on the same channel, so make them different from each
+other: no two youtube_titles may share the same opening words or the same pattern
+(never start every title with "<creator>:"), and no sentence may be reused across clips.
 
 For EACH clip below return:
 - on_screen_title: max 45 characters, the punchy hook burned on top of the video.
   One language only, no hashtags, no emoji, no "|" separators.
 - hook: max 60 characters, the opening line that stops the scroll.
 - summary: one sentence, max 140 characters, why this moment works as a short.
-- youtube_title: max 70 characters before hashtags, then 1-2 hashtags (always #shorts).
-  Open with the main search keyword (topic, comedian or show name) or a strong hook,
-  create curiosity, stay truthful to what happens in the clip. Sentence case, at most
-  one emoji, no all-caps title.
-- youtube_description: 4-6 short lines separated by \\n newline characters:
-  line 1: a hook sentence under 120 characters (this is the search snippet);
-  lines 2-3: what happens in the clip, using the keywords people search for naturally
-  (comedian/creator name if the source title names one, topic, "stand up comedy" style
-  phrases that fit);
-  then "Credit: <original creator or channel>" when the source title names them;
-  then a call to action that names the channel handle (e.g. "Follow {handle} for daily clips");
-  then a blank line and a line with 4-5 hashtags (the first 3 show above the title).
-- hashtags: 10-15 hashtags, each starting with #, no spaces, lowercase or camelCase.
-  Start with #shorts, mix broad (#comedy #funny), niche (#standupcomedy style) and
-  clip-specific ones, plus the creator's name if known. No unrelated trending tags.
-- tags: 10-15 YouTube tag phrases (no #), the searches a viewer would type, mixing
+- youtube_title: 45-70 characters before hashtags, then " #shorts" and optionally one
+  more relevant hashtag. Put the main search keyword (creator name, show or topic) in the
+  first 4 words. Use ONE proven viral pattern: a curiosity gap that sets up the punchline
+  without giving it away ("Jab dost ne police ke saamne..."), creator + situation
+  ("Naman Jain ne bataya Goa ka sabse funny kissa"), or a direct question to the viewer.
+  Specific beats generic: name the situation, not just "funny moment". Truthful to the
+  clip, sentence case, no all-caps, at most one emoji placed before the hashtags.
+- description_hook: one line under 120 characters. This is the search snippet: name the
+  creator or topic and tease the payoff.
+- description_body: AT LEAST 160 words and at most 230, in exactly 3 paragraphs separated
+  by a blank line:
+  1) tell the story of the clip in a conversational, storytelling tone (who, what
+     situation, how it builds) without spoiling the final punchline;
+  2) why THIS clip is funny or relatable (its specific joke, line or situation, never a
+     generic sentence that would fit any clip), weaving in 6-8 search phrases naturally
+     (creator name, "stand up comedy", "hindi comedy", "desi comedy", the clip's topic
+     words, the show or special name if the source title has one);
+  3) a question the viewer will want to answer in the comments, then ask them to like,
+     share with the friend this reminds them of, and subscribe.
+  No hashtags, no credit line and no channel handle in the body: those are added after it.
+- creator: the original creator or channel named in the source title, or "" if none.
+- hashtags: 12-15 hashtags, each starting with #, no spaces, lowercase or camelCase.
+  Start with #shorts, mix broad (#comedy #funny), niche (#standupcomedy style),
+  clip-specific ones and the creator's name if known. No unrelated trending tags.
+- tags: 12-15 YouTube tag phrases (no #), the searches a viewer would type, mixing
   English and the audience's language.
 - tiktok_caption: under 150 characters: a hook line plus 4-6 hashtags.
-
+{extra}
 Clips (JSON): {clips}
 
-Return JSON: {{"clips": [{{"index": 0, "youtube_title": "...", "youtube_description": "...",
-"hashtags": ["#shorts", ...], "tags": ["..."], "tiktok_caption": "..."}}, ...]}}"""
+Return JSON: {{"clips": [{{"index": 0, "youtube_title": "...", "description_hook": "...",
+"description_body": "...", "creator": "...", "hashtags": ["#shorts", ...], ...}}, ...]}}"""
 
 
-def _clip_text(transcript, clip, limit=700):
+def _clip_text(transcript, clip, limit=1200):
     words = [w["word"] for s in (transcript or {}).get("segments") or []
              for w in s.get("words") or []
              if clip["start"] <= w["start"] <= clip["end"]]
     return "".join(words).strip()[:limit]
 
 
-def format_description(text):
-    """Put the description's parts on their own lines.
+def word_count(text):
+    return len(re.findall(r"[^\W_]+(?:['\u2019][^\W_]+)?", text or ""))
 
-    The model sometimes returns it as one paragraph (seen on a real job,
-    6-oct-2026), which YouTube shows as a wall of text: the hook sentence, the
-    credit, the call to action and the hashtag line each get their own line.
-    """
-    text = re.sub(r"[ \t]+", " ", (text or "").strip())
-    if "\n" not in text:
-        text = re.sub(r"(?<=[.!?])\s+", "\n", text, count=1)
-    text = re.sub(r"\s*(Credit:)", r"\n\n\1", text)
-    text = re.sub(r"(?<!\n)\s+(Follow\s+@)", r"\n\1", text)
-    text = re.sub(r"\s+((?:#\w+\s*){2,})$", lambda m: "\n\n" + m.group(1).strip(), text)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+def _paragraphs(text):
+    """Body text as clean paragraphs; a hashtag line the model adds anyway is
+    dropped (the description ends with its own)."""
+    text = re.sub(r"[ \t]+", " ", (text or "").replace("\\n", "\n")).strip()
+    text = re.sub(r"\s*(?:#\w+\s*){2,}$", "", text).strip()
+    return "\n\n".join(p.strip() for p in re.split(r"\n+", text) if p.strip())
+
+
+def build_description(hook, body, creator, handle, hashtags):
+    """The YouTube description, assembled here so its layout never depends on
+    the model keeping line breaks (it returned one paragraph on a real job,
+    6-oct-2026): hook line, story paragraphs, credit, follow line, hashtags."""
+    parts = [re.sub(r"\s+", " ", hook or "").strip(), _paragraphs(body)]
+    footer = []
+    if (creator or "").strip():
+        footer.append(f"Credit: {creator.strip()} (full video on their channel)")
+    footer.append(f"Follow {handle} for daily clips" if handle.startswith("@")
+                  else "Follow for daily clips")
+    parts.append("\n".join(footer))
+    if hashtags:
+        parts.append(" ".join(hashtags[:5]))
+    return "\n\n".join(p for p in parts if p)
 
 
 def _clean_tags(tags, hashtag):
@@ -122,6 +157,48 @@ def _clean_tags(tags, hashtag):
     return out[:15]
 
 
+def _ask(client, model, items, handle, source, style, latin, extra=""):
+    from google.genai import types
+    script_rule = ("Latin letters only in every field: never Devanagari or Arabic script, "
+                   "not even for a single word." if latin else "")
+    resp = client.models.generate_content(
+        model=model,
+        contents=PROMPT.format(handle=handle, source=source, style=style, extra=extra,
+                               script_rule=script_rule,
+                               clips=json.dumps(items, ensure_ascii=False)),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json", response_schema=SEOResponse,
+            temperature=0.8))
+    return {c.index: c for c in SEOResponse.model_validate(json.loads(resp.text)).clips}
+
+
+def _body_words(item):
+    return word_count(item.description_hook) + word_count(item.description_body)
+
+
+# Devanagari / Arabic letters. A Roman Urdu answer still slipped one Devanagari
+# word into a description on a real job (6-oct-2026).
+_NON_LATIN = re.compile("[؀-ۿऀ-ॿ]")
+
+
+# Sanskritised words the model reaches for and nobody types in a comment or a
+# search ("Ladai ka sabse apratyashit ant" on a real title, 6-oct-2026).
+_BOOKISH = re.compile(r"\b(apratyashit|ant|haasya|hasya|vrittant|rahasya)\b", re.I)
+
+
+def _wrong_words(item, latin):
+    text = " ".join([item.on_screen_title, item.hook, item.youtube_title,
+                     item.description_hook, item.description_body, item.tiktok_caption,
+                     *item.hashtags])
+    return latin and bool(_NON_LATIN.search(text) or _BOOKISH.search(text))
+
+
+def _quality(item, latin):
+    """Higher is better: right words first, then long enough, then length."""
+    words = _body_words(item)
+    return (not _wrong_words(item, latin), words >= MIN_DESCRIPTION_WORDS, words)
+
+
 def apply(clips, transcript, source_title=""):
     """Add SEO copy to every clip in place. Returns the number of clips updated."""
     if not clips or os.environ.get("SEO_COPY", "1").strip() == "0":
@@ -130,35 +207,46 @@ def apply(clips, transcript, source_title=""):
     if not key:
         print("   ℹ️ SEO copy skipped (no Gemini key).")
         return 0
-    style = LANGUAGE_STYLE.get((os.environ.get("CAPTION_SCRIPT") or "roman").lower(),
-                               LANGUAGE_STYLE["roman"])
+    script = (os.environ.get("CAPTION_SCRIPT") or "roman").lower()
+    style = LANGUAGE_STYLE.get(script, LANGUAGE_STYLE["roman"])
+    latin = script != "original"
     handle = (os.environ.get("FRAME_HANDLE") or "").strip() or "this channel"
+    # Only the clip's own words go in: given the detail pass's title, the model
+    # kept its bookish wording ("apratyashit ant") despite the rules.
     items = [{"index": i,
-              "on_screen_title": c.get("video_title_for_youtube_short") or "",
-              "hook": c.get("viral_hook_text") or "",
               "seconds": round(float(c["end"]) - float(c["start"])),
               "what_is_said": _clip_text(transcript, c)}
              for i, c in enumerate(clips)]
     print(f"🏷️ Writing SEO titles, descriptions and hashtags for {len(clips)} clip(s)...")
+    source = source_title.replace('"', "'")
     try:
         from google import genai
-        from google.genai import types
         client = genai.Client(api_key=key)
         model = os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
-        resp = client.models.generate_content(
-            model=model,
-            contents=PROMPT.format(handle=handle, source=source_title.replace('"', "'"),
-                                   style=style, clips=json.dumps(items, ensure_ascii=False)),
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json", response_schema=SEOResponse,
-                temperature=0.8))
-        parsed = SEOResponse.model_validate(json.loads(resp.text))
+        got = _ask(client, model, items, handle, source, style, latin)
     except Exception as e:  # noqa: BLE001 — the old copy stays
         print(f"   ⚠️ SEO copy failed ({type(e).__name__}: {str(e)[:200]}) — keeping the generated copy.")
         return 0
 
+    # One more call for the clips that came back missing, short or in the wrong script.
+    redo = [it for it in items
+            if it["index"] not in got or not all(_quality(got[it["index"]], latin)[:2])]
+    if redo:
+        print(f"   🔁 Rewriting {len(redo)} clip(s) whose copy came back short "
+              f"(under {MIN_DESCRIPTION_WORDS} words) or with bookish / non-Latin words...")
+        extra = ("\nIMPORTANT: the last answer for these clips was rejected. Every "
+                 "description_body must be at least 180 words in 3 full paragraphs, and "
+                 "every field must use Latin letters and everyday words only (never "
+                 "\"ant\", \"apratyashit\", \"rahasya\").\n")
+        try:
+            for i, it in _ask(client, model, redo, handle, source, style, latin, extra).items():
+                if i not in got or _quality(it, latin) > _quality(got[i], latin):
+                    got[i] = it
+        except Exception as e:  # noqa: BLE001 — keep the first answer
+            print(f"   ⚠️ Retry failed ({type(e).__name__}) — keeping the first answer.")
+
     done = 0
-    for item in parsed.clips:
+    for item in got.values():
         if not 0 <= item.index < len(clips):
             continue
         c = clips[item.index]
@@ -175,7 +263,8 @@ def apply(clips, transcript, source_title=""):
             # The burned top-band title (framed_layout); long two-language
             # titles from the detail pass shrank to 52 px over two lines.
             c["video_title_for_youtube_short"] = short
-        c["seo_description"] = format_description(item.youtube_description)
+        c["seo_description"] = build_description(item.description_hook, item.description_body,
+                                                 item.creator, handle, tags)
         c["hashtags"] = tags
         c["seo_tags"] = _clean_tags(item.tags, hashtag=False)
         c["video_description_for_tiktok"] = item.tiktok_caption.strip()
@@ -184,5 +273,7 @@ def apply(clips, transcript, source_title=""):
         body = re.sub(r"\n*(?:#\w+\s*)+$", "", c["seo_description"]).strip()
         c["video_description_for_instagram"] = (body + "\n\n" + " ".join(tags)).strip()
         done += 1
-    print(f"   ✅ SEO copy ready for {done}/{len(clips)} clips")
+    words = [word_count(c["seo_description"]) for c in clips if c.get("seo_description")]
+    print(f"   ✅ SEO copy ready for {done}/{len(clips)} clips"
+          + (f" (descriptions {min(words)}-{max(words)} words)" if words else ""))
     return done
