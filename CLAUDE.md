@@ -150,11 +150,14 @@ never finished:
   (`BRAND` in MediaInput.jsx: Punchline Bazaar, #2B0F3D).
 - **SEO copy** (`seo_copy.py`, `SEO_COPY=0` off): one Gemini call per job after
   `caption_script` writes per clip `seo_title`, `seo_description` (the model
-  returns hook + a 3-paragraph body + creator; `build_description` adds the
-  credit, follow CTA with `FRAME_HANDLE` and 5 hashtags, so the layout never
-  depends on the model's line breaks). Clips under `MIN_DESCRIPTION_WORDS`
-  (150), or with Devanagari/Arabic letters or bookish words ("apratyashit
-  ant") in Roman mode, get one more call. Only the clip's words go in: fed the
+  returns hook + a 3-paragraph body; `build_description` adds the follow
+  CTA with `FRAME_HANDLE` and 5 hashtags, so the layout never depends on the
+  model's line breaks). **The original creator is never named** (owner's
+  rule, no credit line): the model reports the name in `creator` only so
+  `name_pattern` (plus "BY <name>" from the source title) can check every
+  field. Clips under `MIN_DESCRIPTION_WORDS` (150), naming the creator, or
+  with Devanagari/Arabic letters or bookish words ("apratyashit ant") in
+  Roman mode get one more call; a name that survives it is scrubbed. Only the clip's words go in: fed the
   detail pass's title, the model kept its bookish wording. Plus
   `hashtags`, `seo_tags`, the TikTok/IG captions, and a short on-screen title,
   hook and summary in the caption language. ResultCard shows all of it with

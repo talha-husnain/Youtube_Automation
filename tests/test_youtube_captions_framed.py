@@ -245,14 +245,33 @@ def test_seo_hashtags_cleaned_deduped_and_lead_with_shorts():
 def test_seo_description_is_assembled_in_order():
     import seo_copy
     d = seo_copy.build_description(
-        "Hook here?", "Para one.\nPara two.\n\n\nPara three. #stray #tags", "Naman Jain",
+        "Hook here?", "Para one.\nPara two.\n\n\nPara three. #stray #tags",
         "@PunchlineBazaar", ["#shorts", "#comedy", "#funny", "#a", "#b", "#c"])
     blocks = d.split("\n\n")
     assert blocks[0] == "Hook here?" and blocks[1:4] == ["Para one.", "Para two.", "Para three."]
-    assert blocks[4] == ("Credit: Naman Jain (full video on their channel)\n"
-                         "Follow @PunchlineBazaar for daily clips")
+    assert blocks[4] == "Follow @PunchlineBazaar for daily clips"
     assert blocks[5] == "#shorts #comedy #funny #a #b"
-    assert "Credit" not in seo_copy.build_description("h", "b", "", "this channel", [])
+    assert "Credit" not in d
+
+
+def test_seo_one_block_body_is_split_into_three_paragraphs():
+    import seo_copy
+    body = " ".join(f"Sentence number {i} has a few more words in it." for i in range(9))
+    paras = seo_copy._paragraphs(body).split("\n\n")
+    assert len(paras) == 3 and " ".join(paras) == body
+    assert seo_copy._paragraphs("Short. Body. Here.") == "Short. Body. Here."
+
+
+def test_seo_creator_name_is_found_and_scrubbed():
+    import seo_copy
+    assert seo_copy._by_names("LADKI_KA_CHAKKAR | STAND UP COMEDY BY NAMAN JAIN") == ["NAMAN JAIN"]
+    p = seo_copy.name_pattern(["Naman Jain", "", "Punchline Bazaar"], "@PunchlineBazaar")
+    for hit in ("Naman Jain ne bataya", "#NamanJain", "namanjain comedy", "Naman ka scene"):
+        assert p.search(hit), hit
+    for miss in ("Jain sahab", "Punchline Bazaar", "namaste", "Follow @PunchlineBazaar"):
+        assert not p.search(miss), miss
+    assert seo_copy._scrub("Naman Jain ne bataya", p) == "comedian ne bataya"
+    assert seo_copy.name_pattern(["", "PunchlineBazaar"], "@PunchlineBazaar") is None
 
 
 def test_seo_word_count_counts_roman_urdu_words():
