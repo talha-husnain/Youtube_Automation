@@ -156,6 +156,41 @@ def test_on_screen_text_avoids_glyphs_the_font_lacks():
     assert "·" not in " ".join(ck.frame_events(_story(), 10, "@x", "T"))
 
 
+def test_fact_cards_count_up_numbers_and_shrink_long_headlines():
+    short = ck.Fact(headline="Sabse Tez 5,000 Runs", stat="97", detail="97 innings mein", line="x")
+    long_ = ck.Fact(headline="Pakistan Ke Sabse Ziada Centuries", stat="2021, 2022", detail="d", line="x")
+    a = " ".join(ck.fact_events(1, 4, short, 2.0, 6.0))
+    b = " ".join(ck.fact_events(2, 4, long_, 2.0, 6.0))
+    assert "}97" in a and "\\fs74" in a                       # counts up to the number
+    assert "Centuries" in b and "\\fs54" in b and "2021, 2022" in b
+
+
+def test_links_and_ideas():
+    assert ck.is_link("https://www.youtube.com/watch?v=XRUbpqdBT10")
+    assert not ck.is_link("Pakistan vs India, Asia Cup 2025 final")
+
+    class _Models:
+        def generate_content(self, **kw):
+            return type("R", (), {"text": "Here you go:\nmatch: Pakistan vs India · Asia Cup final\n"
+                                          "* topic: **LBW rule explained**\nnoise line", "candidates": []})()
+    got = ck.ideas(type("C", (), {"models": _Models()})())
+    assert got == [{"kind": "match", "text": "Pakistan vs India | Asia Cup final"},
+                   {"kind": "topic", "text": "LBW rule explained"}]
+
+
+@FFMPEG
+def test_background_music_sits_under_the_voice(tmp_path, monkeypatch):
+    monkeypatch.delenv("FRAME_OUTRO", raising=False)
+    track = str(tmp_path / "bed.mp3")
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=f=440:d=2", track], check=True)
+    out = str(tmp_path / "o.mp4")
+    kit.render(out, 5.0, ["#2B0F3D"], [], ck.STYLES, bed=(track, 5.0))   # looped past its 2 s
+    vol = subprocess.run(["ffmpeg", "-ss", "3", "-t", "1", "-i", out, "-af", "volumedetect", "-f", "null", "-"],
+                         capture_output=True, text=True).stderr
+    level = float(vol.split("mean_volume:")[1].split("dB")[0])
+    assert -45 < level < -22   # there, and well under a voice at -14 LUFS
+
+
 def test_a_match_the_search_cannot_find_stops_with_a_clear_message():
     class _Models:
         def generate_content(self, **kw):

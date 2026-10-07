@@ -2653,7 +2653,26 @@ async def get_config():
         # Self-host only: GEMINI_API_KEY is set in the server's .env, so
         # resolve_gemini() falls back to it and the dashboard must not ask.
         "serverGeminiKey": (not BILLING_ENABLED) and bool(os.environ.get("GEMINI_API_KEY")),
+        # Royalty-free tracks the user put in the music folder (short_kit.MUSIC_DIR).
+        "musicTracks": len(__import__("short_kit").music_tracks()),
     }
+
+
+@app.get("/api/cricket/ideas")
+async def cricket_ideas():
+    """Cricket Short ideas for this week (Google-grounded), self-host only."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not available")
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise HTTPException(status_code=400, detail="GEMINI_API_KEY is not set in .env")
+    import cricket_shorts
+    import short_kit
+    try:
+        found = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: cricket_shorts.ideas(short_kit.gemini()))
+    except Exception as e:  # noqa: BLE001 — the box still works without ideas
+        raise HTTPException(status_code=502, detail=f"Could not fetch ideas: {type(e).__name__}")
+    return {"ideas": found}
 
 async def _probe_youtube_quality(url: str) -> dict:
     """Run quality_probe.py in a worker thread; {} on any failure (fail-open)."""
@@ -2956,6 +2975,8 @@ async def process_endpoint(
     ai_take: Optional[str] = Form(None),
     song_owned: Optional[str] = Form(None),
     cricket_match: Optional[str] = Form(None),
+    cricket_mode: Optional[str] = Form(None),
+    bg_music: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -3005,6 +3026,8 @@ async def process_endpoint(
         ai_take = body.get("ai_take")
         song_owned = body.get("song_owned")
         cricket_match = body.get("cricket_match")
+        cricket_mode = body.get("cricket_mode")
+        bg_music = body.get("bg_music")
 
     # Two or more links: one short made of their best moments (compilation.py),
     # always in the framed style. One link stays a normal job.
@@ -3038,13 +3061,17 @@ async def process_endpoint(
         raise HTTPException(status_code=400, detail=f"Unknown video type: {genre}")
     song_urls = []
     owned_music = str(song_owned).lower() in ("1", "true", "yes")
+    cricket_mode = "topic" if str(cricket_mode or "").strip().lower() == "topic" else "match"
     if genre_val != "comedy":
         output_format = "framed"
         if genre_val == "cricket":
             cricket_match = re.sub(r"\s+", " ", str(cricket_match or "")).strip()
-            if not 3 <= len(cricket_match) <= 200:
-                raise HTTPException(status_code=400,
-                                    detail="Write which match: teams, tournament and date.")
+            if not 3 <= len(cricket_match) <= 300:
+                raise HTTPException(status_code=400, detail=(
+                    "Write a cricket topic." if cricket_mode == "topic" else
+                    "Write which match (teams, tournament and date) or paste its video link."))
+            if re.match(r"https?://", cricket_match):
+                await _validate_source_url(cricket_match)
             url, compile_urls = None, []
         elif compile_urls:
             if genre_val == "songs" and owned_music:
@@ -3224,6 +3251,9 @@ async def process_endpoint(
             env["SONG_URLS"] = json.dumps(song_urls)
     if genre_val == "cricket":
         env["CRICKET_MATCH"] = cricket_match
+        env["CRICKET_MODE"] = cricket_mode
+        if str(bg_music).lower() in ("1", "true", "yes"):
+            env["BG_MUSIC"] = "1"
     if genre_val != "comedy":
         print(f"[genre] job={job_id} {genre_val}"
               + (f" owned={owned_music} links={len(song_urls) or 1}" if genre_val == "songs" else ""))

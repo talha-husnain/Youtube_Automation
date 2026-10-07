@@ -49,3 +49,7 @@ skills-lock.json
 
 # Instrucciones locales con datos de infra (repo público)
 CLAUDE.local.md
+
+# Background music the user adds (short_kit.MUSIC_DIR); only the README is kept.
+music/*
+!music/README.md

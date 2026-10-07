@@ -19,7 +19,7 @@ const GENRES = [
 const GENRE_NOTES = {
     songs: 'Without "I own this music" the short comes out silent: add the song in the YouTube app (each result says how). Lyrics only show for music you own.',
     movies: 'Each scene gets brand-new funny Roman Urdu dialogue and AI voices. The original sound is muted. Keep dubs under a minute.',
-    cricket: 'Shortkaar looks the match up, writes the commentary and animates the scores. No match footage is used.',
+    cricket: 'A match: type it or paste its video link, and Shortkaar finds the facts and animates the scores. Facts & stats: rules, player stats, records, history. A voice tells it over our own animated background; no match footage is used.',
 };
 
 // Clip length presets (seconds, as strings like the inputs). Auto = blank:
@@ -74,6 +74,22 @@ export default function MediaInput({ onProcess, isProcessing }) {
     });
     const [songOwned, setSongOwned] = useState(false);
     const [cricketMatch, setCricketMatch] = useState('');
+    // Cricket: a match (name or video link) or a topic (rules, stats, records).
+    const [cricketMode, setCricketMode] = useState('match');
+    const [bgMusic, setBgMusic] = useState(() => {
+        try { return localStorage.getItem('os_bg_music') === '1'; } catch { return false; }
+    });
+    const [musicTracks, setMusicTracks] = useState(0);
+    const [ideas, setIdeas] = useState([]);
+    const [ideasState, setIdeasState] = useState('');
+
+    const loadIdeas = () => {
+        setIdeasState('loading');
+        fetch(getApiUrl('/api/cricket/ideas'))
+            .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+            .then((d) => { setIdeas(d.ideas || []); setIdeasState(d.ideas && d.ideas.length ? '' : 'none'); })
+            .catch(() => setIdeasState('error'));
+    };
     const [aiTake, setAiTake] = useState(() => {
         try { return localStorage.getItem('os_ai_take') !== '0'; } catch { return true; }
     });
@@ -123,6 +139,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             .then((r) => r.ok ? r.json() : null)
             .then((cfg) => {
                 if (cfg && cfg.youtubeUrlEnabled === false) setYoutubeUrlEnabled(false);
+                if (cfg && typeof cfg.musicTracks === 'number') setMusicTracks(cfg.musicTracks);
             })
             .catch(() => {});
     }, []);
@@ -169,11 +186,14 @@ export default function MediaInput({ onProcess, isProcessing }) {
             aiTake: genre === 'comedy' ? aiTake : false,
             songOwned,
             cricketMatch,
+            cricketMode,
+            bgMusic,
         };
         try {
             localStorage.setItem('os_caption_script', captionScript);
             localStorage.setItem('os_ai_take', aiTake ? '1' : '0');
             localStorage.setItem('os_genre', genre);
+            localStorage.setItem('os_bg_music', bgMusic ? '1' : '0');
             localStorage.setItem('os_clip_min', clipMinSeconds);
             localStorage.setItem('os_clip_max', clipMaxSeconds);
             localStorage.setItem('os_output_format', outputFormat);
@@ -241,16 +261,56 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     <p className="-mt-2 mb-4 text-[11px] leading-relaxed text-muted">{GENRE_NOTES[genre]}</p>
                 )}
                 {genre === 'cricket' && (
-                    <input
-                        type="text"
-                        value={cricketMatch}
-                        onChange={(e) => setCricketMatch(e.target.value)}
-                        placeholder="Which match? e.g. Pakistan vs India, Asia Cup 2025 final"
-                        aria-label="which cricket match"
-                        maxLength={200}
-                        className="input-field"
-                        required
-                    />
+                    <div className="space-y-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                            {[['match', 'A match'], ['topic', 'Facts & stats']].map(([id, label]) => (
+                                <button key={id} type="button" onClick={() => setCricketMode(id)} aria-pressed={cricketMode === id}
+                                    className={`px-3 py-1.5 rounded-input border text-xs ${cricketMode === id ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}>
+                                    {label}
+                                </button>
+                            ))}
+                            <button type="button" onClick={loadIdeas} disabled={ideasState === 'loading'}
+                                className="ml-auto text-xs lowercase text-muted hover:text-brass transition-colors">
+                                {ideasState === 'loading' ? 'finding ideas...' : 'ideas for this week'}
+                            </button>
+                        </div>
+                        <input
+                            type="text"
+                            value={cricketMatch}
+                            onChange={(e) => setCricketMatch(e.target.value)}
+                            placeholder={cricketMode === 'topic'
+                                ? 'Topic: Babar Azam ODI stats, the LBW rule, fastest centuries...'
+                                : 'Paste a match video link, or type: Pakistan vs India, Asia Cup 2025 final'}
+                            aria-label={cricketMode === 'topic' ? 'cricket topic' : 'which cricket match'}
+                            maxLength={300}
+                            className="input-field"
+                            required
+                        />
+                        {ideas.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                                {ideas.map((it) => (
+                                    <button key={it.kind + it.text} type="button"
+                                        onClick={() => { setCricketMode(it.kind === 'topic' ? 'topic' : 'match'); setCricketMatch(it.text); }}
+                                        className="text-left text-[11px] px-2 py-1 rounded-input border border-rule2 text-ink2 hover:border-[color:var(--color-accent)]">
+                                        <span className="eyebrow mr-1">{it.kind}</span>{it.text}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        {ideasState === 'error' && <p className="text-[11px] text-danger">Could not fetch ideas right now; type your own.</p>}
+                        <label className="flex items-start gap-2 text-xs text-ink2 cursor-pointer select-none">
+                            <input type="checkbox" checked={bgMusic} onChange={(e) => setBgMusic(e.target.checked)}
+                                className="mt-0.5 w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer" />
+                            <span>
+                                background music under the voice
+                                <span className="block text-[11px] text-muted">
+                                    {musicTracks > 0
+                                        ? `${musicTracks} track${musicTracks > 1 ? 's' : ''} in the music folder; a random one is used.`
+                                        : 'Add royalty-free tracks (YouTube Audio Library, Pixabay) to the music folder first.'}
+                                </span>
+                            </span>
+                        </label>
+                    </div>
                 )}
                 {!youtubeUrlEnabled && genre !== 'cricket' && (
                     <p className="text-sm text-danger mb-3" role="alert">

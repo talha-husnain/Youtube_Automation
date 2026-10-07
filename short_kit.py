@@ -13,6 +13,7 @@ movie scene's picture come from the source link.
 """
 import json
 import os
+import random
 import subprocess
 import time
 import wave
@@ -31,6 +32,12 @@ CAPTION_TOP_PX = 1430
 MALE_VOICES = ["Puck", "Charon", "Fenrir", "Orus", "Iapetus"]
 FEMALE_VOICES = ["Kore", "Aoede", "Leda", "Zephyr", "Despina"]
 WHOOSH = "if(lt(t,0.3),0.35*sin(2*PI*(300*t+1800*t*t))*(t/0.3)*(1-t/0.3)*4,0)"
+# Background music the user adds (royalty-free tracks, e.g. YouTube Audio
+# Library or Pixabay): nothing is downloaded or shipped with the app.
+MUSIC_DIR = os.environ.get("MUSIC_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "music")
+MUSIC_EXT = (".mp3", ".m4a", ".wav", ".ogg", ".aac", ".flac")
+# Far under the voices (LOUDNORM_FILTER, -14): a bed, not a song.
+BED_LOUDNORM = "loudnorm=I=-30:TP=-8:LRA=11"
 
 
 def neutral_stem(prefix):
@@ -155,6 +162,34 @@ def blend(hex_color, base, share):
     return "#" + "".join(f"{round(x * share + y * (1 - share)):02X}" for x, y in zip(a, b))
 
 
+def music_tracks():
+    try:
+        return sorted(f for f in os.listdir(MUSIC_DIR) if f.lower().endswith(MUSIC_EXT))
+    except OSError:
+        return []
+
+
+def music_track():
+    """A random track from the music folder, or None when it is empty."""
+    tracks = music_tracks()
+    return os.path.join(MUSIC_DIR, random.choice(tracks)) if tracks else None
+
+
+def ambient_events(total, seed=7):
+    """Soft light dots drifting up behind everything: depth on a flat gradient."""
+    rnd = random.Random(seed)
+    ev = []
+    for _ in range(12):
+        r = rnd.randint(18, 70)
+        x, y0 = rnd.randint(40, OUT_W - 40), rnd.randint(300, OUT_H + 200)
+        x1, y1 = x + rnd.randint(-80, 80), y0 - rnd.randint(250, 700)
+        alpha = rnd.choice(["D0", "DC", "E6"])
+        ev.append(dialogue(0, 0, total, "Shape",
+                           rf"{{\an5\move({x},{y0},{x1},{y1})\1c&HFFFFFF&\1a&H{alpha}&\bord0\shad0"
+                           rf"\blur8\p1}}{fl._circle(r)}{{\p0}}"))
+    return ev
+
+
 def bg_source(colors, seconds):
     """Slowly moving gradient over the whole canvas (lavfi input)."""
     cs = [c.lstrip("#") for c in colors][:3] or ["2B0F3D", "8B5CF6"]
@@ -166,10 +201,9 @@ def bg_source(colors, seconds):
 
 
 def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=(),
-           music=None, visualizer=False, silent=False, video=None, video_box=None, fades=None,
-           music_seconds=None):
-    """Make a 1080x1920 short: gradient (or ``video`` placed in ``video_box``),
-    an optional audio-reactive bar layer from ``music``, then the text layer.
+           music=None, visualizer=False, silent=False, fades=None, music_seconds=None, bed=None):
+    """Make a 1080x1920 short: gradient, an optional wave line from ``music``,
+    then the text layer.
 
     voices: [(wav, at)]  sfx: [(aevalsrc expr, seconds, at)]
     music: (path, start in file, volume)  silent: no sound at all (a song
@@ -177,6 +211,7 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     fades: (seconds, music length) fades the music in and out.
     music_seconds: how long the music (and its wave) run; the end card after
     it is quiet.
+    bed: (track, seconds) background music under the voices, looped, faded.
     """
     ass_path = os.path.join(os.path.dirname(os.path.abspath(out_path)),
                             f"gen_{os.getpid()}_{int(time.time() * 1000) % 10**8}.ass")
@@ -185,13 +220,6 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     cmd = ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", bg_source(colors, seconds),
            "-f", "lavfi", "-t", f"{seconds:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
     graph, v, mix, idx = [], "[0:v]", ["[1:a]"], 2
-    if video:
-        x, y, w, h = video_box
-        cmd += ["-i", video]
-        graph.append(f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
-                     f"crop={w}:{h},setsar=1,fps={FPS}[src]")
-        graph.append(f"{v}[src]overlay={x}:{y}:eof_action=repeat[withsrc]")
-        v, idx = "[withsrc]", idx + 1
     if music:
         path, start, vol = music
         cmd += ["-ss", f"{start:.3f}", "-t", f"{music_seconds or seconds:.3f}", "-i", path]
@@ -212,6 +240,14 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
                     f":d={fades[0]:g}," if fades else "")
             graph.append(f"[ma]{fade}volume={vol},aresample=48000,aformat=channel_layouts=stereo[mus]")
             mix.append("[mus]")
+    if bed:
+        track, length = bed
+        cmd += ["-stream_loop", "-1", "-i", track]
+        graph.append(f"[{idx}:a]atrim=0:{length:.3f},asetpts=PTS-STARTPTS,{BED_LOUDNORM},"
+                     f"afade=t=in:d=1,afade=t=out:st={max(0.0, length - 1.5):.3f}:d=1.5,"
+                     f"aresample=48000,aformat=channel_layouts=stereo[bed]")
+        mix.append("[bed]")
+        idx += 1
     for k, (wav, at) in enumerate(voices):
         cmd += ["-i", wav]
         ms = int(at * 1000)

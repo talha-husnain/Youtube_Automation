@@ -1089,6 +1089,8 @@ function App() {
         // Songs: keep the sound + lyrics (music the user owns). Cricket: the match.
         song_owned: data.genre === 'songs' ? (data.songOwned ? '1' : '0') : null,
         cricket_match: data.genre === 'cricket' ? (data.cricketMatch || null) : null,
+        cricket_mode: data.genre === 'cricket' ? (data.cricketMode || 'match') : null,
+        bg_music: data.genre === 'cricket' && data.bgMusic ? '1' : null,
       };
 
       if (data.type === 'url') {

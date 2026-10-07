@@ -63,6 +63,32 @@ def resolve(url):
     return info.get("title") or "youtube_video", fmts
 
 
+def video_info(url):
+    """Title, description and duration only, with the same clients and cookies
+    as resolve(): plain yt-dlp defaults got "Sign in to confirm you're not a
+    bot" for a highlights video that these settings read (8-oct-2026)."""
+    import yt_dlp
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
+            "socket_timeout": 30, "js_runtimes": {"node": {}},
+            "extractor_args": {"youtube": {"player_client": ["default", "mweb"]}}}
+    ck_path = None
+    cookies = os.environ.get("YOUTUBE_COOKIES")
+    try:
+        if cookies:
+            fd, ck_path = tempfile.mkstemp(prefix="yt_sect_", suffix=".txt")
+            with os.fdopen(fd, "w") as f:
+                f.write(cookies)
+            opts["cookiefile"] = ck_path
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=False, process=False)
+    finally:
+        if ck_path:
+            try:
+                os.remove(ck_path)
+            except OSError:
+                pass
+
+
 def fetch_audio(url, output_dir):
     """The whole audio track only (song_shorts.py): (title, duration, path).
 
