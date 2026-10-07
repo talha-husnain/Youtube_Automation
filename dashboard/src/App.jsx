@@ -1086,6 +1086,9 @@ function App() {
         caption_script: data.captionScript || null,
         genre: data.genre || null,
         ai_take: data.aiTake === false ? false : null,
+        // Songs: keep the sound + lyrics (music the user owns). Cricket: the match.
+        song_owned: data.genre === 'songs' ? (data.songOwned ? '1' : '0') : null,
+        cricket_match: data.genre === 'cricket' ? (data.cricketMatch || null) : null,
       };
 
       if (data.type === 'url') {

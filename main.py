@@ -2286,7 +2286,9 @@ if __name__ == '__main__':
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument('-i', '--input', type=str, help="Path to the input video file.")
     input_group.add_argument('-u', '--url', type=str, help="YouTube URL to download and process.")
-    
+    input_group.add_argument('--generate', action='store_true',
+                             help="Make a short with no source video (CONTENT_GENRE=cricket).")
+
     parser.add_argument('-o', '--output', type=str, help="Output directory or file (if processing whole video).")
     parser.add_argument('--keep-original', action='store_true', help="Keep the downloaded YouTube video.")
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
@@ -2307,6 +2309,14 @@ if __name__ == '__main__':
             os.makedirs(path, exist_ok=True)
         return path
     
+    # Generated shorts with no source video (cricket_shorts.py).
+    if args.generate:
+        import cricket_shorts
+        cricket_shorts.run(os.environ.get("CRICKET_MATCH", ""), _ensure_dir(args.output or "."),
+                           sys.modules[__name__])
+        print(f"\n⏱️  Total execution time: {time.time() - script_start_time:.2f}s")
+        sys.exit(0)
+
     # 1. Get Input Video
     if args.url:
         # For multi-clip runs, treat --output as an OUTPUT DIRECTORY (create it if needed).
@@ -2328,6 +2338,17 @@ if __name__ == '__main__':
             import compilation
             compilation.run(json.loads(os.environ["COMPILE_URLS"]), output_dir,
                             sys.modules[__name__])
+            print(f"\n⏱️  Total execution time: {time.time() - script_start_time:.2f}s")
+            sys.exit(0)
+
+        # Song shorts and movie dubs have their own flow; comedy (the default)
+        # never enters here.
+        _genre = (os.environ.get("CONTENT_GENRE") or "comedy").lower()
+        if _genre in ("songs", "movies"):
+            import importlib
+            importlib.import_module("song_shorts" if _genre == "songs" else "movie_dub").run(
+                json.loads(os.environ.get("SONG_URLS") or "[]") or [args.url], output_dir,
+                sys.modules[__name__])
             print(f"\n⏱️  Total execution time: {time.time() - script_start_time:.2f}s")
             sys.exit(0)
 

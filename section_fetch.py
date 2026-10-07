@@ -63,6 +63,47 @@ def resolve(url):
     return info.get("title") or "youtube_video", fmts
 
 
+def fetch_audio(url, output_dir):
+    """The whole audio track only (song_shorts.py): (title, duration, path).
+
+    A song is a few MB as audio against 60-100 MB as a 1080p music video, and
+    the picture is never used. Same clients and cookies as resolve()."""
+    import yt_dlp
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
+            "socket_timeout": 30, "js_runtimes": {"node": {}},
+            "extractor_args": {"youtube": {"player_client": ["default", "mweb"]}},
+            "format": "bestaudio[ext=m4a]/bestaudio/best", "retries": 10,
+            "outtmpl": os.path.join(output_dir, "song_audio.%(ext)s")}
+    ck_path = None
+    cookies = os.environ.get("YOUTUBE_COOKIES")
+    try:
+        if cookies:
+            fd, ck_path = tempfile.mkstemp(prefix="yt_sect_", suffix=".txt")
+            with os.fdopen(fd, "w") as f:
+                f.write(cookies)
+            opts["cookiefile"] = ck_path
+        # Fresh links each round: YouTube now and then 403s one set (see fetch).
+        for round_no in range(1, RESOLVE_ROUNDS + 1):
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    path = ydl.prepare_filename(info)
+                break
+            except Exception as e:  # noqa: BLE001 — retried, then raised
+                if round_no == RESOLVE_ROUNDS:
+                    raise
+                print(f"   🔁 Audio download failed ({str(e)[-80:]}), retrying with fresh links...")
+    finally:
+        if ck_path:
+            try:
+                os.remove(ck_path)
+            except OSError:
+                pass
+    if not os.path.exists(path):
+        raise RuntimeError("the audio download produced no file")
+    return info.get("title") or "song", float(info.get("duration") or 0), path
+
+
 def _ffmpeg_cmd(fmts, start, end, out_path):
     cmd = ["ffmpeg", "-y", "-v", "error"]
     for f in fmts:

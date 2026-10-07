@@ -7,13 +7,20 @@ const SUPPORTED_PLATFORMS = [
     'Facebook', 'Instagram', 'Dailymotion', 'Reddit', 'Streamable',
 ];
 
-// Video types. Only comedy is built; the rest wait on the rights research.
+// Video types: comedy is the clip pipeline; songs, movie dubs and cricket
+// have their own flows on the server (song_shorts / movie_dub / cricket_shorts).
 const GENRES = [
     { id: 'comedy', label: 'Comedy', ready: true, hint: 'stand-up and funny clips' },
-    { id: 'cricket', label: 'Cricket', ready: false },
-    { id: 'movies', label: 'Movies', ready: false },
-    { id: 'songs', label: 'Songs', ready: false },
+    { id: 'songs', label: 'Songs', ready: true, hint: 'a visual for a song' },
+    { id: 'movies', label: 'Movie dub', ready: true, hint: 'movie scenes with new funny Urdu dialogue' },
+    { id: 'cricket', label: 'Cricket', ready: true, hint: 'an animated match story, no footage' },
 ];
+
+const GENRE_NOTES = {
+    songs: 'Without "I own this music" the short comes out silent: add the song in the YouTube app (each result says how). Lyrics only show for music you own.',
+    movies: 'Each scene gets brand-new funny Roman Urdu dialogue and AI voices. The original sound is muted. Keep dubs under a minute.',
+    cricket: 'Shortkaar looks the match up, writes the commentary and animates the scores. No match footage is used.',
+};
 
 // Clip length presets (seconds, as strings like the inputs). Auto = blank:
 // the server's default 15-60 s band.
@@ -62,7 +69,11 @@ export default function MediaInput({ onProcess, isProcessing }) {
         try { return localStorage.getItem('os_frame_title') !== '0'; } catch { return true; }
     });
     // Video type (only comedy is built) and the channel's AI take after each clip.
-    const [genre, setGenre] = useState('comedy');
+    const [genre, setGenre] = useState(() => {
+        try { return localStorage.getItem('os_genre') || 'comedy'; } catch { return 'comedy'; }
+    });
+    const [songOwned, setSongOwned] = useState(false);
+    const [cricketMatch, setCricketMatch] = useState('');
     const [aiTake, setAiTake] = useState(() => {
         try { return localStorage.getItem('os_ai_take') !== '0'; } catch { return true; }
     });
@@ -155,11 +166,14 @@ export default function MediaInput({ onProcess, isProcessing }) {
             frameOutroSeconds,
             captionScript,
             genre,
-            aiTake,
+            aiTake: genre === 'comedy' ? aiTake : false,
+            songOwned,
+            cricketMatch,
         };
         try {
             localStorage.setItem('os_caption_script', captionScript);
             localStorage.setItem('os_ai_take', aiTake ? '1' : '0');
+            localStorage.setItem('os_genre', genre);
             localStorage.setItem('os_clip_min', clipMinSeconds);
             localStorage.setItem('os_clip_max', clipMaxSeconds);
             localStorage.setItem('os_output_format', outputFormat);
@@ -175,6 +189,19 @@ export default function MediaInput({ onProcess, isProcessing }) {
             localStorage.setItem('os_layout', layout);
         } catch { /* ignore */ }
         const links = [url, ...extraUrls].map((u) => u.trim()).filter(Boolean);
+        if (genre === 'cricket') {
+            if (cricketMatch.trim()) {
+                onProcess({ type: 'url', payload: '', acknowledged: true, ...advanced, outputFormat: 'framed' });
+            }
+            return;
+        }
+        if (genre !== 'comedy') {
+            // Songs (a mashup when the music is owned) and movie dubs: always framed.
+            const many = genre === 'songs' && songOwned && links.length >= 2;
+            onProcess({ type: 'url', payload: links[0], ...(many ? { urls: links } : {}),
+                acknowledged: true, ...advanced, outputFormat: 'framed' });
+            return;
+        }
         if (links.length >= 2) {
             try { localStorage.setItem('os_compile_seconds', compileSeconds); } catch { /* ignore */ }
             onProcess({
@@ -190,23 +217,56 @@ export default function MediaInput({ onProcess, isProcessing }) {
         <div className="card p-4 sm:p-6 animate-fade">
             <div className="flex items-center gap-2 pb-3 mb-6 border-b border-rule text-sm lowercase text-ink" data-tutorial="source-tabs">
                 <Link2 size={16} className="text-brass" />
-                YouTube link
+                {genre === 'cricket' ? 'cricket match' : 'YouTube link'}
             </div>
 
             <form onSubmit={handleSubmit}>
-                {!youtubeUrlEnabled && (
+                {/* Video type first: it decides what the AI does and what to paste. */}
+                <div className="mb-4 flex flex-wrap items-center gap-2" data-tutorial="video-type">
+                    <span className="eyebrow mr-1">video type</span>
+                    {GENRES.map((g) => (
+                        <button
+                            key={g.id}
+                            type="button"
+                            onClick={() => setGenre(g.id)}
+                            title={g.hint}
+                            aria-pressed={genre === g.id}
+                            className={`px-3 py-1.5 rounded-input border text-xs ${genre === g.id ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                        >
+                            {g.label}
+                        </button>
+                    ))}
+                </div>
+                {GENRE_NOTES[genre] && (
+                    <p className="-mt-2 mb-4 text-[11px] leading-relaxed text-muted">{GENRE_NOTES[genre]}</p>
+                )}
+                {genre === 'cricket' && (
+                    <input
+                        type="text"
+                        value={cricketMatch}
+                        onChange={(e) => setCricketMatch(e.target.value)}
+                        placeholder="Which match? e.g. Pakistan vs India, Asia Cup 2025 final"
+                        aria-label="which cricket match"
+                        maxLength={200}
+                        className="input-field"
+                        required
+                    />
+                )}
+                {!youtubeUrlEnabled && genre !== 'cricket' && (
                     <p className="text-sm text-danger mb-3" role="alert">
                         Video links are disabled on this server (DISABLE_YOUTUBE_URL).
                     </p>
                 )}
-                {(
+                {genre !== 'cricket' && (
                     <div className="space-y-4" data-tutorial="drop-zone">
                         <div className="relative">
                             <input
                                 type="url"
                                 value={url}
                                 onChange={(e) => setUrl(e.target.value)}
-                                placeholder="https://... paste a video link"
+                                placeholder={genre === 'songs' ? 'https://... paste the song\'s YouTube link'
+                                    : genre === 'movies' ? 'https://... paste a movie scene link'
+                                    : 'https://... paste a video link'}
                                 className="input-field pr-11"
                                 required
                             />
@@ -237,7 +297,14 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             </div>
                         </div>
 
-                        {extraUrls.map((u, i) => (
+                        {genre === 'songs' && (
+                            <label className="flex items-start gap-2 text-xs text-ink2 cursor-pointer select-none">
+                                <input type="checkbox" checked={songOwned} onChange={(e) => setSongOwned(e.target.checked)}
+                                    className="mt-0.5 w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer" />
+                                I own this music or it is royalty-free: keep the sound, show the lyrics, and allow a mashup of several links
+                            </label>
+                        )}
+                        {(genre === 'comedy' || (genre === 'songs' && songOwned)) && extraUrls.map((u, i) => (
                             <div key={i} className="relative">
                                 <input
                                     type="url"
@@ -256,16 +323,16 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 </button>
                             </div>
                         ))}
-                        {extraUrls.length < 4 && (
+                        {(genre === 'comedy' || (genre === 'songs' && songOwned)) && extraUrls.length < 4 && (
                             <button
                                 type="button"
                                 onClick={() => setExtraUrls((list) => [...list, ''])}
                                 className="flex items-center gap-1.5 text-xs lowercase text-muted hover:text-brass transition-colors"
                             >
-                                <Plus size={14} /> add another link to combine into one short
+                                <Plus size={14} /> {genre === 'songs' ? 'add another song for a mashup' : 'add another link to combine into one short'}
                             </button>
                         )}
-                        {extraUrls.some((u) => u.trim()) && (
+                        {genre === 'comedy' && extraUrls.some((u) => u.trim()) && (
                             <div className="rounded-input border border-rule bg-paper px-3 py-2.5 text-xs text-ink2 flex flex-wrap items-center gap-x-3 gap-y-2">
                                 <span>
                                     {1 + extraUrls.filter((u) => u.trim()).length} links: their best moments become one framed short.
@@ -289,8 +356,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
 
                 {/* Output format selector */}
                 <div className="mt-5" data-tutorial="output-format">
-                    <p className="eyebrow mb-2">Output format</p>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {genre === 'comedy' && <p className="eyebrow mb-2">Output format</p>}
+                    {genre === 'comedy' && <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         {[
                             { value: 'framed', label: 'Framed', hint: 'Colour bg · title · captions', w: 18, h: 32 },
                             { value: 'vertical', label: '9:16', hint: 'Face-tracked crop', w: 18, h: 32 },
@@ -321,8 +388,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 </button>
                             );
                         })}
-                    </div>
-                    {outputFormat === 'framed' && (
+                    </div>}
+                    {(outputFormat === 'framed' || genre !== 'comedy') && (
                         <div className="mt-3 space-y-3 rounded-input border border-rule p-3 animate-fade">
                             <div className="flex flex-wrap items-center gap-2">
                                 <span className="text-xs text-ink2 w-24">background</span>
@@ -344,7 +411,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     className="w-8 h-8 cursor-pointer bg-transparent"
                                 />
                             </div>
-                            <div className="flex flex-wrap items-center gap-2">
+                            {/* Songs and cricket draw their own picture: nothing to crop. */}
+                            {(genre === 'comedy' || genre === 'movies') && <div className="flex flex-wrap items-center gap-2">
                                 <span className="text-xs text-ink2 w-24">crop</span>
                                 <select value={frameCrop} onChange={(e) => setFrameCrop(e.target.value)}
                                     className="input-field !w-auto text-xs py-1.5" aria-label="crop shape">
@@ -358,7 +426,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     <option value="1.12">Zoom 12%</option>
                                     <option value="1.25">Zoom 25%</option>
                                 </select>
-                            </div>
+                            </div>}
                             <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
                                 <input type="checkbox" checked={frameTitle} onChange={(e) => setFrameTitle(e.target.checked)}
                                     className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer" />
@@ -397,40 +465,25 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     )}
                 </div>
 
-                {/* Video type: the AI picks moments and writes copy for it. */}
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                    <span className="eyebrow mr-1">video type</span>
-                    {GENRES.map((g) => (
-                        <button
-                            key={g.id}
-                            type="button"
-                            disabled={!g.ready}
-                            onClick={() => setGenre(g.id)}
-                            title={g.ready ? g.hint : 'coming soon'}
-                            className={`px-3 py-1.5 rounded-input border text-xs ${genre === g.id ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted'} ${g.ready ? 'hover:border-[color:var(--color-accent)]' : 'opacity-50 cursor-not-allowed'}`}
-                        >
-                            {g.label}{!g.ready && <span className="ml-1 text-[10px]">soon</span>}
-                        </button>
-                    ))}
-                </div>
-
                 {/* How many shorts: visible, since it is the main choice after the link. */}
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <span className="eyebrow mr-1">number of shorts</span>
-                    {['', '3', '5', '8', '10'].map((n) => (
+                {genre !== 'cricket' && <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <span className="eyebrow mr-1">{genre === 'movies' ? 'scenes to dub' : 'number of shorts'}</span>
+                    {(genre === 'comedy' ? ['', '3', '5', '8', '10']
+                        : genre === 'songs' && songOwned && extraUrls.some((u) => u.trim()) ? ['']
+                        : ['', '1', '2', '3']).map((n) => (
                         <button
                             key={n || 'auto'}
                             type="button"
                             onClick={() => setTargetClips(n)}
                             className={`px-3 py-1.5 rounded-input border text-xs ${targetClips === n ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
                         >
-                            {n || 'Auto (best)'}
+                            {n || (genre === 'comedy' ? 'Auto (best)' : genre === 'songs' && extraUrls.some((u) => u.trim()) && songOwned ? '1 mashup' : 'Auto (2)')}
                         </button>
                     ))}
-                </div>
+                </div>}
 
                 {/* Clip length: the AI picks each clip's length inside this range. */}
-                <div className="mt-3 flex flex-wrap items-center gap-2">
+                {(genre === 'comedy' || genre === 'songs') && <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className="eyebrow mr-1">clip length</span>
                     {LENGTH_PRESETS.map((p) => {
                         const on = !customLength && clipMinSeconds === p.min && clipMaxSeconds === p.max;
@@ -474,10 +527,10 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             seconds
                         </span>
                     )}
-                </div>
+                </div>}
                 {lengthError && <p className="mt-1.5 text-[11px] text-danger" role="alert">{lengthError}</p>}
 
-                <div className="mt-3 flex flex-wrap items-center gap-2">
+                {genre === 'comedy' && <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className="eyebrow mr-1">subtitles</span>
                     <select
                         value={captionScript}
@@ -490,13 +543,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         <option value="original">As spoken (original script)</option>
                     </select>
                     <span className="text-[11px] text-muted">titles and descriptions are always Roman Urdu</span>
-                </div>
+                </div>}
 
-                <label className="mt-3 flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                {genre === 'comedy' && <label className="mt-3 flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
                     <input type="checkbox" checked={aiTake} onChange={(e) => setAiTake(e.target.checked)}
                         className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer" />
                     AI take after each clip: a short voiced reaction + a question for the comments
-                </label>
+                </label>}
 
                 {/* Advanced generation controls — collapsed by default; blank = AI decides */}
                 <div className="mt-4">
@@ -614,7 +667,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 <button
                     type="submit"
                     data-tutorial="generate"
-                    disabled={isProcessing || !acknowledged || !url || !youtubeUrlEnabled || !!lengthError}
+                    disabled={isProcessing || !acknowledged || !!lengthError
+                        || (genre === 'cricket' ? !cricketMatch.trim() : (!url || !youtubeUrlEnabled))}
                     className="w-full btn-primary mt-4"
                 >
                     {isProcessing ? (

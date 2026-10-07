@@ -872,6 +872,26 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                             )}
                         </div>
                     )}
+                    {/* Song shorts come out silent: the song is added in the YouTube
+                        app, which is what makes it licensed (song_shorts.py). */}
+                    {clip.in_app_song && (
+                        <div className="mb-2 rounded-input border border-[color:var(--color-accent)] px-2.5 py-2 text-xs text-ink2 leading-snug">
+                            <span className="eyebrow block mb-1">add the song in the YouTube app</span>
+                            Create, upload this video, tap Sound, search &quot;{clip.in_app_song.title}&quot;,
+                            start it at {clip.in_app_song.start} ({clip.in_app_song.seconds}s), then post.
+                        </div>
+                    )}
+                    {/* Cricket: where the facts came from (cricket_shorts.py). */}
+                    {Array.isArray(clip.sources) && clip.sources.length > 0 && (
+                        <p className="text-[11px] text-muted leading-snug mb-2 break-words">
+                            <span className="eyebrow mr-1">facts from</span>
+                            {clip.sources.slice(0, 3).map((u, i) => (
+                                <a key={u} href={u} target="_blank" rel="noreferrer" className="underline hover:text-ink">
+                                    {i > 0 ? ', ' : ''}source {i + 1}
+                                </a>
+                            ))}
+                        </p>
+                    )}
                     {/* The channel's spoken take at the end of the clip (ai_take.py). */}
                     {clip.ai_take && (
                         <p className="text-xs text-ink2 leading-snug mb-2 break-words">

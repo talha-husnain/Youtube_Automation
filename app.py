@@ -960,9 +960,9 @@ def _recover_jobs_from_disk():
 # instead of vanish. Bounded by MAX_RESUME_ATTEMPTS so a video that reliably
 # crashes the worker can't crashloop the service.
 _RESUME_FILE = ".resume.json"
-# Video types the pipeline is tuned for (CONTENT_GENRE). Cricket, movies and
-# songs come after the rights research: they are not accepted yet.
-CONTENT_GENRES = ("comedy",)
+# Video types (CONTENT_GENRE): comedy is the main pipeline; the others are
+# song_shorts.py, movie_dub.py and cricket_shorts.py.
+CONTENT_GENRES = ("comedy", "songs", "movies", "cricket")
 MAX_RESUME_ATTEMPTS = 2
 
 # --- Deploy handover (two instances, one disk) -------------------------------
@@ -2954,6 +2954,8 @@ async def process_endpoint(
     compile_seconds: Optional[str] = Form(None),
     genre: Optional[str] = Form(None),
     ai_take: Optional[str] = Form(None),
+    song_owned: Optional[str] = Form(None),
+    cricket_match: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -3001,6 +3003,8 @@ async def process_endpoint(
         compile_seconds = body.get("compile_seconds")
         genre = body.get("genre")
         ai_take = body.get("ai_take")
+        song_owned = body.get("song_owned")
+        cricket_match = body.get("cricket_match")
 
     # Two or more links: one short made of their best moments (compilation.py),
     # always in the framed style. One link stays a normal job.
@@ -3024,6 +3028,32 @@ async def process_endpoint(
                 await _validate_source_url(extra_url)
         else:
             url = compile_urls[0] if compile_urls else url
+            compile_urls = []
+
+    # What kind of video this is (comedy unless asked). Songs, movie dubs and
+    # cricket have their own flows in main.py, always in the framed look;
+    # cricket has no source link at all (cricket_shorts.py).
+    genre_val = str(genre or "comedy").strip().lower()
+    if genre_val not in CONTENT_GENRES:
+        raise HTTPException(status_code=400, detail=f"Unknown video type: {genre}")
+    song_urls = []
+    owned_music = str(song_owned).lower() in ("1", "true", "yes")
+    if genre_val != "comedy":
+        output_format = "framed"
+        if genre_val == "cricket":
+            cricket_match = re.sub(r"\s+", " ", str(cricket_match or "")).strip()
+            if not 3 <= len(cricket_match) <= 200:
+                raise HTTPException(status_code=400,
+                                    detail="Write which match: teams, tournament and date.")
+            url, compile_urls = None, []
+        elif compile_urls:
+            if genre_val == "songs" and owned_music:
+                song_urls = compile_urls  # a mashup of music the user owns
+            else:
+                raise HTTPException(status_code=400, detail=(
+                    "Several song links make a mashup, which needs music you own: tick "
+                    "'I own this music'." if genre_val == "songs" else
+                    "Use one link for a movie dub."))
             compile_urls = []
 
     # Normalize output format (auto = keep pipeline default).
@@ -3054,7 +3084,7 @@ async def process_endpoint(
     if upload_id and not url and not file and not thumb_session:
         upload_slot = _take_pending_upload(upload_id, await _owner_id(request))
 
-    if not url and not file and not thumb_session and not upload_slot:
+    if not url and not file and not thumb_session and not upload_slot and genre_val != "cricket":
         raise HTTPException(status_code=400, detail="Must provide URL, File or upload_id")
 
     # Completion callback: reject unsafe targets NOW (clear 400) — delivery
@@ -3185,11 +3215,18 @@ async def process_endpoint(
     if caption_script in ("roman", "english", "original"):
         env["CAPTION_SCRIPT"] = caption_script
 
-    # What kind of video this is, so the AI picks and writes for it. Comedy
-    # is the only one built so far; the dashboard shows the others as "soon".
-    if genre is not None and str(genre).strip().lower() not in CONTENT_GENRES:
-        raise HTTPException(status_code=400, detail=f"Unknown video type: {genre}")
-    env["CONTENT_GENRE"] = str(genre or "comedy").strip().lower()
+    # Video type (validated above): main.py hands songs, movies and cricket
+    # to their own modules.
+    env["CONTENT_GENRE"] = genre_val
+    if genre_val == "songs":
+        env["SONG_OWNED"] = "1" if owned_music else "0"
+        if song_urls:
+            env["SONG_URLS"] = json.dumps(song_urls)
+    if genre_val == "cricket":
+        env["CRICKET_MATCH"] = cricket_match
+    if genre_val != "comedy":
+        print(f"[genre] job={job_id} {genre_val}"
+              + (f" owned={owned_music} links={len(song_urls) or 1}" if genre_val == "songs" else ""))
     # The channel's spoken take after each clip (ai_take.py): on unless off.
     if ai_take is not None and str(ai_take).lower() in ("0", "false", "no"):
         env["AI_TAKE"] = "0"
@@ -3233,6 +3270,8 @@ async def process_endpoint(
         # re-render path cuts new segments from it, and it ages out with the
         # rest of the job (retention window + OUTPUT_MAX_GB cap) either way.
         cmd.extend(["-u", url, "--keep-original"])
+    elif genre_val == "cricket":
+        cmd.append("--generate")  # no source video (cricket_shorts.py)
     elif thumb_session:
         # Hardlink (or copy) the session's video under the job's name so source
         # lookup, the clip editor and the preview treat it exactly like a normal

@@ -138,8 +138,14 @@ def _wav_seconds(path):
         return w.getnframes() / float(w.getframerate())
 
 
-def speak(client, text, path, voice=DEFAULT_VOICE):
-    """Write the take as a 24 kHz mono wav. Returns its length, or None."""
+DEFAULT_STYLE = "like a fun Pakistani YouTuber, natural Urdu accent"
+
+
+def speak(client, text, path, voice=DEFAULT_VOICE, style=None):
+    """Write ``text`` as a 24 kHz mono wav. Returns its length, or None.
+
+    ``style`` says how to read it (song_shorts / movie_dub / cricket_shorts
+    pass their own); the line itself is always Roman Urdu."""
     from google.genai import types
     models = [m for m in (os.environ.get("TAKE_TTS_MODEL") or "").split(",") if m.strip()]
     for model in models + [m for m in TTS_MODELS if m not in models]:
@@ -147,15 +153,16 @@ def speak(client, text, path, voice=DEFAULT_VOICE):
             try:
                 r = client.models.generate_content(
                     model=model.strip(),
-                    contents=("Read this Roman Urdu line aloud like a fun Pakistani YouTuber, "
-                              f"natural Urdu accent: {text}"),
+                    contents=f"Read this Roman Urdu line aloud {style or DEFAULT_STYLE}: {text}",
                     config=types.GenerateContentConfig(
                         response_modalities=["AUDIO"],
                         speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(
                             prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)))))
+                # Now and then a call comes back with no audio part at all
+                # (1 in 8 back to back, 8-oct-2026): that is a retry, not a fail.
                 data = r.candidates[0].content.parts[0].inline_data.data
                 if not data:
-                    break
+                    raise ValueError("empty audio")
                 with wave.open(path, "wb") as w:
                     w.setnchannels(1)
                     w.setsampwidth(2)
@@ -164,11 +171,10 @@ def speak(client, text, path, voice=DEFAULT_VOICE):
                 return _wav_seconds(path)
             except Exception as e:  # noqa: BLE001 — next attempt / model
                 busy = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
-                if busy and attempt == 0:
-                    time.sleep(15)
+                if attempt == 0:
+                    time.sleep(15 if busy else 1)
                     continue
                 print(f"   ⚠️ Voice {model} failed ({type(e).__name__}: {str(e)[:120]})")
-                break
     return None
 
 

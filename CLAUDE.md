@@ -199,8 +199,23 @@ never finished:
   that would pass 179.5 s with it gets none. Voiced files get the AI tag.
 - **Titles and descriptions are always Roman Urdu** (`SEO_SCRIPT`, default
   roman), whatever the subtitle language.
-- **Video type** (`genre` on /api/process -> `CONTENT_GENRE`): only `comedy`
-  is accepted (`app.CONTENT_GENRES`); cricket / movies / songs show as "soon".
+- **Video type** (`genre` on /api/process -> `CONTENT_GENRE`): `comedy` is
+  the clip pipeline, untouched. `songs` / `movies` hand over in main.py like
+  compilations; `cricket` has no link (`cricket_match`, main.py `--generate`).
+  Shared pieces in `short_kit.py` (gradient canvas + ASS + voices + metadata).
+  - `song_shorts.py`: silent by default (song added in the YouTube app gets
+    the special claim, answer/13053317), `SONG_OWNED=1` keeps sound + lyrics
+    and allows a mashup (`SONG_URLS`). Never trust Gemini's timestamps over a
+    whole song (67-85 s "sections", lyrics past the end): the cut is the
+    loudest stretch away from intro/outro, then Gemini hears only that clip.
+  - `movie_dub.py`: new Roman Urdu dialogue per line (one frame per line tells
+    it who speaks), a Gemini voice per character, original audio muted,
+    letterbox cropped (`black_bars`). Lines come from word times split at
+    pauses: Whisper segments run up to 50 s.
+  - `cricket_shorts.py`: facts via Google Search grounding (tell it today's
+    date; it once answered NOT FOUND for a 2025 match "because it is 2026"),
+    animated scenes, no footage, no player images or logos.
+  - Fonts here lack "·" and dashes on screen (rendered as boxes).
 - Before starting uvicorn, check :8000: a server from an earlier session may
   still answer with old app.py code (job subprocesses load new code anyway).
 - UI checks on this laptop: headless Edge `--screenshot` with
