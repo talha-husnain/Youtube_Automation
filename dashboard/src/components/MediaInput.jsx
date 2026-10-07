@@ -9,9 +9,11 @@ const SUPPORTED_PLATFORMS = [
 
 // Video types: comedy is the clip pipeline; songs, movie dubs and cricket
 // have their own flows on the server (song_shorts / movie_dub / cricket_shorts).
+// Songs is hidden (owner, 8-oct-2026: too slow to finish in the YouTube app);
+// the server flow stays, remove `hidden` to bring it back.
 const GENRES = [
     { id: 'comedy', label: 'Comedy', ready: true, hint: 'stand-up and funny clips' },
-    { id: 'songs', label: 'Songs', ready: true, hint: 'a visual for a song' },
+    { id: 'songs', label: 'Songs', ready: true, hint: 'a visual for a song', hidden: true },
     { id: 'movies', label: 'Movie dub', ready: true, hint: 'movie scenes with new funny Urdu dialogue' },
     { id: 'cricket', label: 'Cricket', ready: true, hint: 'an animated match story, no footage' },
 ];
@@ -70,7 +72,10 @@ export default function MediaInput({ onProcess, isProcessing }) {
     });
     // Video type (only comedy is built) and the channel's AI take after each clip.
     const [genre, setGenre] = useState(() => {
-        try { return localStorage.getItem('os_genre') || 'comedy'; } catch { return 'comedy'; }
+        try {
+            const saved = localStorage.getItem('os_genre') || 'comedy';
+            return GENRES.some((g) => g.id === saved && !g.hidden) ? saved : 'comedy';
+        } catch { return 'comedy'; }
     });
     const [songOwned, setSongOwned] = useState(false);
     const [cricketMatch, setCricketMatch] = useState('');
@@ -155,6 +160,24 @@ export default function MediaInput({ onProcess, isProcessing }) {
         } catch { /* ignore */ }
         if (pending) setUrl(pending);
     }, []);
+
+    // Reuse check of the pasted YouTube link: its licence and how much of it
+    // earlier Shorts already used. Advice only; a 404 (cloud) hides it.
+    const [licence, setLicence] = useState(null);
+    useEffect(() => {
+        setLicence(null);
+        const link = url.trim();
+        if (genre === 'cricket' || !/(youtube\.com\/(watch|shorts|live)|youtu\.be\/)/.test(link)) return undefined;
+        let alive = true;
+        const t = setTimeout(() => {
+            setLicence({ loading: true });
+            fetch(getApiUrl(`/api/finder/licence?url=${encodeURIComponent(link)}`))
+                .then((r) => (r.ok ? r.json() : null))
+                .then((d) => { if (alive) setLicence(d); })
+                .catch(() => { if (alive) setLicence(null); });
+        }, 700);
+        return () => { alive = false; clearTimeout(t); };
+    }, [url, genre]);
 
     const lengthError = (() => {
         const lo = Number(clipMinSeconds || 0), hi = Number(clipMaxSeconds || 0);
@@ -244,7 +267,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 {/* Video type first: it decides what the AI does and what to paste. */}
                 <div className="mb-4 flex flex-wrap items-center gap-2" data-tutorial="video-type">
                     <span className="eyebrow mr-1">video type</span>
-                    {GENRES.map((g) => (
+                    {GENRES.filter((g) => !g.hidden).map((g) => (
                         <button
                             key={g.id}
                             type="button"
@@ -356,6 +379,31 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 )}
                             </div>
                         </div>
+
+                        {licence && (
+                            <div className="-mt-2 text-[11px] leading-relaxed" aria-live="polite">
+                                {licence.loading ? (
+                                    <span className="text-muted inline-flex items-center gap-1.5">
+                                        <Loader2 size={12} className="animate-spin" /> checking if reuse is allowed…
+                                    </span>
+                                ) : (
+                                    <>
+                                        {licence.licence === 'creative_commons' && (
+                                            <p className="text-ok">Reuse allowed: this video is Creative Commons. Check that {licence.channel || 'the channel'} is the real owner.</p>
+                                        )}
+                                        {licence.licence === 'standard' && (
+                                            <p className="text-warn">Standard YouTube licence: reuse is not allowed by default, so Shorts from it can be claimed or removed.</p>
+                                        )}
+                                        {licence.licence === 'unknown' && (
+                                            <p className="text-muted">Could not check the licence of this video.</p>
+                                        )}
+                                        {licence.used?.count > 0 && (
+                                            <p className="text-muted">You already made {licence.used.count} {licence.used.count === 1 ? 'Short' : 'Shorts'} from this video; new ones will use other moments.</p>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        )}
 
                         {genre === 'songs' && (
                             <label className="flex items-start gap-2 text-xs text-ink2 cursor-pointer select-none">

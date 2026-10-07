@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3 } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
@@ -26,6 +26,9 @@ import TrialGate from './components/TrialGate';
 import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
 import LocalLibrary from './components/LocalLibrary';
+import FinderTab from './components/FinderTab';
+import AutopilotLocal from './components/AutopilotLocal';
+import ChannelTab from './components/ChannelTab';
 import { Logo, Wordmark, ThemePicker } from './components/Brand';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
@@ -937,8 +940,10 @@ function App() {
   // connect page's return URL). Read once per hash change, then the query is
   // dropped so a reload does not keep forcing the tab.
   const [autopilotConnected, setAutopilotConnected] = useState(false);
+  const [channelNotice, setChannelNotice] = useState(null);
   useEffect(() => {
-    const DEEP_LINK_TABS = ['autopilot', 'history', 'gallery', 'settings', 'thumbnails', 'dashboard'];
+    const DEEP_LINK_TABS = ['autopilot', 'history', 'gallery', 'settings', 'thumbnails', 'dashboard',
+      'finder', 'local-autopilot', 'channel'];
     const apply = () => {
       const hash = window.location.hash || '';
       if (!hash.startsWith('#app?')) return;
@@ -947,6 +952,8 @@ function App() {
       if (!tab || !DEEP_LINK_TABS.includes(tab)) return;  // e.g. #app?tutorial=1
       setActiveTab(tab);
       if (tab === 'autopilot' && params.get('connected') === '1') setAutopilotConnected(true);
+      // Back from Google (youtube_account.py): tell the My channel tab how it went.
+      if (tab === 'channel') setChannelNotice({ connected: params.get('connected') === '1', error: params.get('yt_error') || '' });
       try { window.history.replaceState(null, '', '#app'); } catch (_) { /* ignore */ }
     };
     apply();
@@ -1246,7 +1253,13 @@ function App() {
     { id: 'history', ord: '02', icon: History, label: 'History', short: 'history', primary: true },
     { id: 'gallery', ord: '03', icon: LayoutGrid, label: 'Gallery', short: 'gallery', primary: true },
     { id: 'thumbnails', ord: '04', icon: Image, label: 'Thumbnail Studio', short: 'thumbs', primary: true },
-    { id: 'settings', ord: '05', icon: Settings, label: 'Settings', short: 'settings' },
+    // Local-only tools (self-host): finder, daily autopilot, own channel.
+    ...(billingEnabled ? [] : [
+      { id: 'finder', ord: '05', icon: Search, label: 'Find videos', short: 'find' },
+      { id: 'local-autopilot', ord: '06', icon: Rocket, label: 'Autopilot', short: 'autopilot' },
+      { id: 'channel', ord: '07', icon: BarChart3, label: 'My channel', short: 'channel' },
+    ]),
+    { id: 'settings', ord: billingEnabled ? '05' : '08', icon: Settings, label: 'Settings', short: 'settings' },
   ];
   const activeNav = navItems.find((n) => n.id === activeTab);
 
@@ -1971,6 +1984,20 @@ function App() {
                 handleProcess({ type: 'thumbnail_session', payload: sessionId, acknowledged: true });
               }}
             />
+          )}
+
+          {/* Local tools: video finder, daily autopilot, own channel (self-host). */}
+          {activeTab === 'finder' && !billingEnabled && (
+            <FinderTab onMakeShorts={(link) => {
+              try { localStorage.setItem('os_pending_url', link); localStorage.setItem('os_genre', 'comedy'); } catch { /* ignore */ }
+              setActiveTab('dashboard');
+            }} />
+          )}
+          {activeTab === 'local-autopilot' && !billingEnabled && (
+            <AutopilotLocal onOpenChannelTab={() => setActiveTab('channel')} />
+          )}
+          {activeTab === 'channel' && !billingEnabled && (
+            <ChannelTab notice={channelNotice} />
           )}
 
           {/* View: Gallery (local: every clip still on this machine) */}

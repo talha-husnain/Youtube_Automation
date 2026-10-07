@@ -26,6 +26,7 @@ from typing import List
 from pydantic import BaseModel
 
 import short_kit as kit
+import used_moments
 import framed_layout as fl
 
 DEFAULT_SCENES = 2
@@ -131,8 +132,10 @@ def _lines(transcript, start, end):
             if float(c[-1]["end"]) - float(c[0]["start"]) >= 0.4]
 
 
-def pick_scenes(client, transcript, n, duration):
-    rows = "\n".join(f"{s:.1f}-{e:.1f}: {t}" for s, e, t in _lines(transcript, 0, duration))
+def pick_scenes(client, transcript, n, duration, used=()):
+    # Lines of scenes already dubbed (used_moments.py) are not offered again.
+    rows = "\n".join(f"{s:.1f}-{e:.1f}: {t}" for s, e, t in _lines(transcript, 0, duration)
+                     if not used_moments.covered(s, e, used))
     pick = kit.ask_json(client, ScenePick, PICK_PROMPT.format(n=n, lo=MIN_SCENE, hi=MAX_SCENE,
                                                               lines=rows[:60000]))
     scenes = []
@@ -282,7 +285,9 @@ def run(urls, output_dir, pipeline):
     duration = transcript.get("duration") or (segs[-1]["end"] if segs else 0)
     if not segs:
         raise RuntimeError("This video has no dialogue to re-dub.")
-    scenes = pick_scenes(client, transcript, n, duration)
+    used = used_moments.ranges(url)
+    scenes = pick_scenes(client, transcript, n, duration, used)
+    scenes = [s for s in scenes if used_moments.fresh_clips([{"start": s.start, "end": s.end}], used)]
     if not scenes:
         raise RuntimeError("No dialogue scene in this video suits a dub (needs a back-and-forth "
                            "conversation of 20-50 seconds).")
@@ -342,6 +347,7 @@ def run(urls, output_dir, pipeline):
     seo_copy.apply(clips, dub_text, source_title="",
                    context=SEO_CONTEXT.format(premise="; ".join(c["dub_premise"] for c in clips)))
     kit.finish(output_dir, stem, clips, None, pipeline, extra={"genre": "movies"}, margin=margin)
+    used_moments.record(url, ranges, os.path.basename(output_dir))
     for path in [os.path.join(output_dir, ".movie")] + [
             os.path.join(output_dir, f".dub_{k + 1}") for k in range(len(scenes))]:
         shutil.rmtree(path, ignore_errors=True)

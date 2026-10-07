@@ -39,6 +39,7 @@ import gemini_worker
 import hook_grounding
 import layout_picker
 import llm_backend
+import used_moments
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
@@ -1931,13 +1932,16 @@ def score_batch_size():
     return 3 if llm_backend.active() else 8
 
 
-def get_viral_clips(transcript_result, video_duration):
+def get_viral_clips(transcript_result, video_duration, used=None):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
     Windowing gives even coverage on long videos (a single call over the whole
     transcript clusters picks near the start), and the cheap scoring pass keeps
     the expensive detail reasoning focused on the shortlist. Cuts are snapped to
     word boundaries so clips don't start/end mid-word.
+
+    ``used``: [(start, end)] of this video already made into Shorts
+    (used_moments.py); those stretches are neither offered nor returned.
     """
     language = str(transcript_result.get('language') or 'unknown')
     if llm_backend.active():
@@ -1972,6 +1976,13 @@ def get_viral_clips(transcript_result, video_duration):
             transcript_result, video_duration,
             window_seconds=max(90, int(max_secs * 1.5)))
         print(f"   Built {len(windows)} scoring window(s).")
+        old_shorts = list(used or [])   # the body has its own local "used" (window ids)
+        if old_shorts:
+            fresh = used_moments.fresh_windows(windows, old_shorts)
+            print(f"   ♻️ {len(windows) - len(fresh)} window(s) skipped: already made into Shorts before.")
+            if not fresh:
+                raise used_moments.AllUsedError()
+            windows = fresh
         costs = []
 
         # --- Pass 1: score windows in batches, keep the highest-scoring ---
@@ -2071,6 +2082,11 @@ def get_viral_clips(transcript_result, video_duration):
             print(f"   Dropped {len(shorts) - len(deduped)} clip(s) overlapping a "
                   f"better-scored one.")
             shorts = deduped
+        if old_shorts:
+            fresh = used_moments.fresh_clips(shorts, old_shorts)
+            if len(fresh) < len(shorts):
+                print(f"   ♻️ Dropped {len(shorts) - len(fresh)} clip(s) that repeat an earlier Short.")
+            shorts = fresh
 
         # Aggregate cost across both passes.
         cost_analysis = None
@@ -2095,6 +2111,9 @@ def get_viral_clips(transcript_result, video_duration):
         # Content-policy rejection: propagate so the job fails with the real
         # reason instead of a generic "no clips found".
         print(f"🚫 {e}")
+        raise
+    except used_moments.AllUsedError as e:
+        print(f"♻️ {e}")
         raise
     except Exception as e:
         print(f"❌ Gemini Error: {e}")
@@ -2359,6 +2378,10 @@ if __name__ == '__main__':
         # precomputed transcript already has them. SOURCE_CAP_MINUTES is set on
         # every metered job but only cuts a download clearly longer than the
         # reservation; when it does, the early result is dropped below.
+        # Moments of this video already made into Shorts (used_moments.py).
+        _used = used_moments.ranges(args.url)
+        if _used:
+            print(f"♻️ {len(_used)} moment(s) of this video were made into Shorts before; picking new ones.")
         early = {"lock": threading.Lock(), "done": threading.Event(), "started": False,
                  "abandoned": False, "invalid": False, "transcript": None, "clips": None}
 
@@ -2367,7 +2390,7 @@ if __name__ == '__main__':
                 t = transcribe_video(audio_path)
                 early["transcript"] = t
                 if audio_duration and not speech_is_sparse(t, audio_duration):
-                    early["clips"] = get_viral_clips(t, audio_duration)
+                    early["clips"] = get_viral_clips(t, audio_duration, used=_used)
             except Exception as e:
                 print(f"   ℹ️ Early transcription skipped ({type(e).__name__}: {e}).")
                 early["transcript"] = early["clips"] = None
@@ -2408,7 +2431,10 @@ if __name__ == '__main__':
                         early["transcript"] = t
                         dur = t.get("duration") or (t["segments"][-1]["end"] if t["segments"] else 0)
                         if dur and not speech_is_sparse(t, dur):
-                            early["clips"] = trim_to_speech(cap_clip_lengths(get_viral_clips(t, dur)), t)
+                            early["clips"] = trim_to_speech(cap_clip_lengths(get_viral_clips(t, dur, used=_used)), t)
+                    except used_moments.AllUsedError:
+                        early["clips"] = None
+                        raise   # nothing new here: fail now, not after a full download
                     except Exception as e:
                         print(f"   ℹ️ Early clip pick skipped ({type(e).__name__}: {e}).")
                         early["clips"] = None
@@ -2574,7 +2600,8 @@ if __name__ == '__main__':
             print("♻️ Using the clips Gemini picked while the video downloaded.")
             clips_data = early_clips
         elif transcript is not None:
-            clips_data = get_viral_clips(transcript, duration)
+            clips_data = get_viral_clips(transcript, duration,
+                                         used=used_moments.ranges(args.url) if args.url else None)
         else:
             clips_data = get_visual_clips(input_video, duration)
 
@@ -2757,10 +2784,17 @@ if __name__ == '__main__':
                 time.sleep(CLIP_RETRY_PAUSE_SECONDS)
                 _free_gpu_cache()
                 try:
-                    if not _process_one_clip(i, shorts[i]):
+                    if _process_one_clip(i, shorts[i]):
+                        failed.remove(i)
+                    else:
                         print(f"   ❌ Clip {i+1} failed again.")
                 except Exception as e:
                     print(f"   ❌ Clip {i+1} failed again: {type(e).__name__}: {e}")
+
+            # Never repeat a moment (used_moments.py): remember what became a Short.
+            if args.url:
+                used_moments.record(args.url, [(c["start"], c["end"]) for k, c in enumerate(shorts)
+                                               if k not in failed], os.path.basename(output_dir))
 
             for _section in (globals().get("pre_cut") or {}).values():
                 try:

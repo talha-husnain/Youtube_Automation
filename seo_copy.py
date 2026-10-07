@@ -292,6 +292,12 @@ def apply(clips, transcript, source_title="", context="", text_limit=1200):
     # Extra context for a special clip (compilation.py); empty for a normal
     # job, which keeps its prompt exactly as before.
     note = f"\n{context}\n" if context else ""
+    # Title rules learned from the channel's own numbers (what_works.py);
+    # empty until the user builds a "what works" report.
+    import what_works
+    learned = what_works.guidance()
+    if learned:
+        note += f"\n{learned}\n"
     try:
         from google import genai
         client = genai.Client(api_key=key)

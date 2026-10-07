@@ -22,6 +22,8 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import used_moments
+
 SHORTS_MAX_SECONDS = 180
 FADE = 0.4  # crossfade between two moments, seconds
 MAX_URLS = 5
@@ -188,7 +190,8 @@ def run(urls, output_dir, pipeline):
             print(f"   ⚠️ Video {i + 1} has too little speech to pick moments from; skipping it.")
             return i, t, [], local, None
         found = pipeline.trim_to_speech(
-            pipeline.cap_clip_lengths(pipeline.get_viral_clips(t, dur)), t) or {}
+            pipeline.cap_clip_lengths(pipeline.get_viral_clips(
+                t, dur, used=used_moments.ranges(url))), t) or {}
         clips = found.get("shorts") or []
         print(f"   ✅ Video {i + 1}: {len(clips)} candidate moments")
         return i, t, clips, local, found.get("cost_analysis")
@@ -313,6 +316,9 @@ def run(urls, output_dir, pipeline):
         mark_ai_generated(served, "AI voice take after the clip")
     print(f"   ✅ Clip 1 ready: {final}")
     print(f"CLIP_READY 0 {os.path.basename(served)}")
+    for v in used_videos:   # never repeat a moment (used_moments.py)
+        used_moments.record(urls[v], [(c["start"], c["end"]) for vv, c in chosen if vv == v],
+                            os.path.basename(output_dir))
 
     for path in [joined] + [os.path.join(output_dir, f".video_{i + 1}") for i in range(len(urls))]:
         if os.path.isdir(path):

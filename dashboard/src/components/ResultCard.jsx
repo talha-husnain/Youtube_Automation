@@ -9,6 +9,7 @@ import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import TikTokDraftNotice from './TikTokDraftNotice';
+import YouTubeUpload from './YouTubeUpload';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
@@ -1073,6 +1074,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         {copied === 'all' ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
                         copy everything for youtube
                     </button>
+                    <YouTubeUpload jobId={jobId} index={index} title={ytTitle} description={ytDescription} />
                 </div>
             </Modal>
 

@@ -2295,6 +2295,11 @@ async def lifespan(app: FastAPI):
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
         asyncio.create_task(_alerts.proxy_watch_loop())
+    else:
+        # Self-host Autopilot: daily Shorts + uploads into posting times.
+        import autopilot_local
+        asyncio.create_task(autopilot_local.loop_forever(
+            _autopilot_submit, _job_clips, is_active=lambda: not _draining))
     yield
     # Cleanup (optional: cancel worker)
 
@@ -2674,6 +2679,265 @@ async def cricket_ideas():
         raise HTTPException(status_code=502, detail=f"Could not fetch ideas: {type(e).__name__}")
     return {"ideas": found}
 
+# ---------------------------------------------------------------- channel tools
+# Self-host only (Shortkaar): video finder, YouTube account, "what works"
+# report and the daily Autopilot. Cloud mode has its own versions or none.
+
+def _local_only():
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not available")
+
+
+async def _in_thread(fn, *args):
+    return await asyncio.get_event_loop().run_in_executor(None, functools.partial(fn, *args))
+
+
+@app.get("/api/finder/search")
+async def finder_search(q: str, duration: str = "any", date: str = "any", sort: str = "relevance",
+                        cc: str = "1"):
+    """YouTube search with the Creative Commons filter (channel_tools.search)."""
+    _local_only()
+    import channel_tools
+    import used_moments
+    if duration not in channel_tools.DURATIONS or date not in channel_tools.DATES \
+            or sort not in channel_tools.SORTS:
+        raise HTTPException(status_code=400, detail="Unknown filter")
+    try:
+        found = await _in_thread(channel_tools.search, q, cc != "0", duration, date, sort)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"YouTube search failed: {type(e).__name__}")
+    for v in found:
+        v["used"] = used_moments.summary(v["url"])
+    return {"results": found}
+
+
+@app.get("/api/finder/licence")
+async def finder_licence(url: str):
+    """Is this video reuse-allowed, and how much of it is already used."""
+    _local_only()
+    import channel_tools
+    import used_moments
+    if not used_moments.video_id(url):
+        raise HTTPException(status_code=400, detail="Not a YouTube video link")
+    out = await _in_thread(channel_tools.licence, url)
+    return {**out, "used": used_moments.summary(url)}
+
+
+@app.get("/api/finder/channel")
+async def finder_channel(url: str):
+    _local_only()
+    import channel_tools
+    if not channel_tools.channel_url(url):
+        raise HTTPException(status_code=400, detail="Paste a YouTube channel link or @handle")
+    try:
+        return await _in_thread(channel_tools.channel_info, url)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not read that channel: {type(e).__name__}")
+
+
+def _job_clips(job_id):
+    """(status, [{index, path, title, description, tags, genre, ai_made}]) of a job."""
+    job_path = os.path.join(OUTPUT_DIR, job_id)
+    state = (jobs.get(job_id) or {}).get("status")
+    metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
+    if not metas:
+        return state or "missing", []
+    if state is None and not os.path.isfile(os.path.join(job_path, _RESUME_FILE)):
+        state = "completed"
+    try:
+        with open(metas[0], encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return state, []
+    base = os.path.basename(metas[0]).replace("_metadata.json", "")
+    genre = data.get("genre") or ("comedy" if not data.get("compilation") else "comedy")
+    out = []
+    for i, c in enumerate(data.get("shorts") or []):
+        name = _canonical_clip_file(job_path, base, i)
+        if not name or not os.path.isfile(os.path.join(job_path, name)):
+            continue
+        out.append({"index": i, "path": os.path.join(job_path, name),
+                    "title": c.get("seo_title") or c.get("video_title_for_youtube_short") or "Short",
+                    "description": c.get("seo_description") or "",
+                    "tags": c.get("seo_tags") or [], "genre": genre,
+                    # Dubbed actors say lines they never said: YouTube asks for the label.
+                    "ai_made": genre == "movies"})
+    return state, out
+
+
+async def _autopilot_submit(payload):
+    """Start one job through the normal /api/process (Autopilot)."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://shortkaar.local") as client:
+        r = await client.post("/api/process", json=payload, timeout=180,
+                              headers={"X-Shortkaar-Autopilot": "1"})
+    if r.status_code != 200:
+        raise RuntimeError(f"{r.status_code}: {r.text[:200]}")
+    return r.json()["job_id"]
+
+
+@app.get("/api/youtube/status")
+async def youtube_status():
+    _local_only()
+    import youtube_account
+    return youtube_account.status()
+
+
+@app.get("/api/youtube/connect")
+async def youtube_connect(back: str = ""):
+    _local_only()
+    import youtube_account
+    from fastapi.responses import RedirectResponse
+    try:
+        return RedirectResponse(youtube_account.auth_url(back))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/youtube/callback")
+async def youtube_callback(code: str = "", state: str = "", error: str = ""):
+    _local_only()
+    import urllib.parse
+    import youtube_account
+    from fastapi.responses import RedirectResponse
+    origin = youtube_account.origin_for(state)
+    if error or not code:
+        return RedirectResponse(youtube_account.back_url(origin, "yt_error=" + urllib.parse.quote(error or "cancelled")))
+    try:
+        await _in_thread(youtube_account.finish_connect, code, state)
+    except Exception as e:  # noqa: BLE001
+        return RedirectResponse(youtube_account.back_url(origin, "yt_error=" + urllib.parse.quote(str(e)[:200])))
+    return RedirectResponse(youtube_account.back_url(origin, "connected=1"))
+
+
+@app.post("/api/youtube/disconnect")
+async def youtube_disconnect():
+    _local_only()
+    import youtube_account
+    await _in_thread(youtube_account.disconnect)
+    return {"ok": True}
+
+
+@app.get("/api/youtube/uploads")
+async def youtube_uploads():
+    _local_only()
+    import youtube_account
+    return {"uploads": sorted(youtube_account.uploads(), key=lambda r: r.get("created", 0), reverse=True)}
+
+
+@app.get("/api/youtube/slots")
+async def youtube_slots(count: int = 6):
+    _local_only()
+    import autopilot_local
+    import youtube_account
+    times = autopilot_local.settings()["post_times"]
+    return {"post_times": times,
+            "slots": [s.isoformat() for s in youtube_account.next_slots(times, max(1, min(count, 20)))]}
+
+
+@app.post("/api/youtube/upload")
+async def youtube_upload(request: Request):
+    """Upload one clip now or into a posting time; runs in the background,
+    the dashboard follows it on /api/youtube/uploads."""
+    _local_only()
+    import autopilot_local
+    import youtube_account
+    from datetime import datetime
+    body = await request.json()
+    if not youtube_account.status()["connected"]:
+        raise HTTPException(status_code=400, detail="Connect your YouTube channel first.")
+    job_id = str(body.get("job_id") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", job_id):
+        raise HTTPException(status_code=400, detail="Bad job id")
+    _state, clips = _job_clips(job_id)
+    clip = next((c for c in clips if c["index"] == int(body.get("clip_index", -1))), None)
+    if not clip:
+        raise HTTPException(status_code=404, detail="That clip is no longer on this computer.")
+    when = str(body.get("when") or "slot")
+    if when == "slot":
+        publish_at = youtube_account.next_slots(autopilot_local.settings()["post_times"], 1)[0]
+    elif when == "now":
+        publish_at = None
+    else:
+        try:
+            publish_at = datetime.fromisoformat(when)
+            if publish_at.tzinfo is None:
+                publish_at = publish_at.astimezone()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Bad time")
+    privacy = body.get("privacy") if body.get("privacy") in ("public", "unlisted", "private") else "public"
+    tags = body.get("tags") if isinstance(body.get("tags"), list) else clip["tags"]
+    args = (clip["path"], body.get("title") or clip["title"], body.get("description") or clip["description"],
+            tags, clip["genre"], publish_at, privacy, clip["ai_made"],
+            {"job_id": job_id, "clip_index": clip["index"]})
+    asyncio.get_event_loop().run_in_executor(None, functools.partial(youtube_account.upload, *args))
+    return {"ok": True, "publish_at": publish_at.isoformat() if publish_at else None}
+
+
+@app.get("/api/report")
+async def report_get():
+    _local_only()
+    import what_works
+    return {"report": what_works.load()}
+
+
+@app.post("/api/report/build")
+async def report_build(request: Request):
+    _local_only()
+    import what_works
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    handle = str(body.get("handle") or os.environ.get("FRAME_HANDLE") or "").strip()[:100]
+    if not handle:
+        import autopilot_local
+        handle = autopilot_local.look("comedy").get("frame_handle") or ""
+    try:
+        return {"report": await _in_thread(what_works.build, handle)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not build the report: {e}")
+
+
+@app.post("/api/report/use")
+async def report_use(request: Request):
+    _local_only()
+    import what_works
+    body = await request.json()
+    return {"report": what_works.set_use(bool(body.get("use")))}
+
+
+def _autopilot_view():
+    import autopilot_local
+    cfg = autopilot_local.settings()
+    for run in cfg.get("runs", []):
+        for job in run["jobs"]:
+            state, clips = _job_clips(job["job_id"])
+            job["status"] = state
+            job["ready"] = len(clips)
+    return {"settings": cfg, "looks": autopilot_local.looks_saved()}
+
+
+@app.get("/api/local-autopilot")
+async def local_autopilot_get():
+    _local_only()
+    return _autopilot_view()
+
+
+@app.put("/api/local-autopilot")
+async def local_autopilot_put(request: Request):
+    _local_only()
+    import autopilot_local
+    autopilot_local.save(await request.json())
+    return _autopilot_view()
+
+
+@app.post("/api/local-autopilot/run")
+async def local_autopilot_run():
+    """Make today's Shorts now (button), whatever the clock says."""
+    _local_only()
+    import autopilot_local
+    run = await autopilot_local.run_now(_autopilot_submit, reason="manual")
+    return {"run": run, **_autopilot_view()}
+
+
 async def _probe_youtube_quality(url: str) -> dict:
     """Run quality_probe.py in a worker thread; {} on any failure (fail-open)."""
     def _run():
@@ -2994,8 +3258,10 @@ async def process_endpoint(
 
     # Handle JSON body manually for URL payload
     content_type = request.headers.get("content-type", "")
+    body_json = None
     if "application/json" in content_type:
         body = await request.json()
+        body_json = body
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
         force_low = bool(body.get("force_low_quality"))
@@ -3459,6 +3725,15 @@ async def process_endpoint(
                            source_cap_minutes=source_cap, skip_statics=skip_statics)
 
     _enqueue_job(job_id, priority)
+
+    # Self-host: the look of a job made by hand is what Autopilot copies
+    # (autopilot_local.py); Autopilot's own jobs carry the header.
+    if not BILLING_ENABLED and body_json and not request.headers.get("x-shortkaar-autopilot"):
+        try:
+            import autopilot_local
+            autopilot_local.remember_look(body_json)
+        except Exception as e:  # noqa: BLE001 — never fails a job
+            print(f"⚠️ Could not save the job's look for Autopilot: {e}")
 
     return {"job_id": job_id, "status": "queued", "partial": partial,
             "first_video": bool(getattr(request.state, "first_video", False))}

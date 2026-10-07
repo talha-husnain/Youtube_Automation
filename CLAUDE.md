@@ -216,6 +216,35 @@ never finished:
     date; it once answered NOT FOUND for a 2025 match "because it is 2026"),
     animated scenes, no footage, no player images or logos.
   - Fonts here lack "·" and dashes on screen (rendered as boxes).
+  - Songs is hidden in the dashboard (owner, 8-oct-2026); the server flow stays.
+- **Channel tools** (self-host only, branch feature/channel-autopilot, 8-oct-2026):
+  - **Never repeat a moment** (`used_moments.py`, `SKIP_USED=0` off):
+    `output/.used_moments.json` by YouTube id, not in job dirs (24 h
+    retention, and they never stored the link). `get_viral_clips(used=)`
+    drops windows half made of old Shorts and clips 30% made of one; nothing
+    left raises `AllUsedError` before any AI call or download. The function
+    body has its own local `used` (window ids), so the parameter is aliased
+    `old_shorts`: shadowing it failed every clip-floor retry. Compilation and
+    movie dub record too; cricket ideas as `topic:<text>`.
+  - **Find videos** (`channel_tools.py`): Creative Commons search through
+    yt-dlp with YouTube's own `sp` filter (no key, 2-3 s); licence from
+    yt-dlp's `license` field (~10 s, cached a day). The label is only the
+    uploader's claim: many CC results are re-uploads of stage dramas.
+  - **Autopilot** (`autopilot_local.py`, `/api/local-autopilot`): daily at
+    `run_at`, caught up the same day if the laptop was off; jobs go through
+    /api/process in-process with `X-Shortkaar-Autopilot` so they do not
+    replace `.last_settings.json` (the look of the last hand-made job per
+    type, which Autopilot copies). Tests must never write these output/
+    files: conftest redirects them (a run saved an empty look over the real one).
+  - **YouTube account** (`youtube_account.py`): the user's own Google Cloud
+    OAuth client (Web app, redirect `http://127.0.0.1:8000/api/youtube/callback`,
+    `YT_CLIENT_ID`/`YT_CLIENT_SECRET` in .env), token in
+    `output/.youtube_token.json`. videos.insert from an unaudited project is
+    locked private (videos/insert docs); analytics needs no audit.
+  - **What works** (`what_works.py`, `/api/report*`): comparisons counted in
+    code, Gemini only words them; its title rules reach `seo_copy` while the
+    report's `use` is true. Public view counts from the /shorts tab when the
+    channel is not connected.
 - Before starting uvicorn, check :8000: a server from an earlier session may
   still answer with old app.py code (job subprocesses load new code anyway).
 - UI checks on this laptop: headless Edge `--screenshot` with
