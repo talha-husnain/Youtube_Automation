@@ -2,6 +2,7 @@
 the local Autopilot (used_moments / channel_tools / youtube_account /
 what_works / autopilot_local). Every file they write goes to tmp_path."""
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -295,3 +296,96 @@ def test_upload_sends_a_scheduled_private_video_and_records_it(tmp_path, monkeyp
     # Asked public, came back private: the unaudited-project lock.
     row = ya.upload(str(clip), "T", "D", [], "comedy", privacy="public")
     assert row["locked_private"] is True
+
+
+# ------------------------------------------------------------- ready to post
+
+import comment_replies as cr  # noqa: E402
+import post_queue as pq  # noqa: E402
+
+
+def _clips(now):
+    return [{"job_id": "j1", "index": 0, "title": "Police checking mein maal? 😂 #shorts", "created": now - 50},
+            {"job_id": "j1", "index": 1, "title": "Buzurg ki gaali #shorts #funny", "created": now - 50},
+            {"job_id": "j2", "index": 0, "title": "Goa mein police checking", "created": now - 10}]
+
+
+def test_ready_shorts_get_the_next_times_oldest_first():
+    import time as _t
+    now = _t.time()
+    pq.update("j1:1", status="posted")
+    slots = [datetime(2026, 10, 8, 13, tzinfo=timezone.utc), datetime(2026, 10, 8, 19, tzinfo=timezone.utc)]
+    got = {x["id"]: x for x in pq.plan(_clips(now), ["13:00"], lambda times, n: slots[:n])}
+    assert got["j1:0"]["slot"].startswith("2026-10-08T13") and got["j2:0"]["slot"].startswith("2026-10-08T19")
+    assert got["j1:1"]["status"] == "posted" and "slot" not in got["j1:1"] and got["j1:1"]["posted_at"]
+    with pytest.raises(ValueError):
+        pq.update("j1:0", status="deleted")
+
+
+def test_waiting_shorts_keep_their_job_for_a_week():
+    assert pq.keeps("j1", 2, 3 * 86400)               # nothing marked yet: both wait
+    pq.update("j1:0", status="posted")
+    pq.update("j1:1", status="skipped")
+    assert not pq.keeps("j1", 2, 3 * 86400)           # all done: the sweep may go
+    assert not pq.keeps("j9", 1, 8 * 86400)           # past a week: goes anyway
+
+
+def test_posted_titles_find_their_views():
+    import time as _t
+    posted = [{**c, "id": pq.item_id(c["job_id"], c["index"])} for c in _clips(_t.time())[:2]]
+    shorts = [{"id": "AAA", "title": "Police checking mein MAAL? 😂 #shorts #comedy", "views": 66},
+              {"id": "BBB", "title": "something else", "views": 3}]
+    assert pq.match_views(posted, shorts) == 1
+    assert pq._load()["j1:0"] == {"views": 66, "youtube_id": "AAA"}
+
+
+def test_the_plan_starts_empty_and_stays_put():
+    first = pq.since()
+    assert pq.since() == first
+
+
+def test_pinned_comment_is_roman_urdu_or_refused():
+    class M:
+        def __init__(self, text):
+            self.text = text
+
+        def generate_content(self, **kw):
+            assert "Never name the comedian" in kw["contents"]
+            return type("R", (), {"text": self.text})()
+    clip = {"job_id": "j1", "index": 0, "title": "t", "hook": "h", "words": "w"}
+    got = pq.pinned_comment(type("C", (), {"models": M('"Team biryani ya team pulao? 😅"')})(), "m", clip, "@x")
+    assert got == "Team biryani ya team pulao? 😅" and pq._load()["j1:0"]["pinned_comment"] == got
+    with pytest.raises(RuntimeError):
+        pq.pinned_comment(type("C", (), {"models": M("यह क्या है")})(), "m", clip, "@x")
+
+
+# ------------------------------------------------------------- comments
+
+def test_only_unanswered_viewer_comments_are_offered():
+    comments = [
+        {"id": "a", "parent": "root", "text": "kya baat", "author_is_uploader": False},
+        {"id": "b", "parent": "root", "text": "answered one", "author_is_uploader": False},
+        {"id": "b.r", "parent": "b", "text": "shukriya", "author_is_uploader": True},
+        {"id": "c", "parent": "root", "text": "our own pinned", "author_is_uploader": True},
+        {"id": "d", "parent": "root", "text": "   ", "author_is_uploader": False},
+    ]
+    assert [c["id"] for c in cr.unanswered(comments)] == ["a"]
+
+
+def test_drafts_are_stored_and_hidden_comments_stay_gone(monkeypatch):
+    import channel_tools
+    monkeypatch.setattr(channel_tools, "channel_shorts", lambda h, n: [{"id": "V1", "title": "Short"}])
+    monkeypatch.setattr(cr, "_video_comments", lambda v: [
+        {"id": "a", "parent": "root", "text": "kya baat", "author": "@x", "timestamp": 2, "video_id": "V1", "video_title": "Short"},
+        {"id": "s", "parent": "root", "text": "buy followers http://x", "author": "@y", "timestamp": 1, "video_id": "V1", "video_title": "Short"}])
+
+    class M:
+        def generate_content(self, **kw):
+            return type("R", (), {"text": json.dumps({"replies": [
+                {"id": "a", "reply": "Shukriya bhai! Agla kaun sa dekhoge?", "skip": False},
+                {"id": "s", "reply": "", "skip": True}]})})()
+    rows = cr.draft(type("C", (), {"models": M()})(), "m", cr.fetch("@x")["comments"], "@x")
+    assert rows[0]["draft"].startswith("Shukriya") and rows[1]["skip"] is True
+    assert cr.fetch("@x")["comments"][0]["draft"].startswith("Shukriya")   # kept, no second AI call needed
+    cr.mark("a", status="hidden")
+    assert [c["id"] for c in cr.fetch("@x")["comments"]] == ["s"]

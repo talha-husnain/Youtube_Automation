@@ -35,6 +35,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
+    # Replying to comments (comment_replies.py) needs the full-access scope.
+    "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -277,6 +279,16 @@ def next_slots(times, count=1, tz=None, after=None):
                     break
         d += 1
     return out
+
+
+def reply(comment_id, text):
+    """Answer one comment as the channel (comments.insert)."""
+    r = httpx.post(f"{API}/comments", params={"part": "snippet"},
+                   headers={"Authorization": f"Bearer {_token()}"},
+                   json={"snippet": {"parentId": comment_id, "textOriginal": text}}, timeout=30)
+    if r.status_code != 200:
+        raise RuntimeError(_google_error(r))
+    return r.json().get("id")
 
 
 # ------------------------------------------------------------------ analytics

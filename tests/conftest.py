@@ -29,3 +29,7 @@ def _private_channel_files(tmp_path, monkeypatch):
     monkeypatch.setattr(what_works, "REPORT_FILE", str(tmp_path / "what_works.json"))
     monkeypatch.setattr(youtube_account, "TOKEN_FILE", str(tmp_path / "youtube_token.json"))
     monkeypatch.setattr(youtube_account, "UPLOADS_FILE", str(tmp_path / "uploads.json"))
+    import comment_replies
+    import post_queue
+    monkeypatch.setattr(post_queue, "STATE_FILE", str(tmp_path / "post_queue.json"))
+    monkeypatch.setattr(comment_replies, "STATE_FILE", str(tmp_path / "comments.json"))

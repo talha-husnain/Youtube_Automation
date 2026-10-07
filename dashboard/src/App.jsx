@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3 } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
@@ -29,6 +29,9 @@ import LocalLibrary from './components/LocalLibrary';
 import FinderTab from './components/FinderTab';
 import AutopilotLocal from './components/AutopilotLocal';
 import ChannelTab from './components/ChannelTab';
+import PostPlan from './components/PostPlan';
+import CommentsTab from './components/CommentsTab';
+import ReadyBanner from './components/ReadyBanner';
 import { Logo, Wordmark, ThemePicker } from './components/Brand';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
@@ -943,7 +946,7 @@ function App() {
   const [channelNotice, setChannelNotice] = useState(null);
   useEffect(() => {
     const DEEP_LINK_TABS = ['autopilot', 'history', 'gallery', 'settings', 'thumbnails', 'dashboard',
-      'finder', 'local-autopilot', 'channel'];
+      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments'];
     const apply = () => {
       const hash = window.location.hash || '';
       if (!hash.startsWith('#app?')) return;
@@ -1255,11 +1258,13 @@ function App() {
     { id: 'thumbnails', ord: '04', icon: Image, label: 'Thumbnail Studio', short: 'thumbs', primary: true },
     // Local-only tools (self-host): finder, daily autopilot, own channel.
     ...(billingEnabled ? [] : [
-      { id: 'finder', ord: '05', icon: Search, label: 'Find videos', short: 'find' },
-      { id: 'local-autopilot', ord: '06', icon: Rocket, label: 'Autopilot', short: 'autopilot' },
-      { id: 'channel', ord: '07', icon: BarChart3, label: 'My channel', short: 'channel' },
+      { id: 'post-plan', ord: '05', icon: Send, label: 'Ready to post', short: 'post' },
+      { id: 'finder', ord: '06', icon: Search, label: 'Find videos', short: 'find' },
+      { id: 'local-autopilot', ord: '07', icon: Rocket, label: 'Autopilot', short: 'autopilot' },
+      { id: 'comments', ord: '08', icon: MessageCircle, label: 'Comments', short: 'comments' },
+      { id: 'channel', ord: '09', icon: BarChart3, label: 'My channel', short: 'channel' },
     ]),
-    { id: 'settings', ord: billingEnabled ? '05' : '08', icon: Settings, label: 'Settings', short: 'settings' },
+    { id: 'settings', ord: billingEnabled ? '05' : '10', icon: Settings, label: 'Settings', short: 'settings' },
   ];
   const activeNav = navItems.find((n) => n.id === activeTab);
 
@@ -1993,6 +1998,16 @@ function App() {
               setActiveTab('dashboard');
             }} />
           )}
+          {activeTab === 'post-plan' && !billingEnabled && (
+            <PostPlan
+              onMakeShorts={(link) => {
+                try { localStorage.setItem('os_pending_url', link); localStorage.setItem('os_genre', 'comedy'); } catch { /* ignore */ }
+                setActiveTab('dashboard');
+              }}
+              onOpenAutopilot={() => setActiveTab('local-autopilot')}
+            />
+          )}
+          {activeTab === 'comments' && !billingEnabled && <CommentsTab />}
           {activeTab === 'local-autopilot' && !billingEnabled && (
             <AutopilotLocal onOpenChannelTab={() => setActiveTab('channel')} />
           )}
@@ -2030,6 +2045,7 @@ function App() {
                   </p>
                 </div>
 
+                {!billingEnabled && <ReadyBanner onOpen={() => setActiveTab('post-plan')} />}
                 <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
 
                 <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-xs sm:text-sm">

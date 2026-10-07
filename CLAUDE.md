@@ -245,6 +245,21 @@ never finished:
     code, Gemini only words them; its title rules reach `seo_copy` while the
     report's `use` is true. Public view counts from the /shorts tab when the
     channel is not connected.
+  - **Ready to post** (`post_queue.py`, `/api/queue*`): finished Shorts made
+    since the plan started (`_since`, so old test jobs never show) get the
+    next posting times; pinned comment on demand; posted ones get views by
+    title from the /shorts tab and a "part 2" link to their source
+    (`.source.json` in the job dir, written by /api/process). A job with a
+    Short still waiting skips the retention sweep for up to 7 days.
+  - **Comments** (`comment_replies.py`, `/api/comments`): yt-dlp
+    `getcomments` needs the full extraction (`process=False` returns none),
+    ~15 s per Short. Replies are drafted in one Gemini call; sending needs
+    the `youtube.force-ssl` scope.
+  - `autostart.bat` starts only the server, minimised, with
+    `PYTHONIOENCODING=utf-8` (its log is a file: emoji prints would fail on
+    the Windows code page).
+- Thumbnail Studio takes the video's YouTube captions when it has them (no
+  Whisper), like the clip pipeline.
 - Before starting uvicorn, check :8000: a server from an earlier session may
   still answer with old app.py code (job subprocesses load new code anyway).
 - UI checks on this laptop: headless Edge `--screenshot` with
