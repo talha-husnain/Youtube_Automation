@@ -165,6 +165,8 @@ def run(urls, output_dir, pipeline):
     import caption_script
     import framed_layout
     import seo_copy
+    import ai_take
+    from ffmpeg_utils import mark_ai_generated
 
     urls = list(dict.fromkeys(u.strip() for u in urls if u and u.strip()))[:MAX_URLS]
     budget = budget_seconds()
@@ -278,6 +280,13 @@ def run(urls, output_dir, pipeline):
                             f"from {len(used_videos)} different videos, joined back to back. "
                             "Write the copy for the whole compilation, not one moment."),
                    text_limit=4000)
+    clip_name = f"{stem}_clip_1.mp4"
+    look = framed_layout.settings()
+    # The channel's take (ai_take.py): skipped by itself when the compilation
+    # is too long to fit it under Shorts' 3 minutes.
+    takes = ai_take.apply([clip], transcript, output_dir, [clip_name],
+                          outro_seconds=look["outro_seconds"] if look["outro"] else 0.0,
+                          source_title=" | ".join(titles[v] for v in used_videos))
 
     cost = {"input_tokens": sum(c.get("input_tokens", 0) for c in costs),
             "output_tokens": sum(c.get("output_tokens", 0) for c in costs),
@@ -287,12 +296,11 @@ def run(urls, output_dir, pipeline):
     metadata_file = os.path.join(output_dir, f"{stem}_metadata.json")
     with open(metadata_file, "w") as f:
         json.dump(clips_data, f, indent=2)
-    clip_name = f"{stem}_clip_1.mp4"
-    cfg = framed_layout.settings()
+    cfg = look
     framed_layout.write_job(
         output_dir, cfg,
         framed_layout.caption_margin_units(framed_layout.geometry(1920, 1080, cfg["crop"], cfg["zoom"])),
-        {clip_name: clip["video_title_for_youtube_short"]})
+        {clip_name: clip["video_title_for_youtube_short"]}, takes)
     print(f"   Saved metadata to {metadata_file}")
 
     final = os.path.join(output_dir, clip_name)
@@ -301,6 +309,8 @@ def run(urls, output_dir, pipeline):
         raise RuntimeError("Rendering the compilation failed.")
     captioned = pipeline.auto_caption_clip(final, transcript, 0.0, total)
     served = captioned or final
+    if (takes.get(clip_name) or {}).get("audio"):
+        mark_ai_generated(served, "AI voice take after the clip")
     print(f"   ✅ Clip 1 ready: {final}")
     print(f"CLIP_READY 0 {os.path.basename(served)}")
 

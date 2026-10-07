@@ -1084,6 +1084,8 @@ function App() {
           frame_handle: data.frameHandle || null,
         } : {}),
         caption_script: data.captionScript || null,
+        genre: data.genre || null,
+        ai_take: data.aiTake === false ? false : null,
       };
 
       if (data.type === 'url') {

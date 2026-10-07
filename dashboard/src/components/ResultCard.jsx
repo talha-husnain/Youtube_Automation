@@ -872,8 +872,14 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                             )}
                         </div>
                     )}
+                    {/* The channel's spoken take at the end of the clip (ai_take.py). */}
+                    {clip.ai_take && (
+                        <p className="text-xs text-ink2 leading-snug mb-2 break-words">
+                            <span className="eyebrow mr-1">ai take</span>{clip.ai_take}
+                        </p>
+                    )}
                     <div className="flex flex-wrap gap-1.5">
-                        {durationReadout && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{durationReadout}</span>}
+                        {durationReadout &&<span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{durationReadout}</span>}
                         {resolution && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{resolution}</span>}
                         {((clip.hashtags && clip.hashtags.length) ? clip.hashtags.slice(0, 3) : ['#shorts', '#viral']).map((h) => (
                             <span key={h} className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{h}</span>

@@ -274,7 +274,10 @@ def apply(clips, transcript, source_title="", context="", text_limit=1200):
     if not key:
         print("   ℹ️ SEO copy skipped (no Gemini key).")
         return 0
-    script = (os.environ.get("CAPTION_SCRIPT") or "roman").lower()
+    # Always Roman Urdu, whatever the subtitles are in (owner's rule,
+    # 8-oct-2026: a Devanagari title came out of an "as spoken" job).
+    # SEO_SCRIPT=english|original overrides it.
+    script = (os.environ.get("SEO_SCRIPT") or "roman").lower()
     style = LANGUAGE_STYLE.get(script, LANGUAGE_STYLE["roman"])
     latin = script != "original"
     handle = (os.environ.get("FRAME_HANDLE") or "").strip() or "this channel"

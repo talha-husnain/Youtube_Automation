@@ -44,7 +44,7 @@ from clip_selection import (build_transcript_windows, clip_count_targets,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, cut_clip, QUALITY,
-                          QUALITY_FAST, METADATA_SCRUB)
+                          QUALITY_FAST, METADATA_SCRUB, mark_ai_generated)
 from dotenv import load_dotenv
 import json
 
@@ -2576,6 +2576,17 @@ if __name__ == '__main__':
             import seo_copy
             seo_copy.apply(clips_data['shorts'], transcript,
                            source_title=video_title.replace("_", " "))
+            # The channel's spoken take after each clip (ai_take.py), framed only.
+            takes = {}
+            if output_format == "framed" and transcript is not None:
+                import ai_take
+                import framed_layout
+                _look = framed_layout.settings()
+                takes = ai_take.apply(
+                    clips_data['shorts'], transcript, output_dir,
+                    [f"{video_title}_clip_{i+1}.mp4" for i in range(len(clips_data['shorts']))],
+                    outro_seconds=_look["outro_seconds"] if _look["outro"] else 0.0,
+                    source_title=video_title.replace("_", " "))
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).
@@ -2599,7 +2610,8 @@ if __name__ == '__main__':
                     framed_layout.caption_margin_units(framed_layout.geometry(
                         *get_video_resolution(input_video), _cfg["crop"], _cfg["zoom"])),
                     {f"{video_title}_clip_{i+1}.mp4": c.get('video_title_for_youtube_short') or ""
-                     for i, c in enumerate(clips_data['shorts'])})
+                     for i, c in enumerate(clips_data['shorts'])},
+                    takes)
             print(f"   Saved metadata to {metadata_file}")
 
             # 5. Process clips in parallel: each worker cuts + renders one
@@ -2669,6 +2681,9 @@ if __name__ == '__main__':
                                 deliver_path, transcript, start, end,
                                 split_ranges=split_ranges)
                         served = captioned or deliver_path
+                        if (takes.get(clip_filename) or {}).get("audio"):
+                            # A machine voice is in it now (ffmpeg_utils.AI_DISCLOSURE).
+                            mark_ai_generated(served, "AI voice take after the clip")
                         if os.environ.get("WATERMARK") == "1":
                             served = mark_delivery(served)
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")

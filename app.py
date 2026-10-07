@@ -960,6 +960,9 @@ def _recover_jobs_from_disk():
 # instead of vanish. Bounded by MAX_RESUME_ATTEMPTS so a video that reliably
 # crashes the worker can't crashloop the service.
 _RESUME_FILE = ".resume.json"
+# Video types the pipeline is tuned for (CONTENT_GENRE). Cricket, movies and
+# songs come after the rights research: they are not accepted yet.
+CONTENT_GENRES = ("comedy",)
 MAX_RESUME_ATTEMPTS = 2
 
 # --- Deploy handover (two instances, one disk) -------------------------------
@@ -2949,6 +2952,8 @@ async def process_endpoint(
     frame_outro_seconds: Optional[str] = Form(None),
     urls: Optional[str] = Form(None),
     compile_seconds: Optional[str] = Form(None),
+    genre: Optional[str] = Form(None),
+    ai_take: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2994,6 +2999,8 @@ async def process_endpoint(
         frame_outro_seconds = body.get("frame_outro_seconds")
         urls = body.get("urls")
         compile_seconds = body.get("compile_seconds")
+        genre = body.get("genre")
+        ai_take = body.get("ai_take")
 
     # Two or more links: one short made of their best moments (compilation.py),
     # always in the framed style. One link stays a normal job.
@@ -3177,6 +3184,15 @@ async def process_endpoint(
     # Hinglish), english or original.
     if caption_script in ("roman", "english", "original"):
         env["CAPTION_SCRIPT"] = caption_script
+
+    # What kind of video this is, so the AI picks and writes for it. Comedy
+    # is the only one built so far; the dashboard shows the others as "soon".
+    if genre is not None and str(genre).strip().lower() not in CONTENT_GENRES:
+        raise HTTPException(status_code=400, detail=f"Unknown video type: {genre}")
+    env["CONTENT_GENRE"] = str(genre or "comedy").strip().lower()
+    # The channel's spoken take after each clip (ai_take.py): on unless off.
+    if ai_take is not None and str(ai_take).lower() in ("0", "false", "no"):
+        env["AI_TAKE"] = "0"
 
     # FRAMED look (framed_layout.py): bad values fall back to its defaults
     # there, so only shape-check here.

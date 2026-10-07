@@ -188,6 +188,21 @@ never finished:
 - **Clip length range** (dashboard "clip length", `clip_min/max_seconds`):
   with a max set, `main.clip_length_cap` lets clips reach it (177 s ceiling,
   Shorts' 3 min minus the end card); without one the 119 s cap stays.
+- **AI take** (`ai_take.py`, `AI_TAKE=0` off, dashboard checkbox, branch
+  feature/content-types): after SEO copy, one Gemini call writes a 10-16
+  word Roman Urdu reaction + comment question per clip, a Gemini voice reads
+  it (`gemini-2.5-flash-preview-tts`, then `3.1-flash-tts-preview`; the 3.8
+  TTS models read the instruction aloud or garbled it, checked by Whisper on
+  8-oct-2026), and `framed_layout` holds the last frame for it between the
+  clip and the end card, words lit in gold by length (the voice has no word
+  times). Stored in `frame.json` `takes` so editor re-renders keep it. A clip
+  that would pass 179.5 s with it gets none. Voiced files get the AI tag.
+- **Titles and descriptions are always Roman Urdu** (`SEO_SCRIPT`, default
+  roman), whatever the subtitle language.
+- **Video type** (`genre` on /api/process -> `CONTENT_GENRE`): only `comedy`
+  is accepted (`app.CONTENT_GENRES`); cricket / movies / songs show as "soon".
+- Before starting uvicorn, check :8000: a server from an earlier session may
+  still answer with old app.py code (job subprocesses load new code anyway).
 - UI checks on this laptop: headless Edge `--screenshot` with
   `--virtual-time-budget` hangs on pages with `<video>` (History, Gallery)
   and without it captures before React loads. Drive Edge over CDP instead

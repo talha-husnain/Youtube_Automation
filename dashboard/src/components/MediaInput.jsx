@@ -7,6 +7,14 @@ const SUPPORTED_PLATFORMS = [
     'Facebook', 'Instagram', 'Dailymotion', 'Reddit', 'Streamable',
 ];
 
+// Video types. Only comedy is built; the rest wait on the rights research.
+const GENRES = [
+    { id: 'comedy', label: 'Comedy', ready: true, hint: 'stand-up and funny clips' },
+    { id: 'cricket', label: 'Cricket', ready: false },
+    { id: 'movies', label: 'Movies', ready: false },
+    { id: 'songs', label: 'Songs', ready: false },
+];
+
 // Clip length presets (seconds, as strings like the inputs). Auto = blank:
 // the server's default 15-60 s band.
 const LENGTH_PRESETS = [
@@ -52,6 +60,11 @@ export default function MediaInput({ onProcess, isProcessing }) {
     });
     const [frameTitle, setFrameTitle] = useState(() => {
         try { return localStorage.getItem('os_frame_title') !== '0'; } catch { return true; }
+    });
+    // Video type (only comedy is built) and the channel's AI take after each clip.
+    const [genre, setGenre] = useState('comedy');
+    const [aiTake, setAiTake] = useState(() => {
+        try { return localStorage.getItem('os_ai_take') !== '0'; } catch { return true; }
     });
     const [showInfo, setShowInfo] = useState(false);
     // Advanced generation controls — empty string means "let the AI decide",
@@ -141,9 +154,12 @@ export default function MediaInput({ onProcess, isProcessing }) {
             frameOutro,
             frameOutroSeconds,
             captionScript,
+            genre,
+            aiTake,
         };
         try {
             localStorage.setItem('os_caption_script', captionScript);
+            localStorage.setItem('os_ai_take', aiTake ? '1' : '0');
             localStorage.setItem('os_clip_min', clipMinSeconds);
             localStorage.setItem('os_clip_max', clipMaxSeconds);
             localStorage.setItem('os_output_format', outputFormat);
@@ -381,8 +397,25 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     )}
                 </div>
 
-                {/* How many shorts: visible, since it is the main choice after the link. */}
+                {/* Video type: the AI picks moments and writes copy for it. */}
                 <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <span className="eyebrow mr-1">video type</span>
+                    {GENRES.map((g) => (
+                        <button
+                            key={g.id}
+                            type="button"
+                            disabled={!g.ready}
+                            onClick={() => setGenre(g.id)}
+                            title={g.ready ? g.hint : 'coming soon'}
+                            className={`px-3 py-1.5 rounded-input border text-xs ${genre === g.id ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted'} ${g.ready ? 'hover:border-[color:var(--color-accent)]' : 'opacity-50 cursor-not-allowed'}`}
+                        >
+                            {g.label}{!g.ready && <span className="ml-1 text-[10px]">soon</span>}
+                        </button>
+                    ))}
+                </div>
+
+                {/* How many shorts: visible, since it is the main choice after the link. */}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className="eyebrow mr-1">number of shorts</span>
                     {['', '3', '5', '8', '10'].map((n) => (
                         <button
@@ -456,8 +489,14 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         <option value="english">English</option>
                         <option value="original">As spoken (original script)</option>
                     </select>
-                    <span className="text-[11px] text-muted">titles use the same language</span>
+                    <span className="text-[11px] text-muted">titles and descriptions are always Roman Urdu</span>
                 </div>
+
+                <label className="mt-3 flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                    <input type="checkbox" checked={aiTake} onChange={(e) => setAiTake(e.target.checked)}
+                        className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer" />
+                    AI take after each clip: a short voiced reaction + a question for the comments
+                </label>
 
                 {/* Advanced generation controls — collapsed by default; blank = AI decides */}
                 <div className="mt-4">

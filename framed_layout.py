@@ -24,7 +24,8 @@ import re
 import subprocess
 import uuid
 
-from ffmpeg_utils import video_encode_args, escape_filter_value, QUALITY, METADATA_SCRUB
+from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY, METADATA_SCRUB,
+                          LOUDNORM_FILTER)
 
 OUT_W, OUT_H = 1080, 1920
 # Top of the video, as a fraction of the height. 20% leaves ~380 px for a
@@ -41,6 +42,14 @@ DEFAULT_BG = "#14142B"
 # frame avoids a cut to a blank screen. FRAME_OUTRO_SECONDS picks 1-3 s.
 OUTRO_SECONDS = 3.0
 GOLD = "#FFD23F"
+# The channel's take (ai_take.py) sits between the clip and the end card on
+# the same held frame: the voice starts after the text pops in and the words
+# light up in gold as they are said. TAKE_LEAD + TAKE_TAIL must match
+# ai_take.TAKE_PAD_SECONDS, which keeps the whole short under 3 minutes.
+TAKE_LEAD = 0.35
+TAKE_TAIL = 0.6
+TEXT_ONLY_SECONDS = 3.5
+TAKE_LABEL = "HAMARA TAKE"
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 
 
@@ -59,10 +68,22 @@ def load_job(job_dir):
         return None
 
 
-def write_job(job_dir, cfg, caption_margin, titles):
+def write_job(job_dir, cfg, caption_margin, titles, takes=None):
+    data = {**cfg, "caption_margin": caption_margin, "titles": titles}
+    if takes:
+        # ai_take.py: {clip file: {text, audio, voice_seconds}}. Kept here so an
+        # editor re-render (a trim) still ends with the channel's take.
+        data["takes"] = takes
     with open(os.path.join(job_dir, JOB_FILE), "w", encoding="utf-8") as f:
-        json.dump({**cfg, "caption_margin": caption_margin, "titles": titles}, f,
-                  ensure_ascii=False, indent=1)
+        json.dump(data, f, ensure_ascii=False, indent=1)
+
+
+def _by_clip_name(mapping, name):
+    """An editor re-render names its output "<prefix>_<clip file>"."""
+    for clip_name, value in (mapping or {}).items():
+        if name == clip_name or name.endswith("_" + clip_name):
+            return value
+    return None
 
 
 def job_caption_margin(job_dir):
@@ -248,6 +269,60 @@ def end_card_events(t0, secs, handle, bg):
     return ev
 
 
+TAKE_STYLES = [
+    # \kf fills each word from SecondaryColour (white) to PrimaryColour (gold).
+    "Style: TakeText,Montserrat ExtraBold,{size},{gold},&H00FFFFFF,&H00000000,&H96000000,"
+    "1,0,0,0,100,100,0,0,1,6,3,5,80,80,0,1",
+    "Style: TakeLabel,Montserrat ExtraBold,46,{ink},{ink},&H00000000,&H00000000,"
+    "1,0,0,0,100,100,2,0,1,0,0,5,40,40,0,1",
+]
+
+
+def _take_for(job_dir, job, name):
+    """(take, voice path) for this clip from the job file, or (None, None)."""
+    rec = _by_clip_name(job.get("takes"), name)
+    text = clean_title((rec or {}).get("text") or "")
+    if not text:
+        return None, None
+    voice = os.path.join(job_dir, rec["audio"]) if rec.get("audio") else None
+    if voice and not os.path.exists(voice):
+        voice = None
+    voice_s = float(rec.get("voice_seconds") or 0) if voice else 0.0
+    seconds = round(voice_s + TAKE_LEAD + TAKE_TAIL, 2) if voice_s else TEXT_ONLY_SECONDS
+    return {"text": text, "seconds": seconds, "voice_seconds": voice_s}, voice
+
+
+def take_size(text):
+    return 76 if len(text) <= 60 else 66 if len(text) <= 100 else 58
+
+
+def take_events(t0, take):
+    """Dialogue lines of the take: a gold "HAMARA TAKE" label drops in, then
+    the line pops in and lights up word by word in time with the voice
+    (spread by word length: the voice model gives no word timings)."""
+    t1 = t0 + take["seconds"]
+    cx = OUT_W // 2
+    gold = _ass_colour(GOLD)
+    words = take["text"].split()
+    voice_s = take.get("voice_seconds") or 0.0
+    if voice_s:
+        weights = [len(w) + 2 for w in words]
+        cs = [max(1, round(voice_s * 100 * wt / sum(weights))) for wt in weights]
+        body = (rf"{{\k{round(TAKE_LEAD * 100)}}}"
+                + " ".join(rf"{{\kf{c}}}{w}" for w, c in zip(words, cs)))
+    else:
+        body = " ".join(words)
+    w, h = max(420, 30 * len(TAKE_LABEL) + 120), 96
+    drop = rf"\move({cx},520,{cx},600,0,250)\fad(120,0)"
+    return [
+        f"Dialogue: 3,{_ts(t0)},{_ts(t1)},Shape,,0,0,0,,"
+        rf"{{\an5{drop}\1c{gold}\bord0\shad0\p1}}{_round_rect(w, h, h // 2)}{{\p0}}",
+        f"Dialogue: 4,{_ts(t0)},{_ts(t1)},TakeLabel,,0,0,0,,{{\\an5{drop}}}{TAKE_LABEL}",
+        f"Dialogue: 5,{_ts(t0)},{_ts(t1)},TakeText,,0,0,0,,"
+        rf"{{\pos({cx},960)\fad(150,0)\fscx85\fscy85\t(0,220,\fscx100\fscy100)}}{body}",
+    ]
+
+
 def end_card_audio(secs):
     """aevalsrc expression: a rising swoosh into a soft two-tone ding.
 
@@ -260,7 +335,7 @@ def end_card_audio(secs):
 
 
 def overlay_ass(path, geo, bg, duration, title="", handle="", outro=False,
-                outro_seconds=OUTRO_SECONDS):
+                outro_seconds=OUTRO_SECONDS, take=None):
     """The frame's text layer: title, handle tag and end card, all animated.
 
     The title pops in over the first ~0.4 s instead of a separate intro card:
@@ -285,6 +360,9 @@ def overlay_ass(path, geo, bg, duration, title="", handle="", outro=False,
         *(s.format(gold=_ass_colour(GOLD),
                    ink=_ass_colour(bg if _luminance(bg) < 0.4 else "#000000"))
           for s in END_CARD_STYLES),
+        *(s.format(gold=_ass_colour(GOLD), size=take_size(take["text"]),
+                   ink=_ass_colour(bg if _luminance(bg) < 0.4 else "#000000"))
+          for s in (TAKE_STYLES if take else [])),
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
@@ -296,8 +374,12 @@ def overlay_ass(path, geo, bg, duration, title="", handle="", outro=False,
     if handle:
         lines.append(f"Dialogue: 1,{_ts(0)},{_ts(duration)},Handle,,0,0,0,,"
                      f"{{\\pos({OUT_W // 2},44)\\alpha&H40&}}{handle}")
+    take_s = 0.0
+    if take:
+        lines += take_events(duration, take)
+        take_s = take["seconds"]
     if outro:
-        lines += end_card_events(duration, outro_seconds, handle, bg)
+        lines += end_card_events(duration + take_s, outro_seconds, handle, bg)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -316,48 +398,58 @@ def render(input_video, output_video, title=None):
     """Render one cut clip as a FRAMED 9:16 video. Returns the geometry used."""
     job_dir = os.path.dirname(os.path.abspath(output_video))
     cfg = settings(job_dir)
+    job = load_job(job_dir) or {}
     if title is None:
-        # An editor re-render names its output "<prefix>_<clip file>"; the
-        # clip's title was recorded under the clip file name.
-        name = os.path.basename(output_video)
-        for clip_name, clip_title in ((load_job(job_dir) or {}).get("titles") or {}).items():
-            if name == clip_name or name.endswith("_" + clip_name):
-                title = clip_title
-                break
+        # The clip's title was recorded under the clip file name.
+        title = _by_clip_name(job.get("titles"), os.path.basename(output_video))
     src_w, src_h, duration = _probe(input_video)
+    take, voice = _take_for(job_dir, job, os.path.basename(output_video))
     geo = geometry(src_w, src_h, cfg["crop"], cfg["zoom"])
     vf = (f"crop={geo['crop_w']}:{geo['crop_h']}:{geo['crop_x']}:{geo['crop_y']},scale={geo['w']}:{geo['h']}:flags=lanczos,"
           f"pad={OUT_W}:{OUT_H}:{geo['x']}:{geo['y']}:color=0x{cfg['bg'].lstrip('#')},setsar=1")
     ass_path = None
     title = clean_title(title) if cfg["title"] else ""
     secs = cfg["outro_seconds"]
-    if cfg["outro"]:
-        # Hold the last frame, blurred and tinted, under the end card.
-        vf += (f",tpad=stop_mode=clone:stop_duration={secs:g}"
+    take_s = take["seconds"] if take else 0.0
+    hold = take_s + (secs if cfg["outro"] else 0.0)
+    if hold:
+        # Hold the last frame, blurred and tinted, under the take and end card.
+        vf += (f",tpad=stop_mode=clone:stop_duration={hold:g}"
                f",gblur=sigma=14:enable='gte(t,{duration:.3f})'"
                f",drawbox=x=0:y=0:w=iw:h=ih:color=0x{cfg['bg'].lstrip('#')}@0.68:t=fill"
                f":enable='gte(t,{duration:.3f})'")
-    if title or cfg["handle"] or cfg["outro"]:
+    if title or cfg["handle"] or cfg["outro"] or take:
         ass_path = os.path.join(os.path.dirname(os.path.abspath(output_video)),
                                 f"frametitle_{uuid.uuid4().hex[:8]}.ass")
         overlay_ass(ass_path, geo, cfg["bg"], duration, title=title,
-                    handle=cfg["handle"], outro=cfg["outro"], outro_seconds=secs)
+                    handle=cfg["handle"], outro=cfg["outro"], outro_seconds=secs, take=take)
         vf += (f",ass=filename='{escape_filter_value(ass_path)}'"
                f":fontsdir='{escape_filter_value(FONTS_DIR)}'")
     graph = f"[0:v]{vf}[v]"
-    if cfg["outro"]:
-        # Silence pads the clip's audio and the end card's sound mixes in on top.
-        delay = int(duration * 1000)
-        graph += (f";[0:a]apad=pad_dur={secs:g}[a0]"
-                  f";{end_card_audio(secs)},aformat=channel_layouts=stereo,"
-                  f"adelay={delay}|{delay}[sfx]"
-                  f";[a0][sfx]amix=inputs=2:duration=first:normalize=0[a]")
+    inputs = ["-i", input_video] + (["-i", voice] if voice else [])
+    if hold:
+        # Silence pads the clip's audio; the take's voice and the end card's
+        # sound mix in on top.
+        graph += f";[0:a]apad=pad_dur={hold:g}[a0]"
+        mix = ["[a0]"]
+        if voice:
+            at = int((duration + TAKE_LEAD) * 1000)
+            graph += (f";[1:a]{LOUDNORM_FILTER},aresample=48000,aformat=channel_layouts=stereo,"
+                      f"adelay={at}|{at}[tk]")
+            mix.append("[tk]")
+        if cfg["outro"]:
+            delay = int((duration + take_s) * 1000)
+            graph += (f";{end_card_audio(secs)},aformat=channel_layouts=stereo,"
+                      f"adelay={delay}|{delay}[sfx]")
+            mix.append("[sfx]")
+        graph += (f";{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0[a]"
+                  if len(mix) > 1 else ";[a0]anull[a]")
         maps = ["-map", "[v]", "-map", "[a]"]
     else:
         maps = ["-map", "[v]", "-map", "0:a?"]
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-i", input_video, "-filter_complex", graph, *maps,
+            ["ffmpeg", "-y", *inputs, "-filter_complex", graph, *maps,
              *video_encode_args(QUALITY), "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "192k", *METADATA_SCRUB,
              "-movflags", "+faststart", output_video],
@@ -367,5 +459,6 @@ def render(input_video, output_video, title=None):
             os.remove(ass_path)
     print(f"🖼️ Framed {geo['w']}x{geo['h']} on {cfg['bg']} ({cfg['crop']}, zoom {cfg['zoom']:g})"
           + (f", title: {title}" if title else "")
+          + (f", take {take_s:.1f}s" + ("" if voice else " (text only)") if take else "")
           + (", end card" if cfg["outro"] else ""))
     return geo
