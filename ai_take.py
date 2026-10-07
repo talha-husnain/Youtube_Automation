@@ -45,8 +45,9 @@ TAKE_PAD_SECONDS = 0.95
 TEXT_ONLY_SECONDS = 3.5
 
 GENRES = {
-    "comedy": ("a stand-up comedy clips", "an opinion or a relatable one-line joke about THIS "
-               "clip's situation (never a summary, never the punchline repeated)"),
+    "comedy": ("a stand-up comedy clips", "a sarcastic roast or a cheeky double-meaning "
+               "one-liner about THIS clip's situation, the way a stand-up does crowd work "
+               "(never a summary, never the punchline repeated)"),
 }
 
 _NON_LATIN = re.compile("[؀-ۿऀ-ॿ]")
@@ -68,13 +69,22 @@ channel's "take".
 For EACH clip below write `take`:
 - Roman Urdu in Latin letters only (never Devanagari or Arabic script), everyday spoken
   words, like a friend reacting. English words people use daily are fine.
-- 10 to 16 words in total, at most 2 short sentences: about 5 seconds when spoken.
-- Sentence 1: {angle}.
-- Sentence 2: a short question that makes viewers answer in the comments
-  ("Aap ke ghar mein bhi aisa hota hai?").
-- NEVER name the comedian, creator, speaker, channel or show. Keep it clean: no swear
-  words and no crude slang ("phat gayi", "g*nd"), even if the clip uses them. No
-  hashtags, no emoji.
+- 12 to 18 words in total, never more than 18: 2 or 3 short sentences, about 6 seconds
+  when spoken. Count the words.
+- First: {angle}.
+- Then: a teasing, sarcastic question with a twist or a double meaning that viewers
+  cannot resist answering, and tell them to answer in the comments ("comment mein
+  batao", "neeche confess karo", "comments mein likho").
+- The tone is naughty, not dirty. Double meaning and innuendo are welcome (YouTube
+  keeps full ads for sexual jokes and innuendo without vulgar words). NEVER use a
+  swear word, crude slang ("phat gayi", "g*nd") or an explicitly sexual word, never
+  describe sex, and never joke about religion, caste, ethnicity or children.
+  Examples of the tone only (other topics, never copy them):
+  "Exam se pehle wali raat sab Einstein hote hain. Aapne raat ko kya kya 'padha' hai?
+  Comment mein confess karo!"
+  "Shaadi ke baad sab 'adjust' karna padta hai, samajh gaye na kya kya. Aapka sabse
+  bada adjustment kya tha? Neeche likho!"
+- NEVER name the comedian, creator, speaker, channel or show. No hashtags, no emoji.
 - Every clip's take must be different: different opening words, different question.
 
 Clips (JSON): {clips}
@@ -116,8 +126,9 @@ def write_takes(client, model, clips, transcript, handle, genre="comedy", source
         text = re.sub(r"\s+", " ", t.take or "").strip()
         if not 0 <= t.index < len(clips) or not text or _NON_LATIN.search(text):
             continue
-        if names and names.search(text):
-            continue
+        if names:
+            # The speaker says his own name in some clips and the model repeats it.
+            text = names.sub("bhai", text)
         out[t.index] = text
     return out
 

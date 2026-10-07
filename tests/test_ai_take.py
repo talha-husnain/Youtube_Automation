@@ -76,6 +76,19 @@ def test_long_clip_gets_no_take_and_short_one_does(monkeypatch, tmp_path):
     assert clips[0]["ai_take"] == "Ek" and "ai_take" not in clips[1]
 
 
+def test_creator_name_in_a_take_becomes_bhai(monkeypatch):
+    class _Models:
+        def generate_content(self, **kw):
+            return type("R", (), {"text": json.dumps({"takes": [
+                {"index": 0, "take": "Naman ki toh hawa tight. Aapki kab hui? Neeche likho!"},
+                {"index": 1, "take": "यह गलत है"}]})})()
+    client = type("C", (), {"models": _Models()})()
+    got = ai_take.write_takes(client, "m", [{"start": 0, "end": 1}, {"start": 0, "end": 1}],
+                              {"segments": []}, "@PunchlineBazaar", "comedy",
+                              "LADKI KA CHAKKAR STAND UP COMEDY BY NAMAN JAIN")
+    assert got == {0: "bhai ki toh hawa tight. Aapki kab hui? Neeche likho!"}  # Devanagari dropped
+
+
 def test_off_switch(monkeypatch, tmp_path):
     monkeypatch.setenv("AI_TAKE", "0")
     assert ai_take.apply([{"start": 0, "end": 10}], {}, str(tmp_path), ["a.mp4"]) == {}
