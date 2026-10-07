@@ -81,6 +81,17 @@ def test_trim_to_speech_drops_the_source_intro_and_end_screen():
     assert (c["start"], c["end"]) == (19.9, 30.0)          # starts on speech: untouched
 
 
+def test_clip_cap_follows_the_chosen_range(monkeypatch):
+    import main
+    long = {"shorts": [{"start": 0.0, "end": 200.0}]}
+    monkeypatch.delenv("CLIP_MAX_SECONDS", raising=False)
+    assert main.cap_clip_lengths(long)["shorts"][0]["end"] == main.MAX_CLIP_SECONDS  # default: under 2 min
+    monkeypatch.setenv("CLIP_MAX_SECONDS", "150")
+    assert main.cap_clip_lengths({"shorts": [{"start": 10.0, "end": 200.0}]})["shorts"][0]["end"] == 160.0
+    monkeypatch.setenv("CLIP_MAX_SECONDS", "400")
+    assert main.clip_length_cap() == main.SHORTS_CEILING_SECONDS  # never past Shorts' 3 min
+
+
 def test_trim_to_speech_leaves_clips_alone_without_words():
     import main
     data = {"shorts": [{"start": 0.0, "end": 30.0}]}

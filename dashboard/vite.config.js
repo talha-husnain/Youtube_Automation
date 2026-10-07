@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import seo from './vite-plugin-seo'
+// Shortkaar is a private tool: the OpenShorts marketing pages, sitemap and
+// landing fallback (vite-plugin-seo.js) are not built. The plugin file stays.
+// import seo from './vite-plugin-seo'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -17,7 +19,7 @@ export default defineConfig({
   root: __dirname,
   plugins: [
     react(),
-    seo(),
+    // seo(),
     {
       name: 'html-fallback',
       configureServer(server) {
@@ -38,9 +40,10 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: 'index.html',
-        'tool-transcript': 'tools/transcript.js',
-        'tool-metadata': 'tools/metadata.js',
-        'tool-vertical': 'tools/vertical.js',
+        // The free-tool entries belonged to the seo() pages above.
+        // 'tool-transcript': 'tools/transcript.js',
+        // 'tool-metadata': 'tools/metadata.js',
+        // 'tool-vertical': 'tools/vertical.js',
       },
     },
   },

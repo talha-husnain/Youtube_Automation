@@ -2111,17 +2111,30 @@ MIN_SPEECH_WORDS_PER_MIN = float(os.environ.get("MIN_SPEECH_WORDS_PER_MIN", "5")
 MIN_SPEECH_WORDS = int(os.environ.get("MIN_SPEECH_WORDS", "8"))
 
 
-# Hard ceiling on a clip's length, whatever the model or the requested band
-# says: the user's channels take nothing of 2 minutes or more (5-oct-2026).
+# Hard ceiling on a clip's length, whatever the model says: under 2 minutes
+# by default (the user's rule, 5-oct-2026). A job where the user picked a
+# length range (CLIP_MAX_SECONDS, dashboard "clip length") may go up to that
+# maximum instead, never past SHORTS_CEILING_SECONDS: Shorts stop at 3 min and
+# the framed end card adds up to 3 s.
 MAX_CLIP_SECONDS = float(os.environ.get("MAX_CLIP_SECONDS", "119"))
+SHORTS_CEILING_SECONDS = 177.0
+
+
+def clip_length_cap():
+    try:
+        asked = float(os.environ.get("CLIP_MAX_SECONDS", ""))
+    except ValueError:
+        return MAX_CLIP_SECONDS
+    return min(max(asked, 10.0), SHORTS_CEILING_SECONDS)
 
 
 def cap_clip_lengths(clips_data):
-    """Trim any clip longer than MAX_CLIP_SECONDS from its end. In place; returns it."""
+    """Trim any clip longer than clip_length_cap() from its end. In place; returns it."""
+    cap = clip_length_cap()
     for c in (clips_data or {}).get("shorts") or []:
         try:
-            if float(c["end"]) - float(c["start"]) > MAX_CLIP_SECONDS:
-                c["end"] = round(float(c["start"]) + MAX_CLIP_SECONDS, 3)
+            if float(c["end"]) - float(c["start"]) > cap:
+                c["end"] = round(float(c["start"]) + cap, 3)
         except (KeyError, TypeError, ValueError):
             continue
     return clips_data

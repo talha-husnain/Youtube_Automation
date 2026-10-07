@@ -103,13 +103,32 @@
   .input-field:focus { border-color: var(--color-accent); }
 
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium lowercase;
-    background: var(--color-accent);
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-semibold lowercase;
+    /* Shortkaar: the theme's gradient pair, with a soft glow. */
+    background: linear-gradient(135deg, var(--color-accent), var(--color-accent-2));
     color: var(--color-accent-ink);
     border-radius: 999px;
-    transition: filter var(--dur-short) var(--ease-out), transform var(--dur-short) var(--ease-out);
+    box-shadow: 0 6px 22px -8px var(--color-glow);
+    transition: filter var(--dur-short) var(--ease-out), transform var(--dur-short) var(--ease-out),
+      box-shadow var(--dur-short) var(--ease-out);
   }
-  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-primary:hover { filter: brightness(1.08); box-shadow: 0 8px 28px -6px var(--color-glow); }
+
+  /* Gradient headline text in the theme's accent pair. */
+  .text-gradient {
+    background: linear-gradient(120deg, var(--color-accent), var(--color-accent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* A faint glow behind the app, in the theme's accent. */
+  .app-aurora {
+    background:
+      radial-gradient(60rem 30rem at 85% -10%, color-mix(in oklab, var(--color-accent-2) 14%, transparent), transparent 70%),
+      radial-gradient(50rem 28rem at 10% 110%, color-mix(in oklab, var(--color-accent) 12%, transparent), transparent 70%),
+      var(--color-paper);
+  }
   .btn-primary:active { transform: translateY(1px); }
   .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 

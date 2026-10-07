@@ -943,7 +943,8 @@ def _recover_jobs_from_disk():
                 'logs': _TimedLog(["♻️ Job recovered from disk after server restart."]),
                 'output_dir': job_path,
                 'user_id': owner,
-                'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
+                'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis'),
+                       'output_format': data.get('output_format')},
             }
             recovered += 1
         except Exception as e:
@@ -2556,7 +2557,8 @@ async def run_job(job_id, job_data):
                                  ready_clips.append(clip)
                         
                         if ready_clips:
-                             jobs[job_id]['result'] = {'clips': ready_clips, 'cost_analysis': cost_analysis}
+                             jobs[job_id]['result'] = {'clips': ready_clips, 'cost_analysis': cost_analysis,
+                                                      'output_format': data.get('output_format')}
             except Exception as e:
                 # Ignore read errors during processing
                 pass
@@ -2601,7 +2603,8 @@ async def run_job(job_id, job_data):
                     if missing:
                         jobs[job_id]['logs'].append(
                             f"⚠️ {missing} of {len(clips)} clips failed to render.")
-                    jobs[job_id]['result'] = {'clips': rendered, 'cost_analysis': cost_analysis}
+                    jobs[job_id]['result'] = {'clips': rendered, 'cost_analysis': cost_analysis,
+                                               'output_format': data.get('output_format')}
             else:
                  jobs[job_id]['status'] = 'failed'
                  jobs[job_id]['logs'].append("No metadata file generated.")
@@ -3147,9 +3150,10 @@ async def process_endpoint(
         return int(val) if integer else val
 
     n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
-    # Clips stay under 2 minutes (main.MAX_CLIP_SECONDS trims anything longer).
-    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 114)
-    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 119)
+    # Without a range clips stay under 2 minutes (main.MAX_CLIP_SECONDS); a
+    # chosen range may reach 177 s (Shorts' 3 minutes minus the end card).
+    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 172)
+    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 177)
     if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
         raise HTTPException(status_code=400,
                             detail="clip_max_seconds must be at least 5s above clip_min_seconds")
@@ -3409,6 +3413,64 @@ def _presented_status(job_id, job):
         if m and _manifest_busy_elsewhere(m):
             return 'processing'
     return job['status']
+
+
+@app.get("/api/library")
+async def local_library():
+    """Finished jobs on this machine, newest first.
+
+    Feeds the self-host History and Gallery tabs (Shortkaar): the cloud ones
+    read the database and R2, which a local install does not have. Clips
+    disappear from here when the retention sweep deletes their job.
+    """
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not available")
+    try:
+        entries = os.listdir(OUTPUT_DIR)
+    except FileNotFoundError:
+        entries = []
+    out = []
+    for job_id in entries:
+        job_path = os.path.join(OUTPUT_DIR, job_id)
+        if not os.path.isdir(job_path) or os.path.isfile(os.path.join(job_path, _RESUME_FILE)):
+            continue
+        if (jobs.get(job_id) or {}).get('status') in ('queued', 'processing'):
+            continue
+        json_files = glob.glob(os.path.join(job_path, "*_metadata.json"))
+        if not json_files:
+            continue
+        try:
+            with open(json_files[0], encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+        clips = []
+        for i, clip in enumerate(data.get('shorts') or []):
+            name = _canonical_clip_file(job_path, base_name, i)
+            if not name or not os.path.isfile(os.path.join(job_path, name)):
+                continue
+            clips.append({
+                "index": i,
+                "title": clip.get('seo_title') or clip.get('video_title_for_youtube_short') or f"Clip {i + 1}",
+                "on_screen_title": clip.get('video_title_for_youtube_short') or "",
+                "video_url": f"/videos/{job_id}/{name}",
+                "seconds": round(float(clip.get('end', 0)) - float(clip.get('start', 0)), 1),
+                "score": clip.get('predicted_score'),
+            })
+        if not clips:
+            continue
+        source = data.get('source_video')
+        out.append({
+            "job_id": job_id,
+            "created": os.path.getmtime(json_files[0]),
+            "compilation": bool(data.get('compilation')),
+            "output_format": data.get('output_format'),
+            "has_source": bool(source and os.path.isfile(os.path.join(job_path, source))),
+            "clips": clips,
+        })
+    out.sort(key=lambda j: j["created"], reverse=True)
+    return {"jobs": out, "retention_seconds": JOB_RETENTION_SECONDS}
 
 
 @app.get("/api/status/{job_id}")
@@ -3731,7 +3793,8 @@ async def _restore_job_files(job_id: str, proj, user_id: str) -> bool:
             'logs': _TimedLog(["♻️ Project restored from your library."]),
             'output_dir': job_dir,
             'user_id': user_id,
-            'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
+            'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis'),
+                       'output_format': data.get('output_format')},
         }
     if pulled:
         print(f"♻️  Restored {job_id} from the library (working files were gone).")

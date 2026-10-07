@@ -7,6 +7,16 @@ const SUPPORTED_PLATFORMS = [
     'Facebook', 'Instagram', 'Dailymotion', 'Reddit', 'Streamable',
 ];
 
+// Clip length presets (seconds, as strings like the inputs). Auto = blank:
+// the server's default 15-60 s band.
+const LENGTH_PRESETS = [
+    { label: 'Auto', min: '', max: '' },
+    { label: '15-30s', min: '15', max: '30' },
+    { label: '30-60s', min: '30', max: '60' },
+    { label: '60-90s', min: '60', max: '90' },
+    { label: '90-150s', min: '90', max: '150' },
+];
+
 // Background presets for the framed look.
 const BRAND = { handle: '@PunchlineBazaar', bg: '#2B0F3D' };
 const FRAME_COLORS = ['#2B0F3D', '#14142B', '#000000', '#FFFFFF', '#0F3D3E', '#7B1E3A', '#F2C14E', '#1D4ED8'];
@@ -48,8 +58,15 @@ export default function MediaInput({ onProcess, isProcessing }) {
     // which keeps the default pipeline behavior untouched.
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [targetClips, setTargetClips] = useState('');
-    const [clipMinSeconds, setClipMinSeconds] = useState('');
-    const [clipMaxSeconds, setClipMaxSeconds] = useState('');
+    // Clip length range: the model picks each clip's length inside it.
+    // Blank = the default 15-60 s band. Remembered like the other choices.
+    const [clipMinSeconds, setClipMinSeconds] = useState(() => {
+        try { return localStorage.getItem('os_clip_min') || ''; } catch { return ''; }
+    });
+    const [clipMaxSeconds, setClipMaxSeconds] = useState(() => {
+        try { return localStorage.getItem('os_clip_max') || ''; } catch { return ''; }
+    });
+    const [customLength, setCustomLength] = useState(false);
     // Auto-hook: burn the AI hook text into every clip. On by default; the
     // choice persists so turning it off sticks across sessions.
     const [autoHook, setAutoHook] = useState(() => {
@@ -98,9 +115,17 @@ export default function MediaInput({ onProcess, isProcessing }) {
         if (pending) setUrl(pending);
     }, []);
 
+    const lengthError = (() => {
+        const lo = Number(clipMinSeconds || 0), hi = Number(clipMaxSeconds || 0);
+        if (clipMinSeconds && (lo < 5 || lo > 172)) return 'Minimum length must be 5 to 172 seconds.';
+        if (clipMaxSeconds && (hi < 10 || hi > 177)) return 'Maximum length must be 10 to 177 seconds (Shorts stop at 3 minutes).';
+        if (clipMinSeconds && clipMaxSeconds && hi < lo + 5) return 'Maximum must be at least 5 seconds more than minimum.';
+        return '';
+    })();
+
     const handleSubmit = (e) => {
         e.preventDefault();
-        if (!acknowledged) return;
+        if (!acknowledged || lengthError) return;
         const advanced = {
             targetClips: targetClips || null,
             clipMinSeconds: clipMinSeconds || null,
@@ -119,6 +144,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
         };
         try {
             localStorage.setItem('os_caption_script', captionScript);
+            localStorage.setItem('os_clip_min', clipMinSeconds);
+            localStorage.setItem('os_clip_max', clipMaxSeconds);
             localStorage.setItem('os_output_format', outputFormat);
             localStorage.setItem('os_frame_bg_v2', frameBg);
             localStorage.setItem('os_frame_handle', frameHandle);
@@ -369,6 +396,54 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     ))}
                 </div>
 
+                {/* Clip length: the AI picks each clip's length inside this range. */}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span className="eyebrow mr-1">clip length</span>
+                    {LENGTH_PRESETS.map((p) => {
+                        const on = !customLength && clipMinSeconds === p.min && clipMaxSeconds === p.max;
+                        return (
+                            <button
+                                key={p.label}
+                                type="button"
+                                onClick={() => { setCustomLength(false); setClipMinSeconds(p.min); setClipMaxSeconds(p.max); }}
+                                className={`px-3 py-1.5 rounded-input border text-xs ${on ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                            >
+                                {p.label}
+                            </button>
+                        );
+                    })}
+                    <button
+                        type="button"
+                        onClick={() => setCustomLength(true)}
+                        className={`px-3 py-1.5 rounded-input border text-xs ${customLength || (clipMinSeconds && !LENGTH_PRESETS.some((p) => p.min === clipMinSeconds && p.max === clipMaxSeconds)) ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                    >
+                        custom
+                    </button>
+                    {(customLength || (clipMinSeconds && !LENGTH_PRESETS.some((p) => p.min === clipMinSeconds && p.max === clipMaxSeconds))) && (
+                        <span className="flex items-center gap-1.5 text-xs text-muted">
+                            <input
+                                type="number" min="5" max="172" step="1"
+                                value={clipMinSeconds}
+                                onChange={(e) => setClipMinSeconds(e.target.value)}
+                                placeholder="min"
+                                aria-label="minimum clip length in seconds"
+                                className="input-field !w-20 text-xs py-1.5"
+                            />
+                            to
+                            <input
+                                type="number" min="10" max="177" step="1"
+                                value={clipMaxSeconds}
+                                onChange={(e) => setClipMaxSeconds(e.target.value)}
+                                placeholder="max"
+                                aria-label="maximum clip length in seconds"
+                                className="input-field !w-20 text-xs py-1.5"
+                            />
+                            seconds
+                        </span>
+                    )}
+                </div>
+                {lengthError && <p className="mt-1.5 text-[11px] text-danger" role="alert">{lengthError}</p>}
+
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className="eyebrow mr-1">subtitles</span>
                     <select
@@ -381,7 +456,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         <option value="english">English</option>
                         <option value="original">As spoken (original script)</option>
                     </select>
-                    <span className="text-[11px] text-muted">titles use the same language · clips stay under 2 min</span>
+                    <span className="text-[11px] text-muted">titles use the same language</span>
                 </div>
 
                 {/* Advanced generation controls — collapsed by default; blank = AI decides */}
@@ -414,7 +489,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             <div>
                                 <p className="eyebrow mb-1.5">min length (s)</p>
                                 <input
-                                    type="number" min="5" max="114" step="1"
+                                    type="number" min="5" max="172" step="1"
                                     value={clipMinSeconds}
                                     onChange={(e) => setClipMinSeconds(e.target.value)}
                                     placeholder="15"
@@ -424,7 +499,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             <div>
                                 <p className="eyebrow mb-1.5">max length (s)</p>
                                 <input
-                                    type="number" min="10" max="119" step="1"
+                                    type="number" min="10" max="177" step="1"
                                     value={clipMaxSeconds}
                                     onChange={(e) => setClipMaxSeconds(e.target.value)}
                                     placeholder="60"
@@ -500,7 +575,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 <button
                     type="submit"
                     data-tutorial="generate"
-                    disabled={isProcessing || !acknowledged || !url || !youtubeUrlEnabled}
+                    disabled={isProcessing || !acknowledged || !url || !youtubeUrlEnabled || !!lengthError}
                     className="w-full btn-primary mt-4"
                 >
                     {isProcessing ? (
