@@ -174,6 +174,25 @@ never finished:
   refuses next to `-filter_complex`. A link without YouTube captions falls
   back to a full download + Whisper (slower, worse Hindi subtitles). Real run
   6-oct-2026: 2 videos, 5 moments, 170 s, 8 min.
+- **Shortkaar rebrand** (branch feature/shortkaar): the dashboard is the
+  user's own product "Shortkaar". Themes are token sets in `tokens.css`
+  (Aurora default, Ocean, Sunset, Mint; `?theme=` or the picker), and
+  `tailwind.config.js` colours point at those variables, so never hard-code a
+  colour. Hidden, code kept: AI Shorts, AI Agent, UGC Gallery, Autopilot,
+  post / schedule week, landing, cookie banner, `seo()` build plugin. Local
+  History + Gallery read `GET /api/library` (self-host only). Keep `LICENSE`
+  (MIT notice) in the repo.
+- **Clips start on speech** (`main.trim_to_speech`): sound tags like
+  `[Music]`/`[संगीत]` are not speech; a clip starts on its first spoken word
+  so a source channel's intro / end screen never gets in (6-oct-2026).
+- **Clip length range** (dashboard "clip length", `clip_min/max_seconds`):
+  with a max set, `main.clip_length_cap` lets clips reach it (177 s ceiling,
+  Shorts' 3 min minus the end card); without one the 119 s cap stays.
+- UI checks on this laptop: headless Edge `--screenshot` with
+  `--virtual-time-budget` hangs on pages with `<video>` (History, Gallery)
+  and without it captures before React loads. Drive Edge over CDP instead
+  (`--remote-debugging-port` + the `websockets` package). Only ever kill
+  Edge processes whose command line has your own `--user-data-dir`.
 - Flaky on this laptop: tests posting a YouTube URL to /api/process can 400
   in a full run, because `assert_public_url` does a live DNS lookup.
 - **Section fetch retries with fresh links**: YouTube sometimes 403s every
