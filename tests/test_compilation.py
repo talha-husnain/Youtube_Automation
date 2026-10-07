@@ -63,6 +63,31 @@ def test_budget_stays_under_three_minutes_with_the_end_card(monkeypatch):
     assert compilation.budget_seconds() == 90
 
 
+def _words(*pairs):
+    return {"segments": [{"words": [{"word": f" {w}", "start": s, "end": s + 0.3} for w, s in pairs]}]}
+
+
+def test_trim_to_speech_drops_the_source_intro_and_end_screen():
+    import main
+    # Captions of a real source (6-oct-2026): applause and music until 9.6 s.
+    t = _words(("[प्रशंसा]", 1.9), ("[संगीत]", 2.5), ("इसमें", 9.6), ("तो", 9.9),
+               ("ok", 20.0), ("bye", 40.0), ("now", 44.0), ("end", 48.0), ("[Music]", 52.0))
+    data = {"shorts": [{"start": 6.0, "end": 25.3}, {"start": 30.0, "end": 60.0},
+                       {"start": 19.9, "end": 30.0}]}
+    main.trim_to_speech(data, t)
+    a, b, c = data["shorts"]
+    assert (a["start"], a["end"]) == (9.35, 25.3)          # intro music cut
+    assert (b["start"], b["end"]) == (39.75, 49.8)          # silence + end screen cut
+    assert (c["start"], c["end"]) == (19.9, 30.0)          # starts on speech: untouched
+
+
+def test_trim_to_speech_leaves_clips_alone_without_words():
+    import main
+    data = {"shorts": [{"start": 0.0, "end": 30.0}]}
+    assert main.trim_to_speech(data, {"segments": []}) == {"shorts": [{"start": 0.0, "end": 30.0}]}
+    assert main.trim_to_speech(None, _words(("a", 1.0))) is None
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
 def test_real_join_of_mismatched_sources(tmp_path):
     srcs = []

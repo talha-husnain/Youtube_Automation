@@ -2127,6 +2127,48 @@ def cap_clip_lengths(clips_data):
     return clips_data
 
 
+# "[Music]", "[संगीत]", "[Applause]": sound tags in YouTube captions, not speech.
+_SOUND_TAG = re.compile(r"^\s*[\[(].*[\])]\s*$")
+SPEECH_LEAD_SECONDS = 0.25   # a clip opens this long before its first word
+SPEECH_MAX_GAP = 0.8         # leading non-speech longer than this is cut
+SPEECH_TAIL_SECONDS = 1.5    # a clip ends at most this long after the video's last word
+
+
+def trim_to_speech(clips_data, transcript):
+    """Keep the source channel's intro and end screen out of every clip.
+
+    A creator's intro (logo, channel name, music sting, a thumbnail held on
+    screen) and end screen carry no speech. A compilation took 6.0-25.3 s of
+    a video whose captions read "[applause] [music]" until the first word at
+    9.6 s (6-oct-2026), so its short opened on the other channel's intro.
+    Each clip now starts on its first spoken word, never before the video's
+    first spoken word, and ends no later than just after its last one. In
+    place; returns ``clips_data``.
+    """
+    words = sorted((w for s in (transcript or {}).get("segments") or []
+                    for w in s.get("words") or []
+                    if (w.get("word") or "").strip() and not _SOUND_TAG.match(w["word"])),
+                   key=lambda w: w["start"])
+    if not words:
+        return clips_data
+    first_word, last_word = words[0]["start"], words[-1]["end"]
+    for c in (clips_data or {}).get("shorts") or []:
+        try:
+            start, end = float(c["start"]), float(c["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        new_start = max(start, first_word - SPEECH_LEAD_SECONDS)
+        opening = next((w["start"] for w in words if w["start"] >= new_start), None)
+        if opening is not None and opening - new_start > SPEECH_MAX_GAP:
+            new_start = opening - SPEECH_LEAD_SECONDS
+        new_end = min(end, last_word + SPEECH_TAIL_SECONDS)
+        if new_end - new_start >= 5 and (new_start, new_end) != (start, end):
+            print(f"   ✂️ Clip {start:.1f}-{end:.1f}s trimmed to speech: "
+                  f"{new_start:.1f}-{new_end:.1f}s")
+            c["start"], c["end"] = round(new_start, 3), round(new_end, 3)
+    return clips_data
+
+
 def speech_is_sparse(transcript, duration):
     """True when the transcript is too thin to drive clip selection."""
     words = sum(len((seg.get("text") or "").split())
@@ -2332,7 +2374,7 @@ if __name__ == '__main__':
                         early["transcript"] = t
                         dur = t.get("duration") or (t["segments"][-1]["end"] if t["segments"] else 0)
                         if dur and not speech_is_sparse(t, dur):
-                            early["clips"] = cap_clip_lengths(get_viral_clips(t, dur))
+                            early["clips"] = trim_to_speech(cap_clip_lengths(get_viral_clips(t, dur)), t)
                     except Exception as e:
                         print(f"   ℹ️ Early clip pick skipped ({type(e).__name__}: {e}).")
                         early["clips"] = None
@@ -2511,6 +2553,7 @@ if __name__ == '__main__':
         else:
             print(f"🔥 Found {len(clips_data['shorts'])} clips!")
             cap_clip_lengths(clips_data)
+            trim_to_speech(clips_data, transcript)
             # Captions and titles in Roman Urdu / English (caption_script.py),
             # before anything is rendered or written to metadata.
             if transcript is not None:

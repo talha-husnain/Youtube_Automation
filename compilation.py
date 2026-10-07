@@ -185,7 +185,8 @@ def run(urls, output_dir, pipeline):
         if not dur or pipeline.speech_is_sparse(t, dur):
             print(f"   ⚠️ Video {i + 1} has too little speech to pick moments from; skipping it.")
             return i, t, [], local, None
-        found = pipeline.cap_clip_lengths(pipeline.get_viral_clips(t, dur)) or {}
+        found = pipeline.trim_to_speech(
+            pipeline.cap_clip_lengths(pipeline.get_viral_clips(t, dur)), t) or {}
         clips = found.get("shorts") or []
         print(f"   ✅ Video {i + 1}: {len(clips)} candidate moments")
         return i, t, clips, local, found.get("cost_analysis")
