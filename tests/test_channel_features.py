@@ -389,3 +389,89 @@ def test_drafts_are_stored_and_hidden_comments_stay_gone(monkeypatch):
     assert cr.fetch("@x")["comments"][0]["draft"].startswith("Shukriya")   # kept, no second AI call needed
     cr.mark("a", status="hidden")
     assert [c["id"] for c in cr.fetch("@x")["comments"]] == ["s"]
+
+
+# ------------------------------------------------------------- long video
+
+import shutil as _shutil  # noqa: E402
+import subprocess as _sp  # noqa: E402
+
+import long_video as lv  # noqa: E402
+
+
+def test_on_screen_text_and_chapters():
+    assert lv.clean_text("Date pe waiter ka khaana? 🤣 #shorts — yaar") == "Date pe waiter ka khaana? yaar"
+    assert lv.clock(65) == "1:05" and lv.clock(3725) == "1:02:05"
+    assert lv.chapters([(0, "Intro"), (3.5, "#3 One")]) == "0:00 Intro\n0:03 #3 One"
+
+
+def test_hook_text_files_have_plain_line_ends(tmp_path):
+    lv._txt(str(tmp_path), "h.txt", "a\nb")
+    assert (tmp_path / "h.txt").read_bytes() == b"a\nb"
+
+
+@pytest.mark.skipif(not _shutil.which("ffmpeg"), reason="ffmpeg not installed")
+def test_a_long_video_is_built_wide_with_end_cards_cut(tmp_path):
+    shorts = []
+    for k in range(3):
+        src = str(tmp_path / f"s{k}.mp4")
+        _sp.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=540x960:rate=30:duration=4",
+                 "-f", "lavfi", "-i", "sine=f=440:d=4", "-shortest", "-c:v", "libx264", "-c:a", "aac", src], check=True)
+        keep = lv.keep_seconds(src, {"outro": True, "outro_seconds": 1.5})
+        assert abs(keep - 2.5) < 0.1
+        shorts.append({"id": f"j:{k}", "path": src, "hook": f"Hook number {k} 😂", "title": "t", "keep_seconds": keep})
+    meta = lv.build(str(tmp_path / "job"), shorts, "@PunchlineBazaar", progress=lambda s: None)
+    out = tmp_path / "job" / [f for f in __import__("os").listdir(tmp_path / "job") if f.endswith("_clip_1.mp4")][0]
+    dims = _sp.check_output(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "stream=width,height",
+                             "-of", "csv=p=0", str(out)]).decode().strip()
+    assert dims == "1920,1080"
+    total = lv._probe(str(out))
+    assert abs(total - (lv.INTRO_SECONDS + 3 * 2.5 + lv.OUTRO_SECONDS)) < 0.6
+    d = meta["shorts"][0]["seo_description"]
+    assert "0:00 Intro" in d and "#3 Hook number 0" in d and "#1 Hook number 2" in d
+    assert meta["genre"] == "long" and not any(f.startswith(".part") for f in __import__("os").listdir(tmp_path / "job"))
+    with pytest.raises(ValueError):
+        lv.build(str(tmp_path / "x"), shorts[:2], "@x")
+
+
+def test_weekly_long_video_once_on_its_day():
+    cfg = {**ap.DEFAULTS, "weekly_long": True, "weekly_day": 6, "run_at": "03:00"}
+    sunday = datetime(2026, 10, 11, 4, 0)
+    assert ap.weekly_due(cfg, sunday) and not ap.weekly_due(cfg, datetime(2026, 10, 10, 4, 0))
+    assert not ap.weekly_due({**cfg, "last_weekly": "2026-10-11"}, sunday)
+    run = ap.run_weekly(lambda: None)
+    assert "fewer than 3" in run["notes"][0] and ap.settings()["last_weekly"]
+    assert ap.run_weekly(lambda: "job9")["jobs"][0]["job_id"] == "job9"
+
+
+@pytest.mark.skipif(not _shutil.which("ffmpeg"), reason="ffmpeg not installed")
+def test_long_video_thumbnail_uses_a_frame_of_its_number_one(tmp_path, monkeypatch):
+    import json as _json
+    import os as _os
+    app_module = pytest.importorskip("app")
+    import thumbnail
+    from fastapi.testclient import TestClient
+    out = tmp_path / "output"
+    short = out / "shortjob"
+    short.mkdir(parents=True)
+    _sp.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=540x960:rate=30:duration=4",
+             "-c:v", "libx264", str(short / "S_clip_1.mp4")], check=True)
+    (short / "S_metadata.json").write_text(_json.dumps({"shorts": [{"start": 0, "end": 4, "seo_title": "t"}]}))
+    long_id = "3202b727-a877-4b8d-a0c4-fd84957d25fe"
+    lj = out / long_id
+    lj.mkdir()
+    (lj / "Weekly_x_metadata.json").write_text(_json.dumps({"shorts": [{"seo_title": "Top 3 😂", "seo_description": "Intro line\n\nChapters"}]}))
+    (lj / ".source.json").write_text(_json.dumps({"genre": "long", "shorts": ["x:0", "shortjob:0"]}))
+    monkeypatch.setattr(app_module, "OUTPUT_DIR", str(out))
+    monkeypatch.setattr(app_module, "THUMBNAILS_DIR", str(out / "thumbnails"))
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    seen = {}
+
+    def fake(api_key, title, session_id, face_image_path=None, **kw):
+        seen.update(title=title, session=session_id, ref=face_image_path, context=kw.get("video_context"))
+        return [{"url": f"/thumbnails/{session_id}/a.jpg", "text": "HASO"}]
+    monkeypatch.setattr(thumbnail, "generate_thumbnail", fake)
+    r = TestClient(app_module.app).post(f"/api/long-video/{long_id}/thumbnail")
+    assert r.status_code == 200 and r.json()["thumbnails"][0]["text"] == "HASO"
+    assert seen["title"] == "Top 3 😂" and seen["context"] == "Intro line" and _os.path.exists(seen["ref"])
+    assert _json.loads((lj / "thumbs.json").read_text())[0]["url"].endswith("a.jpg")

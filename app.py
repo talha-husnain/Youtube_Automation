@@ -1474,6 +1474,8 @@ def _waiting_to_post(job_id, job_path, now):
         metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
         if not metas:
             return False
+        if _job_source(job_path).get("genre") == "long":
+            return now - os.path.getmtime(job_path) < post_queue.KEEP_DAYS * 86400
         with open(metas[0], encoding="utf-8") as f:
             n = len(json.load(f).get("shorts") or [])
         return post_queue.keeps(job_id, n, now - os.path.getmtime(job_path))
@@ -2315,7 +2317,8 @@ async def lifespan(app: FastAPI):
         # Self-host Autopilot: daily Shorts + uploads into posting times.
         import autopilot_local
         asyncio.create_task(autopilot_local.loop_forever(
-            _autopilot_submit, _job_clips, is_active=lambda: not _draining))
+            _autopilot_submit, _job_clips, is_active=lambda: not _draining,
+            build_weekly=_autopilot_weekly))
     yield
     # Cleanup (optional: cancel worker)
 
@@ -2777,6 +2780,8 @@ def _job_clips(job_id):
                     "description": c.get("seo_description") or "",
                     "tags": c.get("seo_tags") or [], "genre": genre,
                     "hook": c.get("video_title_for_youtube_short") or "", "take": c.get("ai_take") or "",
+                    "tiktok": c.get("video_description_for_tiktok") or "",
+                    "instagram": c.get("video_description_for_instagram") or "",
                     "seconds": round(float(c.get("end", 0)) - float(c.get("start", 0)), 1),
                     # Dubbed actors say lines they never said: YouTube asks for the label.
                     "ai_made": genre == "movies"})
@@ -2954,6 +2959,8 @@ def _queue_clips():
         if state != "completed" or not clips:
             continue
         src = _job_source(job_path)
+        if src.get("genre") == "long":
+            continue
         created = os.path.getmtime(glob.glob(os.path.join(job_path, "*_metadata.json"))[0])
         if created < start:
             continue
@@ -2961,6 +2968,7 @@ def _queue_clips():
             out.append({"job_id": job_id, "index": c["index"], "title": c["title"],
                         "description": c["description"], "tags": c["tags"], "genre": src.get("genre") or c["genre"],
                         "hook": c["hook"], "take": c["take"], "seconds": c["seconds"],
+                        "tiktok": c["tiktok"], "instagram": c["instagram"],
                         "video_url": f"/videos/{job_id}/{c['name']}", "created": created,
                         "source_url": src.get("url"), "autopilot": bool(src.get("autopilot"))})
     return out
@@ -3104,12 +3112,183 @@ async def comments_set(cid: str, request: Request):
     return {"ok": True}
 
 
+_long_builds = {}   # job_id -> {"status", "step", "error", "started"} while a build runs
+
+
+def _long_candidates():
+    """Comedy Shorts of the last 7 days not skipped, best first (views, then newest)."""
+    import post_queue
+    clips = _queue_clips()
+    rows = post_queue.plan(clips, [], lambda times, n: [])
+    week = time.time() - 7 * 86400
+    rows = [r for r in rows if r["genre"] in ("comedy", "movies") and r["status"] != "skipped" and r["created"] >= week]
+    rows.sort(key=lambda r: (r.get("views") if r.get("views") is not None else -1, r["created"]), reverse=True)
+    return rows
+
+
+def _long_builds_view():
+    out = []
+    for job_id in os.listdir(OUTPUT_DIR):
+        job_path = os.path.join(OUTPUT_DIR, job_id)
+        if not os.path.isdir(job_path) or _job_source(job_path).get("genre") != "long":
+            continue
+        metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
+        if not metas:
+            continue
+        try:
+            with open(metas[0], encoding="utf-8") as f:
+                c = json.load(f)["shorts"][0]
+        except (OSError, ValueError, KeyError, IndexError):
+            continue
+        base = os.path.basename(metas[0]).replace("_metadata.json", "")
+        try:
+            with open(os.path.join(job_path, "thumbs.json"), encoding="utf-8") as f:
+                thumbs = json.load(f)
+        except (OSError, ValueError):
+            thumbs = []
+        out.append({"job_id": job_id, "status": "done", "created": os.path.getmtime(metas[0]),
+                    "thumbnails": thumbs,
+                    "title": c.get("seo_title"), "description": c.get("seo_description"),
+                    "tags": c.get("seo_tags") or [], "seconds": c.get("end"),
+                    "video_url": f"/videos/{job_id}/{base}_clip_1.mp4"})
+    for job_id, b in _long_builds.items():
+        if b["status"] != "done":
+            out.append({"job_id": job_id, **b})
+    out.sort(key=lambda b: b.get("created") or b.get("started") or 0, reverse=True)
+    return out
+
+
+def _start_long_video(ids):
+    """Start building one long video from these Shorts (best first). Returns the job id."""
+    import long_video
+    import short_kit
+    cands = {c["id"]: c for c in _long_candidates()}
+    picked = [cands[i] for i in ids if i in cands]
+    if not long_video.MIN_SHORTS <= len(picked) <= long_video.MAX_SHORTS:
+        raise ValueError(f"Pick {long_video.MIN_SHORTS} to {long_video.MAX_SHORTS} Shorts from the last 7 days.")
+    job_id = str(uuid.uuid4())
+    job_dir = os.path.join(OUTPUT_DIR, job_id)
+    state = {"status": "building", "step": "starting", "error": None, "started": time.time(),
+             "title": f"Top {len(picked)} of the week"}
+    _long_builds[job_id] = state
+
+    def _run():
+        try:
+            shorts = []
+            for c in picked:
+                src_dir = os.path.join(OUTPUT_DIR, c["job_id"])
+                try:
+                    with open(os.path.join(src_dir, "frame.json"), encoding="utf-8") as f:
+                        cfg = json.load(f)
+                except (OSError, ValueError):
+                    cfg = {}
+                path = os.path.join(OUTPUT_DIR, c["video_url"].split("/videos/", 1)[1].replace("/", os.sep))
+                shorts.append({"id": c["id"], "path": path, "hook": c["hook"] or c["title"], "title": c["title"],
+                               "keep_seconds": long_video.keep_seconds(path, cfg), "bg": cfg.get("bg")})
+            bg = next((x["bg"] for x in shorts if x.get("bg")), "#2B0F3D")
+            try:
+                client, model = short_kit.gemini(), short_kit.text_model()
+            except Exception:  # noqa: BLE001 — a plain title still ships the video
+                client = model = None
+            # Countdown: the best Short plays last, as #1.
+            long_video.build(job_dir, list(reversed(shorts)), _channel_handle(), bg, client, model,
+                             progress=lambda step: state.update(step=step))
+            state.update(status="done", step="done")
+        except Exception as e:  # noqa: BLE001
+            state.update(status="failed", error=str(e)[:300])
+            print(f"⚠️ Long video failed: {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+    return job_id
+
+
+@app.get("/api/long-video")
+async def long_video_list():
+    _local_only()
+    import long_video
+    cands = await _in_thread(_long_candidates)
+    return {"candidates": cands, "builds": await _in_thread(_long_builds_view),
+            "min": long_video.MIN_SHORTS, "max": long_video.MAX_SHORTS}
+
+
+@app.post("/api/long-video")
+async def long_video_start(request: Request):
+    _local_only()
+    body = await request.json()
+    ids = [str(i) for i in (body.get("ids") or []) if isinstance(i, str)][:50]
+    try:
+        job_id = await _in_thread(_start_long_video, ids)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"job_id": job_id}
+
+
+@app.post("/api/long-video/{job_id}/thumbnail")
+async def long_video_thumbnail(job_id: str):
+    """Two thumbnails for a long video (thumbnail.generate_thumbnail): its own
+    title, and a frame of its #1 Short as the person reference, the way
+    Thumbnail Studio offers the creator's frames."""
+    _local_only()
+    import thumbnail
+    if not re.fullmatch(r"[0-9a-f-]{36}", job_id):
+        raise HTTPException(status_code=400, detail="Bad id")
+    job_path = os.path.join(OUTPUT_DIR, job_id)
+    src = _job_source(job_path)
+    metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
+    if src.get("genre") != "long" or not metas:
+        raise HTTPException(status_code=404, detail="That long video is no longer on this computer.")
+    with open(metas[0], encoding="utf-8") as f:
+        clip = json.load(f)["shorts"][0]
+    session = f"long_{job_id[:8]}"
+    ref = None
+    best = (src.get("shorts") or [None])[-1]           # built in countdown order: #1 is last
+    if best and ":" in best:
+        jid, idx = best.rsplit(":", 1)
+        _st, clips = _job_clips(jid)
+        hit = next((c for c in clips if str(c["index"]) == idx), None)
+        if hit:
+            ref = os.path.join(THUMBNAILS_DIR, session, "reference.jpg")
+            os.makedirs(os.path.dirname(ref), exist_ok=True)
+            # 40% in: past the title pop-in, before the take and end card.
+            r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{max(1.0, hit['seconds'] * 0.4):.1f}",
+                                "-i", hit["path"], "-frames:v", "1", ref], capture_output=True)
+            if r.returncode != 0 or not os.path.exists(ref):
+                ref = None
+    intro = (clip.get("seo_description") or "").split("\n\n")[0]
+    try:
+        thumbs = await _in_thread(functools.partial(
+            thumbnail.generate_thumbnail, os.environ.get("GEMINI_API_KEY", ""), clip.get("seo_title") or "Top Shorts",
+            session, face_image_path=ref, video_context=intro, count=2,
+            language="Roman Urdu (Latin letters, everyday words)"))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Thumbnails failed: {str(e)[:200]}")
+    try:
+        with open(os.path.join(job_path, "thumbs.json"), encoding="utf-8") as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        old = []
+    with open(os.path.join(job_path, "thumbs.json"), "w", encoding="utf-8") as f:
+        json.dump(thumbs + old, f, ensure_ascii=False)
+    return {"thumbnails": thumbs + old}
+
+
+def _autopilot_weekly():
+    """Sunday's long video: the week's top 10 Shorts, if there are 3 or more."""
+    picks = [c["id"] for c in _long_candidates()[:10]]
+    if len(picks) < 3:
+        return None
+    return _start_long_video(picks)
+
+
 def _autopilot_view():
     import autopilot_local
     cfg = autopilot_local.settings()
     for run in cfg.get("runs", []):
         for job in run["jobs"]:
             state, clips = _job_clips(job["job_id"])
+            build = _long_builds.get(job["job_id"])
+            if build and build["status"] != "done":
+                state = build["status"]
             job["status"] = state
             job["ready"] = len(clips)
     return {"settings": cfg, "looks": autopilot_local.looks_saved()}

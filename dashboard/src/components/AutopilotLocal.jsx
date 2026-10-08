@@ -7,7 +7,7 @@ import { apiJson } from '../lib/api';
 // on its own, and can upload each one into the next posting time.
 
 const when = (ts) => new Date(ts * 1000).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-const STATUS = { completed: 'done', processing: 'making', queued: 'waiting', failed: 'failed', missing: 'deleted' };
+const STATUS = { completed: 'done', processing: 'making', queued: 'waiting', failed: 'failed', missing: 'deleted', building: 'making' };
 
 function Toggle({ on, onChange, label }) {
     return (
@@ -168,6 +168,16 @@ export default function AutopilotLocal({ onOpenChannelTab }) {
                                 </select>
                             </div>
                         </label>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 pt-1">
+                        <Toggle on={!!cfg.weekly_long} onChange={(v) => set('weekly_long', v)} label="weekly long video" />
+                        <span className="text-xs text-ink2">Build a long video of the week&apos;s best Shorts every</span>
+                        <select value={cfg.weekly_day ?? 6} onChange={(e) => set('weekly_day', Number(e.target.value))}
+                            className="input-field !w-auto text-xs py-1.5" aria-label="weekly day">
+                            {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((d, i) => (
+                                <option key={d} value={i}>{d}</option>
+                            ))}
+                        </select>
                     </div>
                     <p className="text-[11px] text-muted leading-relaxed">
                         {lookLine('comedy', 'comedy')} {lookLine('cricket', 'cricket')} Cricket ideas come from this week&apos;s news, never the same idea twice.

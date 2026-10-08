@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle, Film } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
@@ -32,6 +32,7 @@ import ChannelTab from './components/ChannelTab';
 import PostPlan from './components/PostPlan';
 import CommentsTab from './components/CommentsTab';
 import ReadyBanner from './components/ReadyBanner';
+import LongVideoTab from './components/LongVideoTab';
 import { Logo, Wordmark, ThemePicker } from './components/Brand';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
@@ -946,7 +947,7 @@ function App() {
   const [channelNotice, setChannelNotice] = useState(null);
   useEffect(() => {
     const DEEP_LINK_TABS = ['autopilot', 'history', 'gallery', 'settings', 'thumbnails', 'dashboard',
-      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments'];
+      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments', 'long-video'];
     const apply = () => {
       const hash = window.location.hash || '';
       if (!hash.startsWith('#app?')) return;
@@ -1262,9 +1263,10 @@ function App() {
       { id: 'finder', ord: '06', icon: Search, label: 'Find videos', short: 'find' },
       { id: 'local-autopilot', ord: '07', icon: Rocket, label: 'Autopilot', short: 'autopilot' },
       { id: 'comments', ord: '08', icon: MessageCircle, label: 'Comments', short: 'comments' },
-      { id: 'channel', ord: '09', icon: BarChart3, label: 'My channel', short: 'channel' },
+      { id: 'long-video', ord: '09', icon: Film, label: 'Long video', short: 'long' },
+      { id: 'channel', ord: '10', icon: BarChart3, label: 'My channel', short: 'channel' },
     ]),
-    { id: 'settings', ord: billingEnabled ? '05' : '10', icon: Settings, label: 'Settings', short: 'settings' },
+    { id: 'settings', ord: billingEnabled ? '05' : '11', icon: Settings, label: 'Settings', short: 'settings' },
   ];
   const activeNav = navItems.find((n) => n.id === activeTab);
 
@@ -2008,6 +2010,7 @@ function App() {
             />
           )}
           {activeTab === 'comments' && !billingEnabled && <CommentsTab />}
+          {activeTab === 'long-video' && !billingEnabled && <LongVideoTab />}
           {activeTab === 'local-autopilot' && !billingEnabled && (
             <AutopilotLocal onOpenChannelTab={() => setActiveTab('channel')} />
           )}

@@ -260,6 +260,18 @@ never finished:
     the Windows code page).
 - Thumbnail Studio takes the video's YouTube captions when it has them (no
   Whisper), like the clip pipeline.
+- **Long video** (`long_video.py`, `/api/long-video*`, Long video tab,
+  Autopilot `weekly_long`): 3-15 comedy Shorts of the last 7 days in one
+  1920x1080 video counting down to #1 (best plays last). Each Short loses
+  its end card (`outro_seconds` from its frame.json) and keeps its take;
+  segments share encode settings and join with the concat demuxer, so
+  chapter times are measured, not guessed. ffmpeg runs inside the job dir
+  and drawtext reads `textfile=` by bare name (no drive colon to escape);
+  text files are written with `newline="
+"` or Windows' 
+ shows as an
+  empty line. Built in ~20 s per Short; 2 thumbnails in ~45 s through
+  `thumbnail.generate_thumbnail` with a frame of the #1 Short.
 - Before starting uvicorn, check :8000: a server from an earlier session may
   still answer with old app.py code (job subprocesses load new code anyway).
 - UI checks on this laptop: headless Edge `--screenshot` with

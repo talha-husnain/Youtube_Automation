@@ -35,6 +35,8 @@ DEFAULTS = {
     "enabled": False, "run_at": "03:00", "comedy_per_day": 3, "cricket_per_day": 1,
     "channels": [], "cc_only": True, "min_minutes": 5, "max_minutes": 120,
     "cricket_kinds": "both", "auto_upload": False, "post_times": ["13:00", "19:00"],
+    # Weekly long video (long_video.py) on this weekday, 0 = Monday ... 6 = Sunday.
+    "weekly_long": False, "weekly_day": 6, "last_weekly": None,
     "last_run": None, "runs": [],
 }
 
@@ -72,7 +74,7 @@ def _clock(t, default):
 def save(patch):
     """Merge the user's changes, keeping every value in range."""
     cfg = settings()
-    for key in ("enabled", "cc_only", "auto_upload"):
+    for key in ("enabled", "cc_only", "auto_upload", "weekly_long"):
         if key in patch:
             cfg[key] = bool(patch[key])
     for key, hi in (("comedy_per_day", 10), ("cricket_per_day", 5), ("min_minutes", 600), ("max_minutes", 600)):
@@ -81,6 +83,11 @@ def save(patch):
                 cfg[key] = max(0, min(hi, int(patch[key])))
             except (TypeError, ValueError):
                 pass
+    if "weekly_day" in patch:
+        try:
+            cfg["weekly_day"] = max(0, min(6, int(patch["weekly_day"])))
+        except (TypeError, ValueError):
+            pass
     if "run_at" in patch:
         cfg["run_at"] = _clock(patch["run_at"], cfg["run_at"])
     if "post_times" in patch and isinstance(patch["post_times"], list):
@@ -234,6 +241,33 @@ def due(cfg, now=None):
             and now.strftime("%H:%M") >= cfg["run_at"])
 
 
+def weekly_due(cfg, now=None):
+    now = now or datetime.now()
+    return (cfg.get("weekly_long") and now.weekday() == cfg.get("weekly_day", 6)
+            and cfg.get("last_weekly") != now.strftime("%Y-%m-%d") and now.strftime("%H:%M") >= cfg["run_at"])
+
+
+def run_weekly(build_weekly):
+    """Start this week's long video; the note lands in the runs list."""
+    cfg = settings()
+    cfg["last_weekly"] = datetime.now().strftime("%Y-%m-%d")
+    _write(SETTINGS_FILE, cfg)
+    run = {"at": int(time.time()), "date": cfg["last_weekly"], "reason": "weekly", "jobs": [], "notes": []}
+    try:
+        job_id = build_weekly()
+        if job_id:
+            run["jobs"].append({"job_id": job_id, "kind": "long video", "label": "Weekly top Shorts", "source": None,
+                                "clips": 1})
+        else:
+            run["notes"].append("Weekly long video skipped: fewer than 3 Shorts this week.")
+    except Exception as e:  # noqa: BLE001
+        run["notes"].append(f"Weekly long video failed to start: {e}")
+    cfg = settings()
+    cfg["runs"] = ([run] + cfg.get("runs", []))[:30]
+    _write(SETTINGS_FILE, cfg)
+    return run
+
+
 def upload_finished(job_clips, log=print):
     """With auto_upload on: put every finished, not yet uploaded Short of
     recent runs into the next free posting time. ``job_clips(job_id)`` gives
@@ -262,7 +296,7 @@ def upload_finished(job_clips, log=print):
     return count
 
 
-async def loop_forever(submit, job_clips, is_active=lambda: True):
+async def loop_forever(submit, job_clips, is_active=lambda: True, build_weekly=None):
     while True:
         await asyncio.sleep(TICK_SECONDS)
         if not is_active():
@@ -271,6 +305,9 @@ async def loop_forever(submit, job_clips, is_active=lambda: True):
             if due(settings()):
                 print("🤖 Autopilot: making today's Shorts.")
                 await run_now(submit)
+            if build_weekly and weekly_due(settings()):
+                print("🤖 Autopilot: building this week's long video.")
+                await asyncio.get_event_loop().run_in_executor(None, run_weekly, build_weekly)
             await asyncio.get_event_loop().run_in_executor(None, upload_finished, job_clips)
         except Exception as e:  # noqa: BLE001 — the loop must survive a bad day
             print(f"⚠️ Autopilot error: {type(e).__name__}: {e}")

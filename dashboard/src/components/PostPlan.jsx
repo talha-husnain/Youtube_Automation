@@ -80,6 +80,8 @@ function ReadyCard({ item, onStatus, ytConnected }) {
                     <CopyButton text={item.title} label="title" />
                     <CopyButton text={item.description} label="description" />
                     {tagLine && <CopyButton text={tagLine} label="tags" />}
+                    {item.tiktok && <CopyButton text={item.tiktok} label="tiktok caption" />}
+                    {item.instagram && <CopyButton text={item.instagram} label="instagram / facebook caption" />}
                     <button type="button" onClick={() => setOpen((v) => !v)} className="btn-ghost px-2.5 py-1 text-[11px]">
                         {open ? 'hide description' : 'show description'}
                     </button>
