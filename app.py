@@ -2319,7 +2319,7 @@ async def lifespan(app: FastAPI):
         import autopilot_local
         asyncio.create_task(autopilot_local.loop_forever(
             _autopilot_submit, _job_clips, is_active=lambda: not _draining,
-            build_weekly=_autopilot_weekly))
+            build_weekly=_autopilot_weekly, to_phone=(_plan_items, _send_to_phone)))
     yield
     # Cleanup (optional: cancel worker)
 
@@ -3201,6 +3201,88 @@ async def rivals_scan():
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Could not read those channels: {str(e)[:160]}")
     return {"report": report}
+
+
+def _plan_items():
+    """Ready to post with posting times (Telegram, Autopilot)."""
+    import autopilot_local
+    import post_queue
+    import youtube_account
+    return post_queue.plan(_queue_clips(), autopilot_local.settings()["post_times"], youtube_account.next_slots)
+
+
+def _send_to_phone(item):
+    """One Short + its copy to the owner's Telegram; remembered as sent."""
+    import post_queue
+    import telegram_notify
+    path = os.path.join(OUTPUT_DIR, item["video_url"].split("/videos/", 1)[1].replace("/", os.sep))
+    when = (item.get("slot") or "")[:16].replace("T", " ")
+    telegram_notify.send_short(path, item["title"], item.get("description", ""), item.get("pinned_comment") or "",
+                               when, item.get("tiktok", ""))
+    post_queue.update(item["id"], telegram_sent=True)
+
+
+@app.get("/api/telegram/status")
+async def telegram_status():
+    _local_only()
+    import telegram_notify
+    return telegram_notify.status()
+
+
+@app.post("/api/telegram/connect")
+async def telegram_connect():
+    _local_only()
+    import telegram_notify
+    try:
+        return await _in_thread(telegram_notify.connect)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(e)[:200])
+
+
+@app.post("/api/telegram/disconnect")
+async def telegram_disconnect():
+    _local_only()
+    import telegram_notify
+    telegram_notify.disconnect()
+    return telegram_notify.status()
+
+
+# Not under /api/queue/: POST /api/queue/{iid} is declared first and would take it.
+@app.post("/api/phone/send")
+async def queue_to_phone(request: Request):
+    """Send waiting Shorts to Telegram: one ({"id"}) or every one not sent yet."""
+    _local_only()
+    import telegram_notify
+    if not telegram_notify.status()["connected"]:
+        raise HTTPException(status_code=400, detail="Connect Telegram first (My channel).")
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    items = [x for x in await _in_thread(_plan_items) if x["status"] == "ready"]
+    if body.get("id"):
+        items = [x for x in items if x["id"] == body["id"]]
+    else:
+        state = __import__("post_queue")._load()
+        items = [x for x in items if not (state.get(x["id"]) or {}).get("telegram_sent")]
+    if not items:
+        raise HTTPException(status_code=404, detail="Nothing new to send.")
+
+    def _send_all():
+        sent = 0
+        for x in sorted(items, key=lambda i: i.get("slot") or ""):
+            try:
+                _send_to_phone(x)
+                sent += 1
+            except Exception as e:  # noqa: BLE001
+                print(f"⚠️ Telegram: {x['title'][:40]}: {e}")
+        return sent
+
+    if body.get("id"):
+        try:
+            await _in_thread(_send_all)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=str(e)[:200])
+        return {"sending": 1}
+    asyncio.get_event_loop().run_in_executor(None, _send_all)
+    return {"sending": len(items)}
 
 
 @app.get("/api/system-check")

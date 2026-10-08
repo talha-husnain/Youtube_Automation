@@ -170,6 +170,10 @@ export default function AutopilotLocal({ onOpenChannelTab }) {
                         </label>
                     </div>
                     <div className="flex flex-wrap items-center gap-3 pt-1">
+                        <Toggle on={!!cfg.auto_phone} onChange={(v) => set('auto_phone', v)} label="send to phone" />
+                        <span className="text-xs text-ink2">Send each finished Short to my phone (Telegram, set it up in My channel)</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 pt-1">
                         <Toggle on={!!cfg.weekly_long} onChange={(v) => set('weekly_long', v)} label="weekly long video" />
                         <span className="text-xs text-ink2">Build a long video of the week&apos;s best Shorts every</span>
                         <select value={cfg.weekly_day ?? 6} onChange={(e) => set('weekly_day', Number(e.target.value))}

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Loader2, Copy, Check, Download, ExternalLink, CheckCircle2, SkipForward, MessageCircle, RefreshCw, Repeat, Undo2, Youtube, Sparkles } from 'lucide-react';
+import { Loader2, Copy, Check, Download, ExternalLink, CheckCircle2, SkipForward, MessageCircle, RefreshCw, Repeat, Undo2, Youtube, Sparkles, Smartphone } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
 
@@ -28,7 +28,7 @@ function CopyButton({ text, label }) {
     );
 }
 
-function ReadyCard({ item, onStatus, ytConnected }) {
+function ReadyCard({ item, onStatus, ytConnected, phone }) {
     const [pinned, setPinned] = useState(item.pinned_comment || '');
     const [busy, setBusy] = useState('');
     const [error, setError] = useState('');
@@ -42,6 +42,20 @@ function ReadyCard({ item, onStatus, ytConnected }) {
             setPinned(d.pinned_comment);
         } catch (e) {
             setError(e.detail || 'Could not write a comment.');
+        } finally {
+            setBusy('');
+        }
+    };
+
+    const [sent, setSent] = useState(!!item.telegram_sent);
+    const toPhone = async () => {
+        setBusy('phone');
+        setError('');
+        try {
+            await apiJson('/api/phone/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: item.id }) });
+            setSent(true);
+        } catch (e) {
+            setError(e.detail || 'Could not send it.');
         } finally {
             setBusy('');
         }
@@ -65,7 +79,7 @@ function ReadyCard({ item, onStatus, ytConnected }) {
 
     const tagLine = (item.tags || []).join(', ');
     return (
-        <div className="card p-3 sm:p-4 flex gap-3 sm:gap-4">
+        <div id={`plan-${item.id}`} className="card p-3 sm:p-4 flex gap-3 sm:gap-4">
             <video src={getApiUrl(item.video_url)} controls preload="metadata"
                 className="w-24 sm:w-36 aspect-[9/16] rounded-input bg-black object-contain shrink-0 border border-rule self-start" />
             <div className="min-w-0 flex-1 space-y-2">
@@ -107,6 +121,11 @@ function ReadyCard({ item, onStatus, ytConnected }) {
                 <div className="flex flex-wrap gap-2 pt-1">
                     <a href={getApiUrl(item.video_url)} download className="btn-primary px-3 py-1.5 text-[11px]"><Download size={13} /> download</a>
                     <a href="https://studio.youtube.com" target="_blank" rel="noreferrer" className="btn-ghost px-3 py-1.5 text-[11px]"><ExternalLink size={13} /> youtube studio</a>
+                    {phone && (
+                        <button type="button" onClick={toPhone} disabled={busy === 'phone'} className="btn-ghost px-3 py-1.5 text-[11px]">
+                            {busy === 'phone' ? <Loader2 size={13} className="animate-spin" /> : <Smartphone size={13} />} {sent ? 'sent, send again' : 'send to phone'}
+                        </button>
+                    )}
                     {ytConnected && (
                         <button type="button" onClick={schedule} disabled={busy === 'upload'} className="btn-ghost px-3 py-1.5 text-[11px]">
                             {busy === 'upload' ? <Loader2 size={13} className="animate-spin" /> : <Youtube size={13} />} schedule on youtube
@@ -159,12 +178,61 @@ function NewTitles({ item }) {
     );
 }
 
-export default function PostPlan({ onMakeShorts, onOpenAutopilot }) {
+// The next 7 days of posting times, each with the Short planned there or an
+// open slot, so a gap in the week shows before it happens.
+function WeekView({ ready, postTimes, onOpen, onFill }) {
+    const now = new Date();
+    const days = Array.from({ length: 7 }, (_, d) => {
+        const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
+        const slots = (postTimes || []).map((t) => {
+            const [h, m] = t.split(':').map(Number);
+            const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), h, m);
+            const item = ready.find((x) => x.slot && Math.abs(new Date(x.slot) - at) < 60000);
+            return { t, at, item };
+        }).filter((s) => s.at > now);
+        return { day, slots };
+    });
+    const empty = days.reduce((n, d) => n + d.slots.filter((s) => !s.item).length, 0);
+    return (
+        <div className="space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                {days.map(({ day, slots }) => (
+                    <div key={day.toDateString()} className="card p-2.5 space-y-1.5 min-w-0">
+                        <p className="eyebrow">{day.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })}</p>
+                        {slots.length === 0 && <p className="text-[11px] text-muted">no more times today</p>}
+                        {slots.map((s) => (s.item ? (
+                            <button key={s.t} type="button" onClick={() => onOpen(s.item)} title={s.item.title}
+                                className="w-full text-left rounded-input border border-rule p-1.5 hover:border-[color:var(--color-accent)]">
+                                <span className="readout block">{s.t} · {s.item.genre}</span>
+                                <span className="text-[11px] text-ink2 line-clamp-2 break-words">{s.item.title}</span>
+                            </button>
+                        ) : (
+                            <div key={s.t} className="rounded-input border border-dashed border-rule2 p-1.5">
+                                <span className="readout block">{s.t}</span>
+                                <span className="text-[11px] text-muted">open</span>
+                            </div>
+                        )))}
+                    </div>
+                ))}
+            </div>
+            {empty > 0 && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                    {empty} open {empty === 1 ? 'slot' : 'slots'} this week.
+                    <button type="button" onClick={onFill} className="btn-ghost px-2.5 py-1 text-[11px]">make more shorts</button>
+                </div>
+            )}
+        </div>
+    );
+}
+
+export default function PostPlan({ onMakeShorts, onOpenAutopilot, onNewShorts }) {
     const [data, setData] = useState(null);
     const [error, setError] = useState('');
     const [view, setView] = useState('ready');
     const [busy, setBusy] = useState('');
     const [yt, setYt] = useState(null);
+    const [phone, setPhone] = useState(false);
+    const [phoneMsg, setPhoneMsg] = useState('');
 
     const load = () => {
         apiJson('/api/queue').then(setData).catch((e) => setError(e.detail || 'Could not load the plan.'));
@@ -172,7 +240,18 @@ export default function PostPlan({ onMakeShorts, onOpenAutopilot }) {
     useEffect(() => {
         load();
         apiJson('/api/youtube/status').then(setYt).catch(() => setYt(null));
+        apiJson('/api/telegram/status').then((s) => setPhone(!!s.connected)).catch(() => setPhone(false));
     }, []);
+
+    const allToPhone = async () => {
+        setPhoneMsg('');
+        try {
+            const d = await apiJson('/api/phone/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            setPhoneMsg(`Sending ${d.sending} ${d.sending === 1 ? 'Short' : 'Shorts'} to your phone.`);
+        } catch (e) {
+            setPhoneMsg(e.detail || 'Could not send.');
+        }
+    };
 
     const setStatus = async (item, status) => {
         await apiJson(`/api/queue/${encodeURIComponent(item.id)}`, {
@@ -214,10 +293,15 @@ export default function PostPlan({ onMakeShorts, onOpenAutopilot }) {
                     </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                    {[['ready', `to post (${ready.length})`], ['posted', `posted (${posted.length})`], ['skipped', `skipped (${skipped.length})`]].map(([v, l]) => (
+                    {[['ready', `to post (${ready.length})`], ['week', 'week'], ['posted', `posted (${posted.length})`], ['skipped', `skipped (${skipped.length})`]].map(([v, l]) => (
                         <button key={v} onClick={() => setView(v)} aria-pressed={view === v}
                             className={`px-3 py-1.5 rounded-input border text-xs ${view === v ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted'}`}>{l}</button>
                     ))}
+                    {ready.length > 0 && phone && (
+                        <button onClick={allToPhone} className="btn-ghost px-2.5 py-1.5 text-xs ml-auto" title="Every waiting Short not sent yet, to your Telegram">
+                            <Smartphone size={13} /> send all to phone
+                        </button>
+                    )}
                     {ready.length > 0 && (
                         <a href={getApiUrl('/api/queue/pack')} download className="btn-ghost px-2.5 py-1.5 text-xs ml-auto"
                             title="Every waiting Short with a text file of its copy, in posting order">
@@ -227,12 +311,22 @@ export default function PostPlan({ onMakeShorts, onOpenAutopilot }) {
                     <button onClick={load} className={`btn-ghost px-2.5 py-1.5 text-xs ${ready.length ? '' : 'ml-auto'}`}><RefreshCw size={13} /> refresh</button>
                 </div>
                 {error && <p className="text-sm text-danger" role="alert">{error}</p>}
+                {phoneMsg && <p className="text-sm text-ink2">{phoneMsg}</p>}
                 {!data && !error && <div className="flex items-center gap-2 text-sm text-muted"><Loader2 size={16} className="animate-spin" /> loading…</div>}
+
+                {view === 'week' && data && (
+                    <WeekView ready={ready} postTimes={data.post_times}
+                        onOpen={(item) => {
+                            setView('ready');
+                            setTimeout(() => document.getElementById(`plan-${item.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
+                        }}
+                        onFill={onNewShorts || onOpenAutopilot} />
+                )}
 
                 {view === 'ready' && data && (
                     ready.length === 0
                         ? <div className="card p-6 text-sm text-muted text-center">Nothing waiting. Make Shorts, or switch on Autopilot, and they will line up here.</div>
-                        : <div className="space-y-3">{ready.map((x) => <ReadyCard key={x.id} item={x} onStatus={setStatus} ytConnected={!!yt?.connected} />)}</div>
+                        : <div className="space-y-3">{ready.map((x) => <ReadyCard key={x.id} item={x} onStatus={setStatus} ytConnected={!!yt?.connected} phone={phone} />)}</div>
                 )}
 
                 {view === 'posted' && data && (

@@ -35,3 +35,5 @@ def _private_channel_files(tmp_path, monkeypatch):
     monkeypatch.setattr(comment_replies, "STATE_FILE", str(tmp_path / "comments.json"))
     import rivals
     monkeypatch.setattr(rivals, "STATE_FILE", str(tmp_path / "rivals.json"))
+    import telegram_notify
+    monkeypatch.setattr(telegram_notify, "STATE_FILE", str(tmp_path / "telegram.json"))

@@ -107,7 +107,8 @@ def plan(clips, post_times, slots_fn):
         row = dict(state.get(item_id(c["job_id"], c["index"])) or {})
         out.append({**c, "id": item_id(c["job_id"], c["index"]), "status": row.get("status", "ready"),
                     "pinned_comment": row.get("pinned_comment"), "posted_at": row.get("posted_at"),
-                    "views": row.get("views"), "youtube_id": row.get("youtube_id")})
+                    "views": row.get("views"), "youtube_id": row.get("youtube_id"),
+                    "telegram_sent": bool(row.get("telegram_sent"))})
     ready = sorted((x for x in out if x["status"] == "ready"), key=lambda x: (x["created"], x["index"]))
     for x, slot in zip(ready, slots_fn(post_times, len(ready)) if ready else []):
         x["slot"] = slot.isoformat()

@@ -626,3 +626,76 @@ def test_rival_channels_must_be_youtube(monkeypatch):
     monkeypatch.setattr(rivals, "STATE_FILE", str(__import__("pathlib").Path(__import__("tempfile").mkdtemp()) / "r.json"))
     r = TestClient(app_module.app).put("/api/rivals", json={"channels": [{"url": "@good"}, {"url": "https://evil.com/@x"}]})
     assert r.json()["channels"] == [{"url": "https://www.youtube.com/@good", "name": ""}]
+
+
+# ------------------------------------------------------------- telegram
+
+class _TgFake:
+    """Records Telegram calls; answers like the Bot API."""
+    def __init__(self, updates=()):
+        self.calls, self.updates = [], list(updates)
+
+    def __call__(self, url, timeout=None, data=None, files=None, **kw):
+        method = url.rsplit("/", 1)[1]
+        self.calls.append((method, dict(data or {}), bool(files)))
+        result = self.updates if method == "getUpdates" else {"message_id": len(self.calls)}
+        return type("R", (), {"status_code": 200, "json": lambda s: {"ok": True, "result": result}})()
+
+
+def test_telegram_connects_to_the_chat_that_said_hi_and_sends_shorts(tmp_path, monkeypatch):
+    import telegram_notify as tg
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:SECRET")
+    fake = _TgFake([{"message": {"chat": {"id": 42, "type": "private", "first_name": "Talha"}, "text": "hi"}}])
+    monkeypatch.setattr(tg.httpx, "post", fake)
+    assert tg.connect()["connected"] is True and tg._load()["chat_id"] == 42
+    clip = tmp_path / "s.mp4"
+    clip.write_bytes(b"v" * 10)
+    tg.send_short(str(clip), "Title 😂", "Desc", "Pinned?", "2026-10-09 19:00", "tt")
+    methods = [c[0] for c in fake.calls]
+    assert methods == ["getUpdates", "sendMessage", "sendVideo", "sendMessage"]
+    video = fake.calls[2]
+    assert video[2] is True and video[1]["caption"] == "Post at: 2026-10-09 19:00\nTitle 😂"
+    assert "PINNED COMMENT:\nPinned?" in fake.calls[3][1]["text"]
+
+
+def test_telegram_errors_never_show_the_token(monkeypatch):
+    import telegram_notify as tg
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:SECRET")
+    monkeypatch.setattr(tg.httpx, "post", lambda url, **kw: type("R", (), {
+        "status_code": 401, "json": lambda s: {"ok": False, "description": "Unauthorized"}})())
+    with pytest.raises(RuntimeError) as e:
+        tg._call("getUpdates")
+    assert "Unauthorized" in str(e.value) and "SECRET" not in str(e.value)
+    monkeypatch.setattr(tg.httpx, "post", _TgFake([]))
+    with pytest.raises(RuntimeError, match="send it any message"):
+        tg.connect()
+
+
+def test_autopilot_sends_its_new_shorts_to_the_phone_once(monkeypatch):
+    import telegram_notify as tg
+    monkeypatch.setattr(tg, "status", lambda: {"connected": True})
+    ap.save({"auto_phone": True})
+    cfg = ap.settings()
+    cfg["runs"] = [{"at": 1, "date": "d", "reason": "schedule", "notes": [],
+                    "jobs": [{"job_id": "jobA", "kind": "comedy", "label": "x", "source": None, "clips": 2}]}]
+    ap._write(ap.SETTINGS_FILE, cfg)
+    items = [{"id": "jobA:0", "job_id": "jobA", "status": "ready", "slot": "2026-10-09T19:00"},
+             {"id": "jobA:1", "job_id": "jobA", "status": "ready", "slot": "2026-10-09T13:00"},
+             {"id": "jobB:0", "job_id": "jobB", "status": "ready", "slot": "2026-10-09T12:00"}]
+    sent = []
+
+    def send(x):
+        sent.append(x["id"])
+        pq.update(x["id"], telegram_sent=True)
+    assert ap.phone_finished(lambda: items, send) == 2 and sent == ["jobA:1", "jobA:0"]   # posting order, Autopilot jobs only
+    assert ap.phone_finished(lambda: items, send) == 0                                    # never twice
+
+
+def test_phone_send_route_is_not_taken_by_the_queue_item_route(monkeypatch):
+    app_module = pytest.importorskip("app")
+    import telegram_notify as tg
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(tg, "status", lambda: {"connected": False})
+    r = TestClient(app_module.app).post("/api/phone/send", json={})
+    assert r.status_code == 400 and "Connect Telegram" in r.json()["detail"]

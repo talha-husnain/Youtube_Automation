@@ -37,6 +37,8 @@ DEFAULTS = {
     "cricket_kinds": "both", "auto_upload": False, "post_times": ["13:00", "19:00"],
     # Weekly long video (long_video.py) on this weekday, 0 = Monday ... 6 = Sunday.
     "weekly_long": False, "weekly_day": 6, "last_weekly": None,
+    # Send each finished Autopilot Short to the owner's Telegram (telegram_notify.py).
+    "auto_phone": False,
     "last_run": None, "runs": [],
 }
 
@@ -74,7 +76,7 @@ def _clock(t, default):
 def save(patch):
     """Merge the user's changes, keeping every value in range."""
     cfg = settings()
-    for key in ("enabled", "cc_only", "auto_upload", "weekly_long"):
+    for key in ("enabled", "cc_only", "auto_upload", "weekly_long", "auto_phone"):
         if key in patch:
             cfg[key] = bool(patch[key])
     for key, hi in (("comedy_per_day", 10), ("cricket_per_day", 5), ("min_minutes", 600), ("max_minutes", 600)):
@@ -296,7 +298,29 @@ def upload_finished(job_clips, log=print):
     return count
 
 
-async def loop_forever(submit, job_clips, is_active=lambda: True, build_weekly=None):
+def phone_finished(plan_items, send, log=print):
+    """With auto_phone on: every finished Short of recent Autopilot runs that
+    has not gone to Telegram yet goes now, in posting order."""
+    import post_queue
+    import telegram_notify
+    cfg = settings()
+    if not cfg.get("auto_phone") or not telegram_notify.status()["connected"]:
+        return 0
+    jobs = {j["job_id"] for run in cfg.get("runs", [])[:3] for j in run["jobs"]}
+    state = post_queue._load()
+    todo = [x for x in plan_items() if x["status"] == "ready" and x["job_id"] in jobs
+            and not (state.get(x["id"]) or {}).get("telegram_sent")]
+    sent = 0
+    for x in sorted(todo, key=lambda i: i.get("slot") or ""):
+        try:
+            send(x)
+            sent += 1
+        except Exception as e:  # noqa: BLE001 — one failed send must not stop the rest
+            log(f"Telegram send failed: {e}")
+    return sent
+
+
+async def loop_forever(submit, job_clips, is_active=lambda: True, build_weekly=None, to_phone=None):
     while True:
         await asyncio.sleep(TICK_SECONDS)
         if not is_active():
@@ -309,5 +333,7 @@ async def loop_forever(submit, job_clips, is_active=lambda: True, build_weekly=N
                 print("🤖 Autopilot: building this week's long video.")
                 await asyncio.get_event_loop().run_in_executor(None, run_weekly, build_weekly)
             await asyncio.get_event_loop().run_in_executor(None, upload_finished, job_clips)
+            if to_phone:
+                await asyncio.get_event_loop().run_in_executor(None, phone_finished, *to_phone)
         except Exception as e:  # noqa: BLE001 — the loop must survive a bad day
             print(f"⚠️ Autopilot error: {type(e).__name__}: {e}")

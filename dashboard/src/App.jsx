@@ -2013,6 +2013,7 @@ function App() {
                 setActiveTab('dashboard');
               }}
               onOpenAutopilot={() => setActiveTab('local-autopilot')}
+              onNewShorts={() => setActiveTab('finder')}
             />
           )}
           {activeTab === 'comments' && !billingEnabled && <CommentsTab />}

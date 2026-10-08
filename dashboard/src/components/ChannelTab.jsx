@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Loader2, Youtube, BarChart3, RefreshCw, ExternalLink, Copy, Check, LogOut, Upload } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
+import TelegramCard from './TelegramCard';
 
 // "My channel": connect the user's own YouTube channel (youtube_account.py),
 // the "what works" report (what_works.py) and the uploads Shortkaar made.
@@ -128,6 +129,8 @@ export default function ChannelTab({ notice }) {
                         Ready-made answers for the form: docs/youtube-api-audit.md in the Shortkaar folder.
                     </p>
                 </div>
+
+                <TelegramCard />
 
                 {/* What works */}
                 <div className="card p-5 space-y-4">
