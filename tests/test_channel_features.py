@@ -502,3 +502,59 @@ def test_system_check_reads_plainly(monkeypatch, tmp_path):
     assert sc.autopilot()["status"] == "warn"            # off by default
     ap.save({"enabled": True, "channels": [{"url": "u"}]})
     assert sc.autopilot()["status"] == "ok" and "Next run" in sc.autopilot()["detail"]
+
+
+def test_batch_starts_one_job_per_video_with_the_saved_look(monkeypatch):
+    app_module = pytest.importorskip("app")
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    ap.remember_look({"genre": "comedy", "frame_bg_color": "#123456"})
+    sent = []
+
+    async def fake_submit(payload):
+        sent.append(payload)
+        if "BBBBBBBBBBB" in payload["url"]:
+            raise RuntimeError("400: bad")
+        return f"job{len(sent)}"
+    monkeypatch.setattr(app_module, "_autopilot_submit", fake_submit)
+    c = TestClient(app_module.app)
+    r = c.post("/api/finder/batch", json={"urls": ["https://youtu.be/AAAAAAAAAAA", "https://youtu.be/BBBBBBBBBBB",
+                                                   "https://youtu.be/AAAAAAAAAAA", "https://evil.com/x"], "clips": 2})
+    assert r.status_code == 200 and r.json()["started"] == ["job1"] and len(r.json()["failed"]) == 1
+    assert sent[0]["frame_bg_color"] == "#123456" and sent[0]["target_clips"] == 2 and len(sent) == 2
+    assert c.post("/api/finder/batch", json={"urls": []}).status_code == 400
+
+
+def test_posting_pack_zips_ready_shorts_with_their_copy(tmp_path, monkeypatch):
+    import io as _io
+    import zipfile as _zip
+    app_module = pytest.importorskip("app")
+    from fastapi.testclient import TestClient
+    out = tmp_path / "output"
+    job = out / "jobA"
+    job.mkdir(parents=True)
+    (job / "S_clip_1.mp4").write_bytes(b"video")
+    (job / "S_metadata.json").write_text(json.dumps({"shorts": [{"start": 0, "end": 30, "seo_title": "Police checking 😂",
+                                                                 "seo_description": "Desc", "video_description_for_tiktok": "tt"}]}))
+    monkeypatch.setattr(app_module, "OUTPUT_DIR", str(out))
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "jobs", {})
+    pq._save({"_since": 0})
+    r = TestClient(app_module.app).get("/api/queue/pack")
+    assert r.status_code == 200
+    z = _zip.ZipFile(_io.BytesIO(r.content))
+    names = sorted(z.namelist())
+    assert names == ["01_Police_checking.mp4", "01_Police_checking.txt"]
+    text = z.read(names[1]).decode()
+    assert "TITLE:\nPolice checking 😂" in text and "TIKTOK:\ntt" in text and "POST AT:" in text
+    pq.update("jobA:0", status="posted")
+    assert TestClient(app_module.app).get("/api/queue/pack").status_code == 404
+
+
+def test_an_uploaded_short_leaves_ready_to_post(monkeypatch):
+    monkeypatch.setattr(ya, "upload", lambda *a, **k: {"status": "done", "video_id": "VID9"})
+    ya.upload_and_mark("p", "t", "d", [], "comedy", None, "public", False, {"job_id": "jobZ", "clip_index": 1})
+    assert pq._load()["jobZ:1"]["status"] == "posted" and pq._load()["jobZ:1"]["youtube_id"] == "VID9"
+    monkeypatch.setattr(ya, "upload", lambda *a, **k: {"status": "failed"})
+    ya.upload_and_mark("p", "t", "d", meta={"job_id": "jobY", "clip_index": 0})
+    assert "jobY:0" not in pq._load()

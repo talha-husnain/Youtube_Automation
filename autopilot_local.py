@@ -287,7 +287,7 @@ def upload_finished(job_clips, log=print):
                 if (job["job_id"], clip["index"]) in done:
                     continue
                 slot = youtube_account.next_slots(cfg["post_times"], 1)[0]
-                row = youtube_account.upload(
+                row = youtube_account.upload_and_mark(
                     clip["path"], clip["title"], clip["description"], clip["tags"], job["kind"],
                     publish_at=slot, ai_made=clip.get("ai_made", False),
                     meta={"job_id": job["job_id"], "clip_index": clip["index"], "auto": True})

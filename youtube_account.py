@@ -260,6 +260,18 @@ def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
     return row
 
 
+def upload_and_mark(*args, **kwargs):
+    """upload(), then take the Short out of Ready to post once YouTube has it,
+    so its posting time is not handed out twice."""
+    row = upload(*args, **kwargs)
+    meta = kwargs.get("meta") or (args[8] if len(args) > 8 else None) or {}
+    if row.get("status") == "done" and meta.get("job_id") is not None:
+        import post_queue
+        post_queue.update(post_queue.item_id(meta["job_id"], meta["clip_index"]), status="posted",
+                          youtube_id=row.get("video_id"))
+    return row
+
+
 def next_slots(times, count=1, tz=None, after=None):
     """The next ``count`` free posting times: ``times`` is ["13:00", "19:00"]
     in local time; a slot an earlier upload already holds is skipped."""

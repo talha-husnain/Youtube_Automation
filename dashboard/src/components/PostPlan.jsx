@@ -218,7 +218,13 @@ export default function PostPlan({ onMakeShorts, onOpenAutopilot }) {
                         <button key={v} onClick={() => setView(v)} aria-pressed={view === v}
                             className={`px-3 py-1.5 rounded-input border text-xs ${view === v ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted'}`}>{l}</button>
                     ))}
-                    <button onClick={load} className="btn-ghost px-2.5 py-1.5 text-xs ml-auto"><RefreshCw size={13} /> refresh</button>
+                    {ready.length > 0 && (
+                        <a href={getApiUrl('/api/queue/pack')} download className="btn-ghost px-2.5 py-1.5 text-xs ml-auto"
+                            title="Every waiting Short with a text file of its copy, in posting order">
+                            <Download size={13} /> download posting pack
+                        </a>
+                    )}
+                    <button onClick={load} className={`btn-ghost px-2.5 py-1.5 text-xs ${ready.length ? '' : 'ml-auto'}`}><RefreshCw size={13} /> refresh</button>
                 </div>
                 {error && <p className="text-sm text-danger" role="alert">{error}</p>}
                 {!data && !error && <div className="flex items-center gap-2 text-sm text-muted"><Loader2 size={16} className="animate-spin" /> loading…</div>}

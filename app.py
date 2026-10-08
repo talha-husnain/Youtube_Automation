@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import time
 import zipfile
+import io
 import math
 import itertools
 import functools
@@ -2893,7 +2894,7 @@ async def youtube_upload(request: Request):
     args = (clip["path"], body.get("title") or clip["title"], body.get("description") or clip["description"],
             tags, clip["genre"], publish_at, privacy, clip["ai_made"],
             {"job_id": job_id, "clip_index": clip["index"]})
-    asyncio.get_event_loop().run_in_executor(None, functools.partial(youtube_account.upload, *args))
+    asyncio.get_event_loop().run_in_executor(None, functools.partial(youtube_account.upload_and_mark, *args))
     return {"ok": True, "publish_at": publish_at.isoformat() if publish_at else None}
 
 
@@ -3091,6 +3092,71 @@ async def queue_retitle(iid: str):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(e)[:200])
     return {"titles": titles}
+
+
+@app.post("/api/finder/batch")
+async def finder_batch(request: Request):
+    """Shorts from several videos at once: one normal job per link, with the
+    look of the last comedy job made by hand (like Autopilot)."""
+    _local_only()
+    import autopilot_local
+    import used_moments
+    body = await request.json()
+    urls = [str(u) for u in (body.get("urls") or []) if isinstance(u, str) and used_moments.video_id(u)]
+    urls = list(dict.fromkeys(urls))
+    if not 1 <= len(urls) <= 10:
+        raise HTTPException(status_code=400, detail="Pick 1 to 10 YouTube videos.")
+    try:
+        per = max(1, min(6, int(body.get("clips") or 3)))
+    except (TypeError, ValueError):
+        per = 3
+    started, failed = [], []
+    for u in urls:
+        try:
+            started.append(await _autopilot_submit({**autopilot_local.look("comedy"), "url": u, "genre": "comedy",
+                                                    "acknowledged": True, "target_clips": per}))
+        except Exception as e:  # noqa: BLE001 — one bad link must not stop the rest
+            failed.append({"url": u, "error": str(e)[:160]})
+    return {"started": started, "failed": failed}
+
+
+@app.get("/api/queue/pack")
+async def queue_pack():
+    """Every Short waiting in Ready to post, in posting order, as one zip with
+    a text file of its copy, for posting from a phone."""
+    _local_only()
+    import autopilot_local
+    import post_queue
+    import youtube_account
+    from starlette.background import BackgroundTask
+    times = autopilot_local.settings()["post_times"]
+    items = await _in_thread(post_queue.plan, _queue_clips(), times, youtube_account.next_slots)
+    ready = sorted((x for x in items if x["status"] == "ready"), key=lambda x: x.get("slot") or "")
+    if not ready:
+        raise HTTPException(status_code=404, detail="Nothing is waiting to be posted.")
+
+    def _zip():
+        # Built in a file and sent as one: a StreamingResponse over BytesIO
+        # iterates it line by line (every newline byte of an mp4), and 66 MB
+        # took 113 s on localhost (8-oct-2026).
+        path = os.path.join(OUTPUT_DIR, f".pack_{uuid.uuid4().hex}.zip")
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+            for k, x in enumerate(ready, 1):
+                src = os.path.join(OUTPUT_DIR, x["video_url"].split("/videos/", 1)[1].replace("/", os.sep))
+                when = x.get("slot", "")[:16].replace("T", " ")
+                stem = f"{k:02d}_{re.sub(r'[^A-Za-z0-9]+', '_', x['title'])[:40].strip('_') or 'short'}"
+                z.write(src, f"{stem}.mp4")
+                z.writestr(f"{stem}.txt", "\n\n".join(p for p in [
+                    f"POST AT: {when}", f"TITLE:\n{x['title']}", f"DESCRIPTION:\n{x['description']}",
+                    f"PINNED COMMENT:\n{x['pinned_comment']}" if x.get("pinned_comment") else "",
+                    f"TIKTOK:\n{x['tiktok']}" if x.get("tiktok") else "",
+                    f"INSTAGRAM / FACEBOOK:\n{x['instagram']}" if x.get("instagram") else ""] if p))
+        return path
+
+    path = await _in_thread(_zip)
+    return FileResponse(path, media_type="application/zip",
+                        filename=f"shortkaar_posting_pack_{time.strftime('%Y-%m-%d')}.zip",
+                        background=BackgroundTask(os.remove, path))
 
 
 @app.get("/api/system-check")

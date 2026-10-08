@@ -268,10 +268,20 @@ never finished:
   chapter times are measured, not guessed. ffmpeg runs inside the job dir
   and drawtext reads `textfile=` by bare name (no drive colon to escape);
   text files are written with `newline="
-"` or Windows' 
+"` or Windows' 
  shows as an
   empty line. Built in ~20 s per Short; 2 thumbnails in ~45 s through
   `thumbnail.generate_thumbnail` with a frame of the #1 Short.
+- Also local-only: `/api/finder/batch` (one job per ticked video, comedy
+  look), `/api/queue/pack` (waiting Shorts + copy as one zip: build it to a
+  file and send a FileResponse; a StreamingResponse over BytesIO iterates
+  it line by line, 66 MB took 113 s), `/api/queue/{id}/retitle`,
+  `/api/system-check` (system_check.py; yt-dlp says 2026.08.19 where PyPI
+  says 2026.8.19, compare as int tuples; keep the genai Client in a name or
+  it is closed before the call). The audit form answers are in
+  `docs/youtube-api-audit.md`.
+- Patch scripts: always the Write tool. A bash heredoc turned `\n` inside a
+  Python string into a real newline three times on 8-oct-2026.
 - Before starting uvicorn, check :8000: a server from an earlier session may
   still answer with old app.py code (job subprocesses load new code anyway).
 - UI checks on this laptop: headless Edge `--screenshot` with

@@ -34,6 +34,30 @@ export default function FinderTab({ onMakeShorts }) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [added, setAdded] = useState({});
+    // Batch: tick several results, one job per video (POST /api/finder/batch).
+    const [selected, setSelected] = useState([]);
+    const [perVideo, setPerVideo] = useState(3);
+    const [batchMsg, setBatchMsg] = useState('');
+    const [batchBusy, setBatchBusy] = useState(false);
+    const toggleSel = (url) => setSelected((s) => (s.includes(url) ? s.filter((x) => x !== url) : [...s, url].slice(0, 10)));
+    const runBatch = async () => {
+        setBatchBusy(true);
+        setBatchMsg('');
+        setError('');
+        try {
+            const d = await apiJson('/api/finder/batch', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ urls: selected, clips: perVideo }),
+            });
+            setBatchMsg(`${d.started.length} ${d.started.length === 1 ? 'job' : 'jobs'} started. The Shorts appear in History and Ready to post as each one finishes.`
+                + (d.failed.length ? ` ${d.failed.length} could not start.` : ''));
+            setSelected([]);
+        } catch (e) {
+            setError(e.detail || 'Could not start the jobs.');
+        } finally {
+            setBatchBusy(false);
+        }
+    };
 
     const search = async (text) => {
         const query = (text ?? q).trim();
@@ -108,6 +132,20 @@ export default function FinderTab({ onMakeShorts }) {
                     ))}
                 </div>
 
+                {selected.length > 0 && (
+                    <div className="mt-4 card p-3 flex flex-wrap items-center gap-2 sticky top-0 z-10">
+                        <span className="text-sm text-ink">{selected.length} selected</span>
+                        <select value={perVideo} onChange={(e) => setPerVideo(Number(e.target.value))} aria-label="shorts per video"
+                            className="input-field !w-auto text-xs py-1.5">
+                            {[2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} Shorts per video</option>)}
+                        </select>
+                        <button onClick={runBatch} disabled={batchBusy} className="btn-primary px-3 py-1.5 text-xs">
+                            {batchBusy ? <Loader2 size={13} className="animate-spin" /> : <Scissors size={13} />} make shorts from all
+                        </button>
+                        <button onClick={() => setSelected([])} className="btn-ghost px-2.5 py-1.5 text-xs">clear</button>
+                    </div>
+                )}
+                {batchMsg && <p className="text-sm text-ok mt-4">{batchMsg}</p>}
                 {error && <p className="text-sm text-danger mt-4" role="alert">{error}</p>}
                 {results && results.length === 0 && !loading && (
                     <div className="card p-6 mt-6 text-sm text-muted text-center">No reuse-allowed videos for that search. Try other words or "any length".</div>
@@ -124,7 +162,9 @@ export default function FinderTab({ onMakeShorts }) {
                                 <div className="p-3 flex flex-col gap-2 flex-1">
                                     <p className="text-sm text-ink line-clamp-2 break-words" title={v.title}>{v.title}</p>
                                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
-                                        <span className="truncate max-w-[60%]">{v.channel}</span>
+                                        <input type="checkbox" checked={selected.includes(v.url)} onChange={() => toggleSel(v.url)}
+                                            aria-label={`select ${v.title}`} />
+                                        <span className="truncate max-w-[55%]">{v.channel}</span>
                                         <span>{views(v.views)}</span>
                                         <span className="badge-brass">CC</span>
                                         {v.used?.count > 0 && <span className="badge-warn">{v.used.count} used</span>}
