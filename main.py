@@ -1932,6 +1932,32 @@ def score_batch_size():
     return 3 if llm_backend.active() else 8
 
 
+def manual_clips(transcript_result, video_duration, ranges):
+    """The moments the user typed (MANUAL_CLIPS), snapped onto word edges.
+
+    Only start/end are the user's; the on-screen title, hook and all the
+    publishing copy come from seo_copy like for any clip. The fallback title
+    (the clip's first words) only shows if that call fails."""
+    words = [{'w': w['word'], 's': w['start'], 'e': w['end']}
+             for seg in transcript_result.get('segments') or [] for w in seg.get('words') or []]
+    shorts = []
+    for k, (a, b) in enumerate(ranges):
+        a = max(0.0, float(a))
+        b = min(float(b), float(video_duration or b))
+        if b - a < 3:
+            print(f"   ⚠️ Moment {k + 1} is outside the video; skipped.")
+            continue
+        s, e = snap_clip_to_words(a, b, words, video_duration,
+                                  min_duration=max(3.0, (b - a) * 0.8), max_duration=(b - a) + 2)
+        said = " ".join(w['w'].strip() for w in words if s <= w['s'] < e).split()
+        shorts.append({"start": s, "end": e, "predicted_score": 100 - k, "source_window_id": f"manual_{k + 1}",
+                       "video_title_for_youtube_short": " ".join(said[:6]) or f"Moment {k + 1}",
+                       "viral_hook_text": "", "why": "Picked by you",
+                       "video_description_for_tiktok": "", "video_description_for_instagram": ""})
+    print(f"✋ Using your {len(shorts)} moment(s) instead of the AI pick.")
+    return {"shorts": shorts} if shorts else None
+
+
 def get_viral_clips(transcript_result, video_duration, used=None):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
@@ -1943,6 +1969,10 @@ def get_viral_clips(transcript_result, video_duration, used=None):
     ``used``: [(start, end)] of this video already made into Shorts
     (used_moments.py); those stretches are neither offered nor returned.
     """
+    manual = os.environ.get("MANUAL_CLIPS")
+    if manual:
+        # The user typed the moments (dashboard "your own moments"): no AI pick.
+        return manual_clips(transcript_result, video_duration, json.loads(manual))
     language = str(transcript_result.get('language') or 'unknown')
     if llm_backend.active():
         # Self-hosted text model: no Google key needed for this stage.

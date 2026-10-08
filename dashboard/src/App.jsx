@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle, Film } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle, Film, Eye } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
@@ -34,6 +34,7 @@ import CommentsTab from './components/CommentsTab';
 import ReadyBanner from './components/ReadyBanner';
 import LongVideoTab from './components/LongVideoTab';
 import SystemCheck from './components/SystemCheck';
+import RivalsTab from './components/RivalsTab';
 import { Logo, Wordmark, ThemePicker } from './components/Brand';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
@@ -948,7 +949,7 @@ function App() {
   const [channelNotice, setChannelNotice] = useState(null);
   useEffect(() => {
     const DEEP_LINK_TABS = ['autopilot', 'history', 'gallery', 'settings', 'thumbnails', 'dashboard',
-      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments', 'long-video'];
+      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments', 'long-video', 'rivals'];
     const apply = () => {
       const hash = window.location.hash || '';
       if (!hash.startsWith('#app?')) return;
@@ -1103,6 +1104,8 @@ function App() {
         cricket_match: data.genre === 'cricket' ? (data.cricketMatch || null) : null,
         cricket_mode: data.genre === 'cricket' ? (data.cricketMode || 'match') : null,
         bg_music: data.genre === 'cricket' && data.bgMusic ? '1' : null,
+        // Your own moments (comedy): "12:30-13:20, 45:10-46:00".
+        moments: data.genre === 'comedy' && data.moments ? data.moments : null,
       };
 
       if (data.type === 'url') {
@@ -1265,9 +1268,10 @@ function App() {
       { id: 'local-autopilot', ord: '07', icon: Rocket, label: 'Autopilot', short: 'autopilot' },
       { id: 'comments', ord: '08', icon: MessageCircle, label: 'Comments', short: 'comments' },
       { id: 'long-video', ord: '09', icon: Film, label: 'Long video', short: 'long' },
-      { id: 'channel', ord: '10', icon: BarChart3, label: 'My channel', short: 'channel' },
+      { id: 'rivals', ord: '10', icon: Eye, label: 'Similar channels', short: 'rivals' },
+      { id: 'channel', ord: '11', icon: BarChart3, label: 'My channel', short: 'channel' },
     ]),
-    { id: 'settings', ord: billingEnabled ? '05' : '11', icon: Settings, label: 'Settings', short: 'settings' },
+    { id: 'settings', ord: billingEnabled ? '05' : '12', icon: Settings, label: 'Settings', short: 'settings' },
   ];
   const activeNav = navItems.find((n) => n.id === activeTab);
 
@@ -2013,6 +2017,12 @@ function App() {
           )}
           {activeTab === 'comments' && !billingEnabled && <CommentsTab />}
           {activeTab === 'long-video' && !billingEnabled && <LongVideoTab />}
+          {activeTab === 'rivals' && !billingEnabled && (
+            <RivalsTab onSearch={(q) => {
+              try { localStorage.setItem('os_finder_q', q); } catch { /* ignore */ }
+              setActiveTab('finder');
+            }} />
+          )}
           {activeTab === 'local-autopilot' && !billingEnabled && (
             <AutopilotLocal onOpenChannelTab={() => setActiveTab('channel')} />
           )}

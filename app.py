@@ -2797,7 +2797,13 @@ async def _autopilot_submit(payload):
                               headers={"X-Shortkaar-Autopilot": "1"})
     if r.status_code != 200:
         raise RuntimeError(f"{r.status_code}: {r.text[:200]}")
-    return r.json()["job_id"]
+    data = r.json()
+    if data.get("needs_confirmation"):
+        # The quality gate: a low-resolution source makes blurry Shorts, so
+        # unattended jobs skip it instead of forcing it through.
+        q = data.get("quality_check") or {}
+        raise RuntimeError(f"video quality too low ({q.get('max_height', '?')}p), skipped")
+    return data["job_id"]
 
 
 @app.get("/api/youtube/status")
@@ -3157,6 +3163,44 @@ async def queue_pack():
     return FileResponse(path, media_type="application/zip",
                         filename=f"shortkaar_posting_pack_{time.strftime('%Y-%m-%d')}.zip",
                         background=BackgroundTask(os.remove, path))
+
+
+@app.get("/api/rivals")
+async def rivals_get():
+    _local_only()
+    import rivals
+    data = rivals.load()
+    return {"channels": data.get("channels") or [], "report": data.get("report")}
+
+
+@app.put("/api/rivals")
+async def rivals_put(request: Request):
+    """Save the similar channels to watch (each checked to be a YouTube channel)."""
+    _local_only()
+    import channel_tools
+    import rivals
+    body = await request.json()
+    channels = []
+    for c in (body.get("channels") or [])[:rivals.MAX_CHANNELS]:
+        url = channel_tools.channel_url(str((c or {}).get("url") or ""))
+        if url:
+            channels.append({"url": url, "name": str(c.get("name") or "")[:80]})
+    return {"channels": rivals.save_channels(channels).get("channels")}
+
+
+@app.post("/api/rivals/scan")
+async def rivals_scan():
+    """Read the channels' Shorts and say what is working for them (~30 s)."""
+    _local_only()
+    import rivals
+    import short_kit
+    try:
+        report = await _in_thread(rivals.build, short_kit.gemini(), short_kit.text_model(), _channel_handle())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not read those channels: {str(e)[:160]}")
+    return {"report": report}
 
 
 @app.get("/api/system-check")
@@ -3722,6 +3766,7 @@ async def process_endpoint(
     cricket_match: Optional[str] = Form(None),
     cricket_mode: Optional[str] = Form(None),
     bg_music: Optional[str] = Form(None),
+    moments: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -3775,6 +3820,7 @@ async def process_endpoint(
         cricket_match = body.get("cricket_match")
         cricket_mode = body.get("cricket_mode")
         bg_music = body.get("bg_music")
+        moments = body.get("moments")
 
     # Two or more links: one short made of their best moments (compilation.py),
     # always in the framed style. One link stays a normal job.
@@ -4001,6 +4047,16 @@ async def process_endpoint(
         env["CRICKET_MODE"] = cricket_mode
         if str(bg_music).lower() in ("1", "true", "yes"):
             env["BG_MUSIC"] = "1"
+    # Your own moments (comedy, one link): main.manual_clips cuts exactly these.
+    if moments and str(moments).strip():
+        if genre_val != "comedy" or compile_urls:
+            raise HTTPException(status_code=400, detail="Your own moments work for one comedy link.")
+        import used_moments
+        try:
+            env["MANUAL_CLIPS"] = json.dumps(used_moments.parse_ranges(str(moments)[:500]))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        print(f"[moments] job={job_id} {env['MANUAL_CLIPS']}")
     if genre_val != "comedy":
         print(f"[genre] job={job_id} {genre_val}"
               + (f" owned={owned_music} links={len(song_urls) or 1}" if genre_val == "songs" else ""))

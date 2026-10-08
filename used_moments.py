@@ -142,6 +142,38 @@ def summary(url):
             "last": max((r.get("at", 0) for r in rows), default=None)}
 
 
+MOMENT_MIN, MOMENT_MAX, MOMENTS_MAX = 5, 119, 5
+# Not inside a longer number: "750-800" is seconds, never "50-80".
+_CLOCK = r"(?<![\d:.])\d{1,5}(?::\d{1,2}){0,2}(?:\.\d+)?(?![\d:])"
+
+
+def _seconds(text):
+    parts = [float(x) for x in text.split(":")]
+    total = 0.0
+    for p in parts:
+        total = total * 60 + p
+    return total
+
+
+def parse_ranges(text):
+    """"12:30-13:20, 1:02:05-1:03:00" -> [(750.0, 800.0), (3725.0, 3780.0)].
+
+    The moments the user wants as Shorts (main.manual_clips). Each one 5-119 s,
+    at most 5. Raises ValueError with a sentence the dashboard can show."""
+    found = re.findall(rf"({_CLOCK})\s*(?:-|–|—|to)\s*({_CLOCK})", text or "")
+    if not found:
+        raise ValueError("Write each moment as start-end, for example 12:30-13:20.")
+    if len(found) > MOMENTS_MAX:
+        raise ValueError(f"At most {MOMENTS_MAX} moments in one job.")
+    out = []
+    for a, b in found:
+        s, e = _seconds(a), _seconds(b)
+        if not MOMENT_MIN <= e - s <= MOMENT_MAX:
+            raise ValueError(f"{a}-{b} must be {MOMENT_MIN} to {MOMENT_MAX} seconds long.")
+        out.append((round(s, 2), round(e, 2)))
+    return sorted(set(out))
+
+
 def _topic_key(text):
     return "topic:" + re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 

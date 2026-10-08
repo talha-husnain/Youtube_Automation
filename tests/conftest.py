@@ -33,3 +33,5 @@ def _private_channel_files(tmp_path, monkeypatch):
     import post_queue
     monkeypatch.setattr(post_queue, "STATE_FILE", str(tmp_path / "post_queue.json"))
     monkeypatch.setattr(comment_replies, "STATE_FILE", str(tmp_path / "comments.json"))
+    import rivals
+    monkeypatch.setattr(rivals, "STATE_FILE", str(tmp_path / "rivals.json"))

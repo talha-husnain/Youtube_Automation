@@ -558,3 +558,71 @@ def test_an_uploaded_short_leaves_ready_to_post(monkeypatch):
     monkeypatch.setattr(ya, "upload", lambda *a, **k: {"status": "failed"})
     ya.upload_and_mark("p", "t", "d", meta={"job_id": "jobY", "clip_index": 0})
     assert "jobY:0" not in pq._load()
+
+
+# ------------------------------------------------------------- your own moments
+
+def test_moments_parse_clock_and_seconds_and_refuse_nonsense():
+    assert um.parse_ranges("12:30-13:20, 1:02:05 to 1:03:00; 750-800") == [(750.0, 800.0), (3725.0, 3780.0)]
+    assert um.parse_ranges("2:15 – 2:59") == [(135.0, 179.0)]
+    for bad, why in (("hello", "start-end"), ("1:00-1:02", "5 to 119"), ("0:00-5:00", "5 to 119"),
+                     ("1-9,10-20,30-40,50-60,70-80,90-99", "At most 5")):
+        with pytest.raises(ValueError, match=why):
+            um.parse_ranges(bad)
+
+
+def test_manual_moments_replace_the_ai_pick(monkeypatch):
+    main = pytest.importorskip("main")
+    monkeypatch.setenv("MANUAL_CLIPS", "[[10.2, 40.0], [500, 530]]")
+    words = [{"word": f" w{i}", "start": i * 1.0, "end": i * 1.0 + 0.6} for i in range(120)]
+    t = {"language": "ur", "segments": [{"start": 0, "end": 120, "text": "x", "words": words}]}
+    got = main.get_viral_clips(t, 120.0)["shorts"]          # no Gemini key needed: no AI call
+    assert len(got) == 1 and 9.5 <= got[0]["start"] <= 10.5 and 39 <= got[0]["end"] <= 41
+    assert got[0]["video_title_for_youtube_short"].startswith("w10") and got[0]["why"] == "Picked by you"
+
+
+def test_moments_are_refused_for_other_video_types(monkeypatch):
+    app_module = pytest.importorskip("app")
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    c = TestClient(app_module.app)
+    r = c.post("/api/process", json={"genre": "cricket", "cricket_match": "Pakistan vs India", "moments": "1:00-1:30",
+                                     "acknowledged": True})
+    assert r.status_code == 400 and "comedy" in r.json()["detail"]
+
+
+# ------------------------------------------------------------- similar channels
+
+def test_similar_channels_are_ranked_and_summed_up(monkeypatch, tmp_path):
+    import rivals
+    monkeypatch.setattr(rivals, "STATE_FILE", str(tmp_path / "rivals.json"))
+    with pytest.raises(ValueError, match="Add at least one"):
+        rivals.build(None, "m", "@x")
+    rivals.save_channels([{"url": "https://www.youtube.com/@a", "name": "A"}, {"url": "https://www.youtube.com/@b", "name": "B"}])
+    shorts = {"https://www.youtube.com/@a": [{"id": f"a{i}", "url": "u", "title": f"A {i}", "views": 1000 * i} for i in range(1, 5)],
+              "https://www.youtube.com/@b": [{"id": "b1", "url": "u", "title": "B 1", "views": 50}, {"id": "b2", "url": "u", "title": "B 2", "views": None}]}
+    import channel_tools
+    monkeypatch.setattr(channel_tools, "channel_shorts", lambda url, n: shorts[url])
+    seen = {}
+
+    class M:
+        def generate_content(self, **kw):
+            seen["prompt"] = kw["contents"]
+            return type("R", (), {"text": json.dumps({"summary": "A wins.", "patterns": ["p"],
+                                                      "ideas": [{"idea": "family", "search": "urdu family comedy"}]})})()
+    report = rivals.build(type("C", (), {"models": M()})(), "m", "@me")
+    assert [r["id"] for r in report["top"][:2]] == ["a4", "a3"] and report["count"] == 5   # no-view row left out
+    assert report["channels"][0] == {"channel": "A", "shorts": 4, "median": 2500, "best": 4000}
+    assert "4000 | A | A 4" in seen["prompt"] and "Never copy their titles" in seen["prompt"]
+    assert rivals.load()["report"]["ideas"][0]["search"] == "urdu family comedy"
+
+
+def test_rival_channels_must_be_youtube(monkeypatch):
+    app_module = pytest.importorskip("app")
+    import rivals
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(rivals, "STATE_FILE", str(__import__("pathlib").Path(__import__("tempfile").mkdtemp()) / "r.json"))
+    r = TestClient(app_module.app).put("/api/rivals", json={"channels": [{"url": "@good"}, {"url": "https://evil.com/@x"}]})
+    assert r.json()["channels"] == [{"url": "https://www.youtube.com/@good", "name": ""}]

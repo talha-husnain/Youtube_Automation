@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Search, Loader2, Scissors, Rocket, ExternalLink, Check } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
@@ -39,6 +39,13 @@ export default function FinderTab({ onMakeShorts }) {
     const [perVideo, setPerVideo] = useState(3);
     const [batchMsg, setBatchMsg] = useState('');
     const [batchBusy, setBatchBusy] = useState(false);
+    // An idea from Similar channels arrives as a ready search.
+    useEffect(() => {
+        let q0 = null;
+        try { q0 = localStorage.getItem('os_finder_q'); if (q0) localStorage.removeItem('os_finder_q'); } catch { /* ignore */ }
+        if (q0) search(q0);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     const toggleSel = (url) => setSelected((s) => (s.includes(url) ? s.filter((x) => x !== url) : [...s, url].slice(0, 10)));
     const runBatch = async () => {
         setBatchBusy(true);

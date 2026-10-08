@@ -78,6 +78,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
         } catch { return 'comedy'; }
     });
     const [songOwned, setSongOwned] = useState(false);
+    // Your own moments (comedy): Shorts cut exactly there, no AI pick.
+    const [moments, setMoments] = useState('');
     const [cricketMatch, setCricketMatch] = useState('');
     // Cricket: a match (name or video link) or a topic (rules, stats, records).
     const [cricketMode, setCricketMode] = useState('match');
@@ -211,6 +213,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             cricketMatch,
             cricketMode,
             bgMusic,
+            moments: genre === 'comedy' && !extraUrls.some((u) => u.trim()) ? moments.trim() : '',
         };
         try {
             localStorage.setItem('os_caption_script', captionScript);
@@ -637,6 +640,27 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     )}
                 </div>}
                 {lengthError && <p className="mt-1.5 text-[11px] text-danger" role="alert">{lengthError}</p>}
+
+                {genre === 'comedy' && !extraUrls.some((u) => u.trim()) && <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span className="eyebrow mr-1">your own moments</span>
+                    <input value={moments} onChange={(e) => setMoments(e.target.value)} maxLength={200}
+                        placeholder="optional: 12:30-13:20, 45:10-46:00"
+                        className="input-field !w-auto flex-1 min-w-[12rem] text-xs py-1.5" aria-label="your own moments" />
+                    {(() => {
+                        // A link copied at a time (?t=750 or &t=12m30s) offers that moment.
+                        const m = url.match(/[?&]t=(?:(\d+)h)?(?:(\d+)m)?(\d+)s?\b/);
+                        if (!m || moments.trim()) return null;
+                        const t = (Number(m[1] || 0) * 3600) + (Number(m[2] || 0) * 60) + Number(m[3] || 0);
+                        const clock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+                        return (
+                            <button type="button" onClick={() => setMoments(`${clock(t)}-${clock(t + 45)}`)}
+                                className="px-2.5 py-1 rounded-full border border-rule2 text-[11px] text-muted hover:text-ink">
+                                use {clock(t)} from the link
+                            </button>
+                        );
+                    })()}
+                    <span className="w-full text-[11px] text-muted">Leave empty and the AI picks the best moments. Each moment 5 seconds to 2 minutes, up to 5.</span>
+                </div>}
 
                 {genre === 'comedy' && <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className="eyebrow mr-1">subtitles</span>
