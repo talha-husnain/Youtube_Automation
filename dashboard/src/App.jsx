@@ -33,6 +33,7 @@ import PostPlan from './components/PostPlan';
 import CommentsTab from './components/CommentsTab';
 import ReadyBanner from './components/ReadyBanner';
 import LongVideoTab from './components/LongVideoTab';
+import SystemCheck from './components/SystemCheck';
 import { Logo, Wordmark, ThemePicker } from './components/Brand';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
@@ -1592,6 +1593,7 @@ function App() {
                   <Shield size={12} className="text-ok shrink-0" /> Privacy: keys only live in your browser (sent to backend just to process)
                 </div>
               </div>
+              {!billingEnabled && <SystemCheck />}
               {/* Self-hosted installs have no account page, so the agent
                   how-to lives here; cloud users get it (with OAuth) in Account. */}
               {/* AI-agent (MCP) connection card: hidden with the AI Agent section.

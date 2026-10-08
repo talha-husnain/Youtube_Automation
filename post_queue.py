@@ -18,6 +18,9 @@ import re
 import threading
 import time
 import unicodedata
+from typing import List
+
+from pydantic import BaseModel
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(ROOT, "output", ".post_queue.json")
@@ -146,3 +149,42 @@ def pinned_comment(client, model, clip, handle):
         raise RuntimeError("The AI did not return a usable comment. Try again.")
     update(item_id(clip["job_id"], clip["index"]), pinned_comment=text)
     return text
+
+
+RETITLE_PROMPT = """A Short on a Pakistani comedy channel ({handle}) is under-performing: {views} views.
+Current title: "{title}"
+What is said in the clip: {words}
+{rules}{winners}
+Write 3 NEW titles that would make more people tap it. Each one in everyday Roman Urdu (Latin
+letters only), 45-70 characters, then " #shorts". Put the situation in the first 4 words. Use a
+different proven pattern for each: a curiosity gap that sets up the punchline without giving it
+away, a specific situation, a direct question to the viewer. Truthful to the clip, at most one
+emoji before the hashtag, no swear words, never name the comedian or creator.
+For each, say in one short English sentence why it should beat the current title."""
+
+
+class Retitle(BaseModel):
+    title: str
+    why: str
+
+
+class Retitles(BaseModel):
+    titles: List[Retitle]
+
+
+def retitle(client, model, clip, handle, rules="", winners=()):
+    """3 better titles for a posted Short that is not getting views."""
+    from google.genai import types
+    win = ("\nThis channel's best titles so far:\n" + "\n".join(f"- {w}" for w in winners[:5])) if winners else ""
+    r = client.models.generate_content(
+        model=model, contents=RETITLE_PROMPT.format(
+            handle=handle or "this channel", views=clip.get("views") if clip.get("views") is not None else "few",
+            title=clip.get("title", ""), words=(clip.get("words") or "(not available)")[:1500],
+            rules=f"\n{rules}\n" if rules else "", winners=win),
+        config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=Retitles,
+                                           temperature=0.9))
+    got = [t for t in Retitles.model_validate_json(r.text).titles
+           if t.title.strip() and not re.search(r"[\u0900-\u097F\u0600-\u06FF]", t.title)]
+    if not got:
+        raise RuntimeError("The AI did not return usable titles. Try again.")
+    return [{"title": t.title.strip()[:100], "why": t.why.strip()} for t in got[:3]]

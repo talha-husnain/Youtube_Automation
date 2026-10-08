@@ -3066,6 +3066,42 @@ async def queue_pinned(iid: str):
     return {"pinned_comment": text}
 
 
+@app.post("/api/queue/{iid}/retitle")
+async def queue_retitle(iid: str):
+    """3 better titles for a posted Short that is not getting views."""
+    _local_only()
+    import post_queue
+    import short_kit
+    import what_works
+    m = re.fullmatch(r"([A-Za-z0-9_-]{1,80}):(\d{1,3})", iid)
+    if not m:
+        raise HTTPException(status_code=400, detail="Bad id")
+    job_id, index = m.group(1), int(m.group(2))
+    _state, clips = _job_clips(job_id)
+    clip = next((c for c in clips if c["index"] == index), None)
+    if not clip:
+        raise HTTPException(status_code=404, detail="That Short is no longer on this computer.")
+    row = post_queue._load().get(iid) or {}
+    report = what_works.load() or {}
+    winners = [r["title"] for r in report.get("top") or [] if r.get("title")]
+    clip = {**clip, "views": row.get("views"), "words": _clip_words(job_id, index)}
+    try:
+        titles = await _in_thread(post_queue.retitle, short_kit.gemini(), short_kit.text_model(), clip,
+                                  _channel_handle(), what_works.guidance(), winners)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(e)[:200])
+    return {"titles": titles}
+
+
+@app.get("/api/system-check")
+async def system_check_run():
+    """Plain-words health of a local install (system_check.py)."""
+    _local_only()
+    import system_check
+    rows = await _in_thread(system_check.run_all, OUTPUT_DIR, OUTPUT_MAX_GB, JOB_RETENTION_SECONDS)
+    return {"checks": rows}
+
+
 @app.get("/api/comments")
 async def comments_list(handle: str = ""):
     """New comments on the latest Shorts, each with a drafted reply."""

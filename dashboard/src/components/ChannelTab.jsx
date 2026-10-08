@@ -125,6 +125,7 @@ export default function ChannelTab({ notice }) {
                         YouTube keeps every video uploaded from your own Google project private until that project passes YouTube&apos;s API audit.
                         Fill in the <a href={AUDIT_FORM} target="_blank" rel="noreferrer" className="underline">audit form</a> once (free, can take a few weeks).
                         Until then, upload from the YouTube app; the report below works now.
+                        Ready-made answers for the form: docs/youtube-api-audit.md in the Shortkaar folder.
                     </p>
                 </div>
 

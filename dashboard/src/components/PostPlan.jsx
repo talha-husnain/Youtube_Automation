@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Loader2, Copy, Check, Download, ExternalLink, CheckCircle2, SkipForward, MessageCircle, RefreshCw, Repeat, Undo2, Youtube } from 'lucide-react';
+import { Loader2, Copy, Check, Download, ExternalLink, CheckCircle2, SkipForward, MessageCircle, RefreshCw, Repeat, Undo2, Youtube, Sparkles } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
 
@@ -120,6 +120,45 @@ function ReadyCard({ item, onStatus, ytConnected }) {
     );
 }
 
+function NewTitles({ item }) {
+    const [titles, setTitles] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const ask = async () => {
+        setBusy(true);
+        setError('');
+        try {
+            const d = await apiJson(`/api/queue/${encodeURIComponent(item.id)}/retitle`, { method: 'POST' });
+            setTitles(d.titles);
+        } catch (e) {
+            setError(e.detail || 'Could not write titles.');
+        } finally {
+            setBusy(false);
+        }
+    };
+    return (
+        <div className="w-full">
+            {!titles && (
+                <button onClick={ask} disabled={busy} className="btn-ghost px-2.5 py-1 text-[11px]" title="A better title can revive a Short; change it in YouTube Studio">
+                    {busy ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />} new title
+                </button>
+            )}
+            {error && <p className="text-[11px] text-danger">{error}</p>}
+            {titles && (
+                <div className="mt-2 space-y-1.5 rounded-input border border-rule p-2.5">
+                    <p className="text-[11px] text-muted">Pick one and paste it in YouTube Studio, Details, Title. Keep it the same here so views still match.</p>
+                    {titles.map((t) => (
+                        <div key={t.title} className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs text-ink flex-1 min-w-0 break-words">{t.title}<span className="block text-[11px] text-muted">{t.why}</span></span>
+                            <CopyButton text={t.title} label="copy" />
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function PostPlan({ onMakeShorts, onOpenAutopilot }) {
     const [data, setData] = useState(null);
     const [error, setError] = useState('');
@@ -210,6 +249,7 @@ export default function PostPlan({ onMakeShorts, onOpenAutopilot }) {
                                     </button>
                                 )}
                                 <button onClick={() => setStatus(p, 'ready')} className="btn-ghost px-2 py-1 text-[11px]" aria-label="back to ready"><Undo2 size={12} /></button>
+                                <NewTitles item={p} />
                             </div>
                         ))}
                     </div>

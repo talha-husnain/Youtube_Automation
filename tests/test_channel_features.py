@@ -475,3 +475,30 @@ def test_long_video_thumbnail_uses_a_frame_of_its_number_one(tmp_path, monkeypat
     assert r.status_code == 200 and r.json()["thumbnails"][0]["text"] == "HASO"
     assert seen["title"] == "Top 3 😂" and seen["context"] == "Intro line" and _os.path.exists(seen["ref"])
     assert _json.loads((lj / "thumbs.json").read_text())[0]["url"].endswith("a.jpg")
+
+
+def test_new_titles_are_roman_urdu_and_use_the_channel_rules():
+    seen = {}
+
+    class M:
+        def generate_content(self, **kw):
+            seen["prompt"] = kw["contents"]
+            return type("R", (), {"text": json.dumps({"titles": [
+                {"title": "Date pe waiter ne kya kar diya? 😂 #shorts", "why": "curiosity"},
+                {"title": "यह हिंदी है", "why": "x"}]})})()
+    got = pq.retitle(type("C", (), {"models": M()})(), "m", {"title": "Old", "views": 4, "words": "w"}, "@x",
+                     rules="- Start with the situation.", winners=["Police checking mein maal?"])
+    assert got == [{"title": "Date pe waiter ne kya kar diya? 😂 #shorts", "why": "curiosity"}]
+    assert "4 views" in seen["prompt"] and "Start with the situation" in seen["prompt"] and "Police checking" in seen["prompt"]
+
+
+def test_system_check_reads_plainly(monkeypatch, tmp_path):
+    import system_check as sc
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert sc.gemini()["status"] == "error"
+    assert sc._ver("2026.08.19") == sc._ver("2026.8.19") < sc._ver("2026.9.1")
+    (tmp_path / "f.bin").write_bytes(b"x" * 1000)
+    assert sc.disk(str(tmp_path), 25)["name"] == "Disk space"
+    assert sc.autopilot()["status"] == "warn"            # off by default
+    ap.save({"enabled": True, "channels": [{"url": "u"}]})
+    assert sc.autopilot()["status"] == "ok" and "Next run" in sc.autopilot()["detail"]
