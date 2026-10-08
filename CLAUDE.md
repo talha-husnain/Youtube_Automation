@@ -280,7 +280,32 @@ never finished:
   says 2026.8.19, compare as int tuples; keep the genai Client in a name or
   it is closed before the call). The audit form answers are in
   `docs/youtube-api-audit.md`.
-- Patch scripts: always the Write tool. A bash heredoc turned `\n` inside a
+- Round 3 (8-oct-2026), all local-only:
+  - **Your own moments** (`moments` on /api/process, comedy + one link):
+    `used_moments.parse_ranges` reads "12:30-13:20, 750-800" (5-119 s each,
+    up to 5; the clock pattern must not match inside a longer number or
+    "750-800" reads as "50-80"), env `MANUAL_CLIPS`, and
+    `main.manual_clips` replaces the AI pick at the top of
+    `get_viral_clips`, so every path (captions, audio, full download) obeys
+    it. Titles and copy still come from seo_copy.
+  - **Similar channels** (`rivals.py`, `/api/rivals*`): other channels'
+    /shorts tabs ranked by views; Gemini words the patterns and 5 ideas,
+    each with a search that opens Find videos (`os_finder_q`).
+  - **Telegram** (`telegram_notify.py`, `/api/telegram/*`, `/api/phone/send`):
+    the owner's bot, `TELEGRAM_BOT_TOKEN` in .env, chat id from getUpdates.
+    Errors never echo the token (it is in the URL). Keep new POST routes
+    out of `/api/queue/<word>`: `POST /api/queue/{iid}` is declared first.
+  - **Match watch** (Autopilot `match_watch`, `match_team`): a grounded
+    "did <team> finish a match in the last 24 h?" every 3 h; a new one
+    becomes a cricket Short at once (topic recorded, never twice).
+  - **Take voice** (`take_voice` -> `AI_TAKE_VOICE`, only short_kit's voice
+    names): samples at `/thumbnails/voice_samples/<voice>.wav` (never swept).
+  - Autopilot/batch jobs stopped by the quality gate say "quality too low
+    (224p), skipped" (`_autopilot_submit`), not a KeyError.
+- Patch scripts: always the Write tool, and write files back as LF (the
+  repo stores LF; some working files are CRLF on disk, and a half-CRLF file
+  got CLAUDE.md committed as CRLF once). The scratch `patchlib.patch`
+  pattern: read bytes, replace CRLF with LF, patch, write bytes. A bash heredoc turned `\n` inside a
   Python string into a real newline three times on 8-oct-2026.
 - Before starting uvicorn, check :8000: a server from an earlier session may
   still answer with old app.py code (job subprocesses load new code anyway).

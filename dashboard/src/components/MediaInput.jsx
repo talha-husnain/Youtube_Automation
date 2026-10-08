@@ -80,6 +80,20 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [songOwned, setSongOwned] = useState(false);
     // Your own moments (comedy): Shorts cut exactly there, no AI pick.
     const [moments, setMoments] = useState('');
+    // The AI take's voice (Gemini voices); Puck is the original default.
+    const [takeVoice, setTakeVoice] = useState(() => {
+        try { return localStorage.getItem('os_take_voice') || 'Puck'; } catch { return 'Puck'; }
+    });
+    const [voiceBusy, setVoiceBusy] = useState(false);
+    const playVoice = async () => {
+        setVoiceBusy(true);
+        try {
+            const r = await fetch(getApiUrl(`/api/take-voice/sample?voice=${encodeURIComponent(takeVoice)}`));
+            if (r.ok) new Audio(getApiUrl((await r.json()).url)).play().catch(() => {});
+        } catch { /* ignore */ } finally {
+            setVoiceBusy(false);
+        }
+    };
     const [cricketMatch, setCricketMatch] = useState('');
     // Cricket: a match (name or video link) or a topic (rules, stats, records).
     const [cricketMode, setCricketMode] = useState('match');
@@ -214,6 +228,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             cricketMode,
             bgMusic,
             moments: genre === 'comedy' && !extraUrls.some((u) => u.trim()) ? moments.trim() : '',
+            takeVoice: takeVoice === 'Puck' ? '' : takeVoice,
         };
         try {
             localStorage.setItem('os_caption_script', captionScript);
@@ -682,6 +697,23 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer" />
                     AI take after each clip: a short voiced reaction + a question for the comments
                 </label>}
+                {genre === 'comedy' && aiTake && <div className="mt-2 ml-6 flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] text-muted">take voice</span>
+                    <select value={takeVoice} aria-label="take voice"
+                        onChange={(e) => { setTakeVoice(e.target.value); try { localStorage.setItem('os_take_voice', e.target.value); } catch { /* ignore */ } }}
+                        className="input-field !w-auto text-xs py-1">
+                        <optgroup label="male">
+                            {['Puck', 'Charon', 'Fenrir', 'Orus', 'Iapetus'].map((v) => <option key={v} value={v}>{v}{v === 'Puck' ? ' (default)' : ''}</option>)}
+                        </optgroup>
+                        <optgroup label="female">
+                            {['Kore', 'Aoede', 'Leda', 'Zephyr', 'Despina'].map((v) => <option key={v} value={v}>{v}</option>)}
+                        </optgroup>
+                    </select>
+                    <button type="button" onClick={playVoice} disabled={voiceBusy}
+                        className="px-2.5 py-1 rounded-full border border-rule2 text-[11px] text-muted hover:text-ink">
+                        {voiceBusy ? <Loader2 size={11} className="animate-spin inline" /> : null} listen
+                    </button>
+                </div>}
 
                 {/* Advanced generation controls — collapsed by default; blank = AI decides */}
                 <div className="mt-4">

@@ -29,7 +29,8 @@ TICK_SECONDS = 60
 # Fields of a hand-made job that describe its look, kept for Autopilot.
 LOOK_FIELDS = ("output_format", "target_clips", "clip_min_seconds", "clip_max_seconds", "auto_hook",
                "auto_hook_style", "layouts", "frame_bg_color", "frame_crop", "frame_zoom", "frame_title",
-               "frame_outro", "frame_outro_seconds", "frame_handle", "caption_script", "ai_take", "bg_music")
+               "frame_outro", "frame_outro_seconds", "frame_handle", "caption_script", "ai_take", "bg_music",
+               "take_voice")
 BRAND = {"output_format": "framed", "frame_handle": "@PunchlineBazaar", "frame_bg_color": "#2B0F3D"}
 DEFAULTS = {
     "enabled": False, "run_at": "03:00", "comedy_per_day": 3, "cricket_per_day": 1,
@@ -39,6 +40,8 @@ DEFAULTS = {
     "weekly_long": False, "weekly_day": 6, "last_weekly": None,
     # Send each finished Autopilot Short to the owner's Telegram (telegram_notify.py).
     "auto_phone": False,
+    # Match watch: a result Short within hours of a followed team's match.
+    "match_watch": False, "match_team": "Pakistan", "last_match_check": 0,
     "last_run": None, "runs": [],
 }
 
@@ -76,7 +79,7 @@ def _clock(t, default):
 def save(patch):
     """Merge the user's changes, keeping every value in range."""
     cfg = settings()
-    for key in ("enabled", "cc_only", "auto_upload", "weekly_long", "auto_phone"):
+    for key in ("enabled", "cc_only", "auto_upload", "weekly_long", "auto_phone", "match_watch"):
         if key in patch:
             cfg[key] = bool(patch[key])
     for key, hi in (("comedy_per_day", 10), ("cricket_per_day", 5), ("min_minutes", 600), ("max_minutes", 600)):
@@ -85,6 +88,9 @@ def save(patch):
                 cfg[key] = max(0, min(hi, int(patch[key])))
             except (TypeError, ValueError):
                 pass
+    if "match_team" in patch:
+        team = " ".join(str(patch["match_team"] or "").split())[:40]
+        cfg["match_team"] = team or cfg["match_team"]
     if "weekly_day" in patch:
         try:
             cfg["weekly_day"] = max(0, min(6, int(patch["weekly_day"])))
@@ -243,6 +249,59 @@ def due(cfg, now=None):
             and now.strftime("%H:%M") >= cfg["run_at"])
 
 
+MATCH_CHECK_SECONDS = 3 * 3600
+MATCH_PROMPT = """Today is {today}. Did the {team} men's national cricket team finish an
+international match (Test, ODI or T20I) in the last 24 hours? Use Google Search.
+If yes, answer one line exactly: MATCH: <team> vs <team>, <series or tournament>, <date>
+If not, or if it is still being played, answer exactly: NONE"""
+
+
+def match_due(cfg, now=None):
+    now = now or time.time()
+    return bool(cfg.get("match_watch")) and now - float(cfg.get("last_match_check") or 0) >= MATCH_CHECK_SECONDS
+
+
+def find_finished_match(client, team, today=None):
+    """"Pakistan vs Sri Lanka, Asia Cup, 7 Oct 2026" when the team just played, else None."""
+    import re
+    import cricket_shorts
+    text, _sources = cricket_shorts.grounded(client, MATCH_PROMPT.format(
+        team=team, today=today or datetime.now().strftime("%d %B %Y")))
+    m = re.search(r"MATCH:\s*(.+)", text or "")
+    return " ".join(m.group(1).split())[:200] if m else None
+
+
+async def run_match_watch(submit, client_fn):
+    """Every 3 hours: if the followed team just finished a match, make its Short now."""
+    import used_moments
+    cfg = settings()
+    cfg["last_match_check"] = int(time.time())
+    _write(SETTINGS_FILE, cfg)
+    loop = asyncio.get_event_loop()
+    try:
+        line = await loop.run_in_executor(None, find_finished_match, client_fn(), cfg["match_team"])
+    except Exception as e:  # noqa: BLE001 — try again at the next check
+        print(f"⚠️ Match watch: {type(e).__name__}: {e}")
+        return None
+    if not line or used_moments.topic_used(line):
+        return None
+    run = {"at": int(time.time()), "date": datetime.now().strftime("%Y-%m-%d"), "reason": "match watch",
+           "jobs": [], "notes": []}
+    payload = {**look("cricket"), "genre": "cricket", "cricket_mode": "match", "cricket_match": line,
+               "acknowledged": True}
+    payload.pop("output_format", None)
+    try:
+        job_id = await submit(payload)
+        used_moments.record_topic(line, job_id)
+        run["jobs"].append({"job_id": job_id, "kind": "cricket", "label": line, "source": None, "clips": 1})
+    except Exception as e:  # noqa: BLE001
+        run["notes"].append(f"Could not start the match Short '{line[:60]}': {e}")
+    cfg = settings()
+    cfg["runs"] = ([run] + cfg.get("runs", []))[:30]
+    _write(SETTINGS_FILE, cfg)
+    return run
+
+
 def weekly_due(cfg, now=None):
     now = now or datetime.now()
     return (cfg.get("weekly_long") and now.weekday() == cfg.get("weekly_day", 6)
@@ -329,6 +388,9 @@ async def loop_forever(submit, job_clips, is_active=lambda: True, build_weekly=N
             if due(settings()):
                 print("🤖 Autopilot: making today's Shorts.")
                 await run_now(submit)
+            if match_due(settings()):
+                import short_kit
+                await run_match_watch(submit, short_kit.gemini)
             if build_weekly and weekly_due(settings()):
                 print("🤖 Autopilot: building this week's long video.")
                 await asyncio.get_event_loop().run_in_executor(None, run_weekly, build_weekly)

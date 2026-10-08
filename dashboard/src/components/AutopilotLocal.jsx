@@ -170,6 +170,13 @@ export default function AutopilotLocal({ onOpenChannelTab }) {
                         </label>
                     </div>
                     <div className="flex flex-wrap items-center gap-3 pt-1">
+                        <Toggle on={!!cfg.match_watch} onChange={(v) => set('match_watch', v)} label="match watch" />
+                        <span className="text-xs text-ink2">Match watch: when</span>
+                        <input value={cfg.match_team ?? 'Pakistan'} onChange={(e) => set('match_team', e.target.value)} aria-label="team"
+                            className="input-field !w-32 text-xs py-1" />
+                        <span className="text-xs text-ink2">finishes a match, make its Short right away (checked every 3 hours)</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 pt-1">
                         <Toggle on={!!cfg.auto_phone} onChange={(v) => set('auto_phone', v)} label="send to phone" />
                         <span className="text-xs text-ink2">Send each finished Short to my phone (Telegram, set it up in My channel)</span>
                     </div>

@@ -1106,6 +1106,8 @@ function App() {
         bg_music: data.genre === 'cricket' && data.bgMusic ? '1' : null,
         // Your own moments (comedy): "12:30-13:20, 45:10-46:00".
         moments: data.genre === 'comedy' && data.moments ? data.moments : null,
+        // The AI take's voice; absent = the default (Puck), as before.
+        take_voice: data.genre === 'comedy' && data.aiTake !== false && data.takeVoice ? data.takeVoice : null,
       };
 
       if (data.type === 'url') {

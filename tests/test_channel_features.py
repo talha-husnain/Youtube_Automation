@@ -699,3 +699,52 @@ def test_phone_send_route_is_not_taken_by_the_queue_item_route(monkeypatch):
     monkeypatch.setattr(tg, "status", lambda: {"connected": False})
     r = TestClient(app_module.app).post("/api/phone/send", json={})
     assert r.status_code == 400 and "Connect Telegram" in r.json()["detail"]
+
+
+# ------------------------------------------------------------- match watch, take voice
+
+def test_match_watch_makes_one_short_per_finished_match(monkeypatch):
+    import cricket_shorts
+    ap.save({"match_watch": True, "match_team": "  Pakistan  "})
+    assert ap.settings()["match_team"] == "Pakistan" and ap.match_due(ap.settings())
+    answers = iter(["MATCH: Pakistan vs India, Asian Games T20I, 02 October 2026", "NONE",
+                    "MATCH: Pakistan vs India, Asian Games T20I, 02 October 2026"])
+    monkeypatch.setattr(cricket_shorts, "grounded", lambda client, prompt: (next(answers), []))
+    sent = []
+
+    async def submit(payload):
+        sent.append(payload)
+        return f"job{len(sent)}"
+    run = asyncio.run(ap.run_match_watch(submit, lambda: None))
+    assert sent[0]["cricket_mode"] == "match" and sent[0]["cricket_match"].startswith("Pakistan vs India")
+    assert run["reason"] == "match watch" and not ap.match_due(ap.settings())     # checked: wait 3 h
+    assert asyncio.run(ap.run_match_watch(submit, lambda: None)) is None          # NONE: nothing
+    assert asyncio.run(ap.run_match_watch(submit, lambda: None)) is None          # same match: never twice
+    assert len(sent) == 1
+
+
+def test_take_voice_is_checked_and_kept_for_autopilot(monkeypatch):
+    app_module = pytest.importorskip("app")
+    import ai_take
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    c = TestClient(app_module.app)
+    r = c.post("/api/process", json={"url": "https://youtu.be/AAAAAAAAAAA", "genre": "comedy", "acknowledged": True,
+                                     "take_voice": "Hacker"})
+    assert r.status_code == 400 and r.json()["detail"] == "Unknown voice"
+    assert "take_voice" in ap.LOOK_FIELDS
+    assert c.get("/api/take-voice/sample", params={"voice": "Nope"}).status_code == 400
+    monkeypatch.setattr(app_module, "THUMBNAILS_DIR", str(__import__("pathlib").Path(__import__("tempfile").mkdtemp())))
+    made = []
+
+    def fake_speak(client, text, path, voice):
+        made.append(voice)
+        open(path, "wb").write(b"RIFF")
+        return 3.2
+    monkeypatch.setattr(ai_take, "speak", fake_speak)
+    import short_kit
+    monkeypatch.setattr(short_kit, "gemini", lambda: None)
+    assert c.get("/api/take-voice/sample", params={"voice": "Kore"}).json()["url"].endswith("/voice_samples/Kore.wav")
+    c.get("/api/take-voice/sample", params={"voice": "Kore"})
+    assert made == ["Kore"]                                                         # made once, then kept

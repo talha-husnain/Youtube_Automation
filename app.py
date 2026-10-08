@@ -3285,6 +3285,28 @@ async def queue_to_phone(request: Request):
     return {"sending": len(items)}
 
 
+@app.get("/api/take-voice/sample")
+async def take_voice_sample(voice: str):
+    """A 4-second sample of a take voice (made once, then kept)."""
+    _local_only()
+    import ai_take
+    import short_kit
+    if voice not in short_kit.MALE_VOICES + short_kit.FEMALE_VOICES:
+        raise HTTPException(status_code=400, detail="Unknown voice")
+    folder = os.path.join(THUMBNAILS_DIR, "voice_samples")     # never swept, like thumbnails
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{voice}.wav")
+    if not os.path.isfile(path):
+        try:
+            secs = await _in_thread(ai_take.speak, short_kit.gemini(),
+                                    "Yeh banda shaadi mein bhi aisa hi karta hoga? Comment mein batao!", path, voice)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Could not make the sample: {str(e)[:120]}")
+        if not secs:
+            raise HTTPException(status_code=502, detail="The voice service did not answer. Try again.")
+    return {"url": f"/thumbnails/voice_samples/{voice}.wav"}
+
+
 @app.get("/api/system-check")
 async def system_check_run():
     """Plain-words health of a local install (system_check.py)."""
@@ -3849,6 +3871,7 @@ async def process_endpoint(
     cricket_mode: Optional[str] = Form(None),
     bg_music: Optional[str] = Form(None),
     moments: Optional[str] = Form(None),
+    take_voice: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -3903,6 +3926,7 @@ async def process_endpoint(
         cricket_mode = body.get("cricket_mode")
         bg_music = body.get("bg_music")
         moments = body.get("moments")
+        take_voice = body.get("take_voice")
 
     # Two or more links: one short made of their best moments (compilation.py),
     # always in the framed style. One link stays a normal job.
@@ -4145,6 +4169,12 @@ async def process_endpoint(
     # The channel's spoken take after each clip (ai_take.py): on unless off.
     if ai_take is not None and str(ai_take).lower() in ("0", "false", "no"):
         env["AI_TAKE"] = "0"
+    # Its voice (dashboard "take voice"); only Gemini's own voice names pass.
+    if take_voice:
+        import short_kit
+        if str(take_voice) not in short_kit.MALE_VOICES + short_kit.FEMALE_VOICES:
+            raise HTTPException(status_code=400, detail="Unknown voice")
+        env["AI_TAKE_VOICE"] = str(take_voice)
 
     # FRAMED look (framed_layout.py): bad values fall back to its defaults
     # there, so only shape-check here.

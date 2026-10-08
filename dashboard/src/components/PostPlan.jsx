@@ -279,6 +279,12 @@ export default function PostPlan({ onMakeShorts, onOpenAutopilot, onNewShorts })
     const posted = items.filter((x) => x.status === 'posted').sort((a, b) => (b.views ?? -1) - (a.views ?? -1) || (b.posted_at || 0) - (a.posted_at || 0));
     const skipped = items.filter((x) => x.status === 'skipped');
     const best = Math.max(0, ...posted.map((p) => p.views || 0));
+    // "Needs a new title": out for 2+ days and well under the channel's usual
+    // views, while a title change can still give it a second push.
+    const seen = posted.filter((p) => p.views != null).map((p) => p.views).sort((a, b) => a - b);
+    const median = seen.length ? seen[Math.floor(seen.length / 2)] : 0;
+    const weak = (p) => p.views != null && p.posted_at && Date.now() / 1000 - p.posted_at > 2 * 86400
+        && seen.length >= 3 && p.views < 0.6 * median;
 
     return (
         <div className="h-full overflow-y-auto p-4 sm:p-8 animate-fade">
@@ -341,7 +347,8 @@ export default function PostPlan({ onMakeShorts, onOpenAutopilot, onNewShorts })
                         {posted.map((p) => (
                             <div key={p.id} className="card p-3 flex flex-wrap items-center gap-3">
                                 <span className={`readout w-20 text-right shrink-0 ${p.views && p.views === best ? 'text-brass' : ''}`}>{p.views == null ? '?' : `${p.views} views`}</span>
-                                <span className="text-sm text-ink2 flex-1 min-w-[50%] break-words">{p.title}</span>
+                                <span className="text-sm text-ink2 flex-1 min-w-[50%] break-words">{p.title}
+                                    {weak(p) && <span className="badge-warn ml-2 align-middle">needs a new title</span>}</span>
                                 {p.youtube_id && <a href={`https://youtube.com/shorts/${p.youtube_id}`} target="_blank" rel="noreferrer" className="text-muted hover:text-brass" aria-label="open on YouTube"><ExternalLink size={13} /></a>}
                                 {p.source_url && p.genre !== 'cricket' && (
                                     <button onClick={() => onMakeShorts(p.source_url)} className="btn-ghost px-2.5 py-1 text-[11px]" title="New Shorts from the same video, never the same moment">
