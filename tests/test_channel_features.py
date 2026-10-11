@@ -191,7 +191,7 @@ def test_videos_are_picked_new_first_round_robin_and_licence_checked(monkeypatch
     monkeypatch.setattr(ct, "channel_videos", lambda url, n: vids[url])
     monkeypatch.setattr(ct, "licence", lambda url: {"licence": "standard" if url.endswith("B1") else "creative_commons"})
     um.record("https://youtu.be/AAAAAAAAAA1", [(0, 60)])                  # partly used: comes after new ones
-    cfg = {**ap.DEFAULTS, "channels": [{"url": "A"}, {"url": "B"}], "cc_only": True}
+    cfg = {**ap.DEFAULTS, "channels": [{"url": "A"}, {"url": "B"}], "cc_only": True, "research": False}
     notes = []
     got = ap.pick_videos(cfg, 5, notes.append)
     assert [(v["title"], n) for v, n in got] == [("b2", 3), ("a1", 2)]
@@ -211,7 +211,7 @@ def test_ideas_skip_used_topics_and_alternate(monkeypatch):
 
 
 def test_a_run_submits_jobs_with_the_saved_look(monkeypatch):
-    ap.save({"channels": [{"url": "A"}], "comedy_per_day": 2, "cricket_per_day": 1, "cc_only": False})
+    ap.save({"channels": [{"url": "A"}], "comedy_per_day": 2, "cricket_per_day": 1, "cc_only": False, "research": False})
     ap.remember_look({"genre": "comedy", "frame_bg_color": "#111111"})
     monkeypatch.setattr(ap, "pick_videos", lambda cfg, n, log: [({"url": "https://youtu.be/AAAAAAAAAA1", "title": "a1"}, 2)])
     monkeypatch.setattr(ap, "pick_ideas", lambda cfg, n, log: [{"kind": "topic", "text": "Babar stats"}])
@@ -505,7 +505,7 @@ def test_system_check_reads_plainly(monkeypatch, tmp_path):
     (tmp_path / "f.bin").write_bytes(b"x" * 1000)
     assert sc.disk(str(tmp_path), 25)["name"] == "Disk space"
     assert sc.autopilot()["status"] == "warn"            # off by default
-    ap.save({"enabled": True, "channels": [{"url": "u"}]})
+    ap.save({"enabled": True, "channels": [{"url": "u"}], "research": False})
     assert sc.autopilot()["status"] == "ok" and "Next run" in sc.autopilot()["detail"]
 
 
@@ -782,3 +782,110 @@ def test_cc_sources_are_credited_in_the_copy_only(monkeypatch):
     monkeypatch.setenv("CREDIT_CC", "0")
     off = {"seo_description": "Hook"}
     assert credits.apply([off], ["https://youtu.be/AAAAAAAAAAA"]) == [] and off["seo_description"] == "Hook"
+
+
+# ------------------------------------------------------------- research + post all
+
+def test_research_finds_most_viewed_unused_cc_videos_with_no_channels(monkeypatch):
+    import channel_tools
+    import used_moments
+
+    def vid(i, views, channel, seconds=900):
+        return {"id": f"V{i:010d}", "url": f"https://www.youtube.com/watch?v=V{i:010d}", "title": f"video {i}",
+                "channel": channel, "channel_url": f"https://www.youtube.com/@{channel}", "seconds": seconds, "views": views}
+    pool = [vid(1, 900_000, "big"), vid(2, 800_000, "big"), vid(3, 700_000, "big"),    # 3rd from one channel: dropped
+            vid(4, 500_000, "mid"), vid(5, 5_000, "tiny"),                              # under min views: dropped
+            vid(6, 600_000, "short", seconds=60), vid(7, 400_000, "used")]              # too short / fully used
+    asked = []
+
+    def fake_search(q, cc=True, duration="any", date="any", sort="relevance", limit=20):
+        asked.append((q, cc, duration, sort))
+        return pool if duration == "long" else pool[:2]
+    monkeypatch.setattr(channel_tools, "search", fake_search)
+    monkeypatch.setattr(used_moments, "summary", lambda url: {"count": 3, "seconds": 900} if "V0000000007" in url
+                        else {"count": 0, "seconds": 0})
+    monkeypatch.setattr(channel_tools, "licence", lambda url: {"licence": "creative_commons"})
+    import short_kit
+    monkeypatch.setattr(short_kit, "gemini", lambda: None)
+    seen_ids = []
+
+    def fake_ask(client, schema, contents, **kw):
+        ids = [line.split('"id": "')[1][:11] for line in contents.splitlines() if '"id": "' in line]
+        seen_ids.extend(ids)
+        return schema.model_validate({"videos": [{"id": i, "keep": i != "V0000000004", "reason": "r"} for i in ids]})
+    monkeypatch.setattr(short_kit, "ask_json", fake_ask)
+    cfg = ap.save({"channels": [], "research": True, "research_queries": ["urdu comedy", " urdu  comedy ", ""],
+                   "min_views": 20000, "comedy_per_day": 7})
+    assert cfg["research_queries"] == ["urdu comedy"]                          # cleaned, no duplicates
+    assert all(cc and sort == "views" for _q, cc, _d, sort in asked) or not asked
+    notes = []
+    picked = ap.pick_videos(ap.settings(), 7, notes.append)
+    assert {d for _q, _c, d, _s in asked} == {"medium", "long"} and all(a[1] for a in asked)
+    assert "V0000000005" not in seen_ids and "V0000000006" not in seen_ids and "V0000000007" not in seen_ids
+    assert [v["id"][-1] for v, _n in picked] == ["1", "2"]                    # by views, 2 per channel, 4 vetted out
+    assert [n for _v, n in picked] == [3, 3]
+    assert any("kept 3 of 4" in n for n in notes)
+
+    def broken(*a, **k):
+        raise RuntimeError("down")
+    monkeypatch.setattr(short_kit, "ask_json", broken)
+    notes = []
+    assert ap.research_videos(ap.settings(), notes.append) == ([], [])       # unchecked finds are never used
+    assert any("none were used" in n for n in notes)
+
+
+def test_research_off_and_no_channels_asks_for_one(monkeypatch):
+    ap.save({"channels": [], "research": False, "comedy_per_day": 3, "cricket_per_day": 0})
+    sent = []
+
+    async def submit(payload):
+        sent.append(payload)
+        return "job"
+    run = asyncio.run(ap.run_now(submit))
+    assert not sent and any("turn on research" in n for n in run["notes"])
+
+
+def test_post_all_uploads_every_waiting_short_into_its_slot(monkeypatch):
+    app_module = pytest.importorskip("app")
+    import youtube_account
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    c = TestClient(app_module.app)
+    monkeypatch.setattr(youtube_account, "status", lambda: {"connected": False})
+    assert c.post("/api/youtube/post-all", json={}).status_code == 400
+    monkeypatch.setattr(youtube_account, "status", lambda: {"connected": True})
+    items = [{"id": "a:0", "job_id": "a", "index": 0, "status": "ready", "title": "A", "slot": "2026-10-13T13:00"},
+             {"id": "b:0", "job_id": "b", "index": 0, "status": "posted", "title": "B"},
+             {"id": "c:1", "job_id": "c", "index": 1, "status": "ready", "title": "C", "slot": "2026-10-12T19:00"},
+             {"id": "d:0", "job_id": "d", "index": 0, "status": "ready", "title": "D", "slot": "2026-10-14T13:00"}]
+    monkeypatch.setattr(app_module, "_plan_items", lambda: items)
+
+    def job_clips(job_id):
+        if job_id == "d":
+            return "missing", []
+        return "completed", [{"index": i, "path": f"{job_id}.mp4", "title": f"T{job_id}", "description": "D",
+                              "tags": ["x"], "genre": "comedy", "ai_made": False} for i in range(2)]
+    monkeypatch.setattr(app_module, "_job_clips", job_clips)
+    monkeypatch.setattr(youtube_account, "next_slots", lambda times, n=1: [__import__("datetime").datetime(2026, 10, 13, 13, 0).astimezone()])
+    done = []
+
+    def fake_upload(path, title, description, tags, genre, publish_at=None, ai_made=False, meta=None):
+        done.append((meta["job_id"], meta["clip_index"], publish_at is not None))
+        return {"status": "done" if meta["job_id"] != "a" else "failed", "error": "quota"}
+    monkeypatch.setattr(youtube_account, "upload_and_mark", fake_upload)
+    monkeypatch.setattr(app_module, "_spawn", lambda fn, *a: fn(*a))
+    r = c.post("/api/youtube/post-all", json={})
+    assert r.status_code == 200 and r.json()["total"] == 3                     # posted one left out
+    assert done == [("c", 1, True), ("a", 0, True)]                            # by slot, all scheduled
+    st = c.get("/api/youtube/post-all").json()
+    assert not st["running"] and st["done"] == 1 and st["failed"] == 2
+    assert any("quota" in e for e in st["errors"]) and any("no longer on this computer" in e for e in st["errors"])
+    monkeypatch.setattr(app_module, "_plan_items", lambda: [items[1]])
+    assert c.post("/api/youtube/post-all", json={}).json()["detail"] == "Nothing is waiting to be posted."
+
+
+def test_channel_errors_are_plain_words():
+    import channel_tools
+    assert "no videos" in channel_tools.why_not(Exception("ERROR: [youtube:tab] @JanRambo: This channel does not have a videos tab"))
+    assert "No YouTube channel" in channel_tools.why_not(Exception("HTTP Error 404: Not Found"))
+    assert "Try again" in channel_tools.why_not(Exception("timed out"))

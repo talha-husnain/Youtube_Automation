@@ -117,6 +117,20 @@ def channel_url(channel):
     return None
 
 
+def why_not(e):
+    """A channel error in plain words. yt-dlp's text was shown as the class
+    name only ("DownloadError"), which told the user nothing: @JanRambo is a
+    real channel with no videos tab, a mistyped handle is a 404."""
+    text = str(e).lower()
+    if "does not have a videos tab" in text or "does not have a shorts tab" in text:
+        return "That channel has no videos to clip. Check it is the creator's main channel."
+    if "404" in text or "not found" in text or "does not exist" in text:
+        return "No YouTube channel by that name. Check the @handle or paste the channel link."
+    if "private" in text or "terminated" in text or "unavailable" in text:
+        return "That channel is private or no longer available."
+    return "YouTube did not answer. Try again in a minute."
+
+
 def channel_videos(channel, limit=15):
     """Latest uploads, newest first: [{id, url, title, seconds, views, ...}]."""
     base = channel_url(channel)

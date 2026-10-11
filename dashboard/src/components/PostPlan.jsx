@@ -225,7 +225,72 @@ function WeekView({ ready, postTimes, onOpen, onFill }) {
     );
 }
 
-export default function PostPlan({ onMakeShorts, onOpenAutopilot, onNewShorts }) {
+// One button for the whole plan (POST /api/youtube/post-all): every waiting
+// Short is uploaded with its title, description and tags, each scheduled into
+// its posting time. Followed on GET until the run is over.
+function PostAll({ ready, yt, onDone, onOpenChannel }) {
+    const [run, setRun] = useState(null);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        apiJson('/api/youtube/post-all').then((r) => { if (r.running || r.finished) setRun(r); }).catch(() => {});
+    }, []);
+    useEffect(() => {
+        if (!run?.running) return undefined;
+        const t = setInterval(() => {
+            apiJson('/api/youtube/post-all').then((r) => {
+                setRun(r);
+                if (!r.running) onDone();
+            }).catch(() => {});
+        }, 3000);
+        return () => clearInterval(t);
+    }, [run?.running]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const start = async () => {
+        setError('');
+        try {
+            const d = await apiJson('/api/youtube/post-all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            setRun({ running: true, total: d.total, done: 0, failed: 0, errors: [] });
+        } catch (e) {
+            setError(e.detail || 'Could not start posting.');
+        }
+    };
+
+    if (!yt?.connected) {
+        return (
+            <div className="card p-4 flex flex-wrap items-center gap-3">
+                <Youtube size={18} className="text-muted shrink-0" />
+                <p className="text-xs text-muted flex-1 min-w-[14rem]">Connect your YouTube channel once, then every Short here goes up with one click, each at its posting time.</p>
+                <button onClick={onOpenChannel} className="btn-ghost px-3 py-1.5 text-xs">connect YouTube</button>
+            </div>
+        );
+    }
+    const busy = !!run?.running;
+    return (
+        <div className="card p-4 space-y-2">
+            <div className="flex flex-wrap items-center gap-3">
+                <Youtube size={18} className="text-brass shrink-0" />
+                <p className="text-xs text-muted flex-1 min-w-[14rem]">
+                    Uploads every waiting Short to {yt.channel?.title || 'your channel'} with its title, description and tags, each scheduled at its posting time.
+                </p>
+                <button onClick={start} disabled={busy || ready.length === 0} className="btn-primary px-4 py-2 text-sm">
+                    {busy ? <Loader2 size={15} className="animate-spin" /> : <Youtube size={15} />}
+                    {busy ? ` posting ${run.done + run.failed + 1} of ${run.total}` : ` post all ${ready.length} to YouTube`}
+                </button>
+            </div>
+            {busy && run.current && <p className="text-[11px] text-muted truncate">now: {run.current}</p>}
+            {run && !busy && run.total > 0 && (
+                <p className={`text-xs ${run.failed ? 'text-warn' : 'text-ok'}`}>
+                    {run.done} of {run.total} uploaded and scheduled{run.failed ? `, ${run.failed} failed` : ''}. Check them in YouTube Studio under Content.
+                </p>
+            )}
+            {(run?.errors || []).slice(0, 4).map((e) => <p key={e} className="text-[11px] text-danger break-words">{e}</p>)}
+            {error && <p className="text-xs text-danger" role="alert">{error}</p>}
+        </div>
+    );
+}
+
+export default function PostPlan({ onMakeShorts, onOpenAutopilot, onNewShorts, onOpenChannel }) {
     const [data, setData] = useState(null);
     const [error, setError] = useState('');
     const [view, setView] = useState('ready');
@@ -293,7 +358,7 @@ export default function PostPlan({ onMakeShorts, onOpenAutopilot, onNewShorts })
                     <p className="eyebrow mb-1.5">READY TO POST</p>
                     <h1 className="font-display lowercase text-2xl text-ink">your posting plan</h1>
                     <p className="text-xs text-muted mt-1 max-w-2xl leading-relaxed">
-                        Post each Short at its time from the YouTube app or Studio, paste the copy, pin the comment, then press posted.
+                        Post all of them to YouTube with one click, or each one by hand from the YouTube app (paste the copy, then press posted). Pin the comment after it goes live.
                         Shorts waiting here are kept for {data?.keep_days || 7} days.
                         Posting times: {(data?.post_times || []).join(', ')} (<button onClick={onOpenAutopilot} className="underline hover:text-brass">change</button>).
                     </p>
@@ -316,6 +381,7 @@ export default function PostPlan({ onMakeShorts, onOpenAutopilot, onNewShorts })
                     )}
                     <button onClick={load} className={`btn-ghost px-2.5 py-1.5 text-xs ${ready.length ? '' : 'ml-auto'}`}><RefreshCw size={13} /> refresh</button>
                 </div>
+                {data && <PostAll ready={ready} yt={yt} onDone={load} onOpenChannel={onOpenChannel || onOpenAutopilot} />}
                 {error && <p className="text-sm text-danger" role="alert">{error}</p>}
                 {phoneMsg && <p className="text-sm text-ink2">{phoneMsg}</p>}
                 {!data && !error && <div className="flex items-center gap-2 text-sm text-muted"><Loader2 size={16} className="animate-spin" /> loading…</div>}

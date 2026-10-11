@@ -310,7 +310,19 @@ never finished:
   the hashtag line of the description and the Instagram text, a short line
   into the TikTok caption; the long video credits every CC source of its
   Shorts (`sources` from each job's `.source.json`). Standard-licence
-  sources get nothing. Tests run with `.venv/Scripts/python` (the system
+  sources get nothing.
+- **Research + post all** (12-oct-2026): Autopilot `research` (default on)
+  runs each `research_queries` search with the CC filter, medium + long,
+  sorted by views (~7 s for 5), drops used / short / under `min_views`, then
+  one Gemini call (`autopilot_local.vet`) keeps only the creator's own
+  talking comedy: by views alone the top picks were an Indian web-series
+  re-upload, a drama episode and a reaction video; vetted, 11 of 40 stayed
+  (Jan Rambo, Aakash Deep, Shahveer Jafry...). A failed check uses none.
+  Max 2 a day per channel. `POST /api/youtube/post-all` uploads every ready
+  Short in slot order, each into the next free posting time (`_spawn` is
+  the test seam: patching `threading.Thread` breaks the executor).
+  videos.insert has its own 100-a-day quota now (quota calculator,
+  12-oct-2026), so 7+ a day fits. Posting times go up to 10. Tests run with `.venv/Scripts/python` (the system
   Python has no httpx) and `--continue-on-collection-errors`.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Loader2, Play, Plus, X, RefreshCw, Rocket, Clock, Upload } from 'lucide-react';
+import { Loader2, Play, Plus, X, RefreshCw, Rocket, Clock, Upload, Search } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
 // Daily Autopilot on this computer (GET/PUT /api/local-autopilot,
@@ -18,11 +18,11 @@ function Toggle({ on, onChange, label }) {
     );
 }
 
-function Num({ value, onChange, min = 0, max = 10, label }) {
+function Num({ value, onChange, min = 0, max = 10, label, wide }) {
     return (
         <input type="number" min={min} max={max} value={value} aria-label={label}
             onChange={(e) => onChange(Math.max(min, Math.min(max, Number(e.target.value) || 0)))}
-            className="input-field !w-20 text-sm py-1.5" />
+            className={`input-field ${wide ? '!w-28' : '!w-20'} text-sm py-1.5`} />
     );
 }
 
@@ -34,6 +34,7 @@ export default function AutopilotLocal({ onOpenChannelTab }) {
     const [busy, setBusy] = useState('');
     const [error, setError] = useState('');
     const [newChannel, setNewChannel] = useState('');
+    const [newQuery, setNewQuery] = useState('');
     const [newTime, setNewTime] = useState('21:00');
 
     const load = async () => {
@@ -196,9 +197,44 @@ export default function AutopilotLocal({ onOpenChannelTab }) {
                 </div>
 
                 <div className="card p-5 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <p className="text-sm text-ink flex items-center gap-1.5"><Search size={14} /> Find viral videos by itself</p>
+                            <p className="text-xs text-muted">Each day it searches YouTube for Creative Commons (reuse allowed) videos, takes the most viewed ones it has not used yet, and makes the comedy Shorts from them.</p>
+                        </div>
+                        <Toggle on={!!cfg.research} onChange={(v) => set('research', v)} label="research" />
+                    </div>
+                    {cfg.research && <>
+                        <div className="flex flex-wrap gap-2">
+                            {(cfg.research_queries || []).map((q) => (
+                                <span key={q} className="inline-flex items-center gap-1.5 pl-3 pr-1 py-1 rounded-full border border-rule2 text-xs text-ink2">
+                                    {q}
+                                    <button onClick={() => set('research_queries', cfg.research_queries.filter((x) => x !== q))} aria-label={`remove search ${q}`}
+                                        className="p-0.5 text-muted hover:text-danger"><X size={13} /></button>
+                                </span>
+                            ))}
+                        </div>
+                        <form onSubmit={(e) => { e.preventDefault(); const q = newQuery.trim(); if (q) { set('research_queries', [...(cfg.research_queries || []), q]); setNewQuery(''); } }}
+                            className="flex flex-wrap gap-2">
+                            <input value={newQuery} onChange={(e) => setNewQuery(e.target.value)} placeholder="add a search, like: urdu comedy show"
+                                className="input-field flex-1 min-w-[12rem] text-sm py-1.5" aria-label="new search" maxLength={80} />
+                            <button type="submit" disabled={!newQuery.trim() || (cfg.research_queries || []).length >= 8} className="btn-ghost px-3 py-1.5 text-xs">
+                                <Plus size={13} /> add search
+                            </button>
+                        </form>
+                        <label className="flex items-center gap-2 text-xs text-muted">
+                            only videos with at least
+                            <Num value={cfg.min_views ?? 20000} onChange={(v) => set('min_views', v)} max={100000000} label="min views" wide />
+                            views
+                        </label>
+                        <p className="text-[11px] text-muted leading-relaxed">The Creative Commons label is what the uploader says. Many are re-uploads of stage shows by channels that do not own them, so a claim can still happen. The description always credits the original video.</p>
+                    </>}
+                </div>
+
+                <div className="card p-5 space-y-3">
                     <p className="text-sm text-ink">Source channels for comedy</p>
                     <p className="text-xs text-muted">Each day it takes their newest videos it has not used yet, a few Shorts per video, never the same moment twice.</p>
-                    {cfg.channels.length === 0 && <p className="text-xs text-warn">No channel yet. Add one below or from Find videos.</p>}
+                    {cfg.channels.length === 0 && !cfg.research && <p className="text-xs text-warn">No channel yet. Add one below or from Find videos, or turn on Find viral videos.</p>}
                     <div className="flex flex-wrap gap-2">
                         {cfg.channels.map((c) => (
                             <span key={c.url} className="inline-flex items-center gap-1.5 pl-3 pr-1 py-1 rounded-full border border-rule2 text-xs text-ink2">

@@ -2752,7 +2752,7 @@ async def finder_channel(url: str):
     try:
         return await _in_thread(channel_tools.channel_info, url)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Could not read that channel: {type(e).__name__}")
+        raise HTTPException(status_code=502, detail=channel_tools.why_not(e))
 
 
 def _job_clips(job_id):
@@ -2902,6 +2902,75 @@ async def youtube_upload(request: Request):
             {"job_id": job_id, "clip_index": clip["index"]})
     asyncio.get_event_loop().run_in_executor(None, functools.partial(youtube_account.upload_and_mark, *args))
     return {"ok": True, "publish_at": publish_at.isoformat() if publish_at else None}
+
+
+# "Post all to YouTube" (Ready to post): every waiting Short, one after the
+# other, each scheduled into the next free posting time. One run at a time;
+# the dashboard follows it on GET.
+_post_all = {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "errors": [], "finished": None}
+_post_all_lock = threading.Lock()
+
+
+def _spawn(fn, *args):
+    threading.Thread(target=fn, args=args, daemon=True).start()
+
+
+def _post_all_run(items):
+    import autopilot_local
+    import youtube_account
+    st = _post_all
+    try:
+        for it in items:
+            st["current"] = (it.get("title") or "")[:80]
+            _state, clips = _job_clips(it["job_id"])
+            clip = next((c for c in clips if c["index"] == it["index"]), None)
+            if not clip:
+                st["failed"] += 1
+                st["errors"].append(f"{st['current'][:50]}: no longer on this computer")
+                continue
+            slot = youtube_account.next_slots(autopilot_local.settings()["post_times"], 1)[0]
+            row = youtube_account.upload_and_mark(
+                clip["path"], clip["title"], clip["description"], clip["tags"], clip["genre"],
+                publish_at=slot, ai_made=clip["ai_made"],
+                meta={"job_id": it["job_id"], "clip_index": it["index"], "post_all": True})
+            if row.get("status") == "done":
+                st["done"] += 1
+            else:
+                st["failed"] += 1
+                st["errors"].append(f"{st['current'][:50]}: {row.get('error') or 'upload failed'}"[:300])
+    finally:
+        st.update(running=False, current="", finished=int(time.time()))
+
+
+@app.post("/api/youtube/post-all")
+async def youtube_post_all(request: Request):
+    """Upload every Short waiting in Ready to post (or the ``ids`` given)."""
+    _local_only()
+    import youtube_account
+    if not youtube_account.status()["connected"]:
+        raise HTTPException(status_code=400, detail="Connect your YouTube channel first (My channel).")
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    ids = set(body.get("ids") or []) if isinstance(body, dict) else set()
+    items = [x for x in await _in_thread(_plan_items)
+             if x["status"] == "ready" and (not ids or x["id"] in ids)]
+    items.sort(key=lambda x: x.get("slot") or "")
+    if not items:
+        raise HTTPException(status_code=400, detail="Nothing is waiting to be posted.")
+    with _post_all_lock:
+        if _post_all["running"]:
+            raise HTTPException(status_code=409, detail="Already posting. Wait for it to finish.")
+        _post_all.update(running=True, total=len(items), done=0, failed=0, current="", errors=[], finished=None)
+    _spawn(_post_all_run, items)
+    return {"ok": True, "total": len(items)}
+
+
+@app.get("/api/youtube/post-all")
+async def youtube_post_all_status():
+    _local_only()
+    return dict(_post_all)
 
 
 @app.get("/api/report")

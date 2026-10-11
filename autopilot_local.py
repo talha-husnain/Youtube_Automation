@@ -12,6 +12,12 @@ The look of each Short is the look of the last job made by hand for that
 type (``output/.last_settings.json``, written by /api/process), so the plan is
 the only thing Autopilot asks for. A day the laptop was off at ``run_at`` is
 made as soon as the server runs again that day.
+
+With ``research`` on (default) it also finds the videos by itself: every
+``research_queries`` search runs with YouTube's Creative Commons filter, and
+the most-viewed long videos nobody clipped yet (``min_views`` and up, at most
+``RESEARCH_PER_CHANNEL`` a day from one channel) join the source channels'
+newest uploads. So an empty channel list still gives a full day of Shorts.
 """
 import asyncio
 import json
@@ -25,6 +31,10 @@ SETTINGS_FILE = os.path.join(ROOT, "output", ".autopilot.json")
 LAST_SETTINGS_FILE = os.path.join(ROOT, "output", ".last_settings.json")
 CLIPS_PER_VIDEO = 3
 MAX_CHANNELS = 10
+MAX_QUERIES = 8
+RESEARCH_PER_CHANNEL = 2
+RESEARCH_QUERIES = ["pakistani stand up comedy", "urdu stand up comedy", "pakistani comedy show",
+                    "urdu funny poetry mushaira", "pakistani comedy podcast"]
 TICK_SECONDS = 60
 # Fields of a hand-made job that describe its look, kept for Autopilot.
 LOOK_FIELDS = ("output_format", "target_clips", "clip_min_seconds", "clip_max_seconds", "auto_hook",
@@ -42,6 +52,8 @@ DEFAULTS = {
     "auto_phone": False,
     # Match watch: a result Short within hours of a followed team's match.
     "match_watch": False, "match_team": "Pakistan", "last_match_check": 0,
+    # Research: find viral reuse-allowed videos by search, not only the channels.
+    "research": True, "research_queries": RESEARCH_QUERIES, "min_views": 20000,
     "last_run": None, "runs": [],
 }
 
@@ -79,15 +91,19 @@ def _clock(t, default):
 def save(patch):
     """Merge the user's changes, keeping every value in range."""
     cfg = settings()
-    for key in ("enabled", "cc_only", "auto_upload", "weekly_long", "auto_phone", "match_watch"):
+    for key in ("enabled", "cc_only", "auto_upload", "weekly_long", "auto_phone", "match_watch", "research"):
         if key in patch:
             cfg[key] = bool(patch[key])
-    for key, hi in (("comedy_per_day", 10), ("cricket_per_day", 5), ("min_minutes", 600), ("max_minutes", 600)):
+    for key, hi in (("comedy_per_day", 10), ("cricket_per_day", 5), ("min_minutes", 600), ("max_minutes", 600),
+                    ("min_views", 100_000_000)):
         if key in patch:
             try:
                 cfg[key] = max(0, min(hi, int(patch[key])))
             except (TypeError, ValueError):
                 pass
+    if "research_queries" in patch and isinstance(patch["research_queries"], list):
+        qs = [" ".join(str(q or "").split())[:80] for q in patch["research_queries"]]
+        cfg["research_queries"] = list(dict.fromkeys(q for q in qs if q))[:MAX_QUERIES]
     if "match_team" in patch:
         team = " ".join(str(patch["match_team"] or "").split())[:40]
         cfg["match_team"] = team or cfg["match_team"]
@@ -100,7 +116,8 @@ def save(patch):
         cfg["run_at"] = _clock(patch["run_at"], cfg["run_at"])
     if "post_times" in patch and isinstance(patch["post_times"], list):
         times = sorted({_clock(t, "") for t in patch["post_times"]} - {""})
-        cfg["post_times"] = times[:6] or cfg["post_times"]
+        # Up to 10 a day: 7 research Shorts + cricket need more than the old 6.
+        cfg["post_times"] = times[:10] or cfg["post_times"]
     if patch.get("cricket_kinds") in ("both", "match", "topic"):
         cfg["cricket_kinds"] = patch["cricket_kinds"]
     if "channels" in patch and isinstance(patch["channels"], list):
@@ -132,9 +149,105 @@ def looks_saved():
 
 # ------------------------------------------------------------------ picking
 
+def research_videos(cfg, log):
+    """Most-viewed Creative Commons videos for the research searches, unused
+    first, at most RESEARCH_PER_CHANNEL per channel. Search results carry
+    the CC filter; pick_videos still checks each licence before a job."""
+    import channel_tools
+    import used_moments
+    lo, hi = cfg["min_minutes"] * 60, cfg["max_minutes"] * 60
+    queries = cfg.get("research_queries") or RESEARCH_QUERIES
+
+    def _one(q):
+        try:
+            # "medium" is 4-20 min and "long" over 20: both, never <4 min clips.
+            return channel_tools.search(q, cc=True, duration="medium", sort="views", limit=20) + \
+                channel_tools.search(q, cc=True, duration="long", sort="views", limit=20)
+        except Exception as e:  # noqa: BLE001 — one failed search must not stop the day
+            log(f"Search failed for '{q}': {type(e).__name__}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        found = [v for vs in pool.map(_one, queries) for v in vs]
+    seen, cands = set(), []
+    for v in sorted(found, key=lambda v: v.get("views") or 0, reverse=True):
+        if v["id"] in seen or not v.get("seconds") or not lo <= v["seconds"] <= hi:
+            continue
+        seen.add(v["id"])
+        if (v.get("views") or 0) < cfg.get("min_views", 0):
+            continue
+        used = used_moments.summary(v["url"])
+        if used["count"] and used["seconds"] >= 0.4 * v["seconds"]:
+            continue
+        v["_partly"] = bool(used["count"])
+        cands.append(v)
+    cands = vet(cands[:VET_MAX], log)
+    per_channel, fresh, partly = {}, [], []
+    for v in cands:
+        key = v.get("channel_url") or v.get("channel")
+        if per_channel.get(key, 0) >= RESEARCH_PER_CHANNEL:
+            continue
+        per_channel[key] = per_channel.get(key, 0) + 1
+        (partly if v.pop("_partly") else fresh).append(v)
+    log(f"Research: {len(fresh)} new and {len(partly)} partly used videos from {len(queries)} searches.")
+    return fresh, partly
+
+
+VET_MAX = 40
+VET_PROMPT = """You choose source videos for "Punchline Bazaar", a Pakistani comedy Shorts
+channel: short funny clips with Roman Urdu titles for a Pakistani audience.
+
+Every candidate below is marked Creative Commons on YouTube, but many of those
+are re-uploads by channels that do not own them, and a re-upload gets the
+channel copyright claims. Keep a video only when ALL of these are true:
+- it is talking comedy: stand-up, a comedy or talk show, funny mushaira or
+  poetry, a comedy podcast or interview with a comedian;
+- it is in Urdu, Hindi or Punjabi;
+- the channel looks like the original creator or the show's own channel (the
+  comedian's or the show's own name), not a channel re-uploading a TV
+  channel's programme, a film, a web series or another creator's video;
+- it is not a reaction video, a drama serial or episode, a film or web series,
+  a news clip, a song, or a compilation of other people's clips.
+When unsure, do not keep it. Answer for every candidate: its id, keep, and a
+reason of a few words."""
+
+
+def vet(cands, log):
+    """Keep the research finds that look like the creator's own talking comedy
+    (one Gemini call for the day). A failed check keeps none: unattended, a
+    day without research Shorts beats a day of re-uploads."""
+    if not cands:
+        return cands
+    from pydantic import BaseModel
+    import short_kit
+
+    class Verdict(BaseModel):
+        id: str
+        keep: bool
+        reason: str
+
+    class Verdicts(BaseModel):
+        videos: list[Verdict]
+
+    lines = "\n".join(json.dumps({"id": v["id"], "title": v["title"][:150], "channel": v.get("channel", "")[:80],
+                                   "minutes": round((v.get("seconds") or 0) / 60), "views": v.get("views")},
+                                  ensure_ascii=False) for v in cands)
+    try:
+        got = short_kit.ask_json(short_kit.gemini(), Verdicts, f"{VET_PROMPT}\n\nCandidates:\n{lines}")
+    except Exception as e:  # noqa: BLE001
+        log(f"Could not check the research finds ({type(e).__name__}), so none were used today.")
+        return []
+    keep = {x.id for x in got.videos if x.keep}
+    why = {x.id: x.reason for x in got.videos}
+    dropped = [v for v in cands if v["id"] not in keep]
+    log(f"Research check kept {len(cands) - len(dropped)} of {len(cands)} videos"
+        + (f" (dropped e.g. {dropped[0]['title'][:40]!r}: {why.get(dropped[0]['id'], 'not kept')[:60]})" if dropped else "") + ".")
+    return [v for v in cands if v["id"] in keep]
+
+
 def pick_videos(cfg, clips_needed, log):
     """[(video, clips)] for today: newest unused videos first, round robin over
-    the channels, licence checked when ``cc_only``."""
+    the channels, then the research finds; licence checked when ``cc_only``."""
     import channel_tools
     import used_moments
     lo, hi = cfg["min_minutes"] * 60, cfg["max_minutes"] * 60
@@ -143,7 +256,7 @@ def pick_videos(cfg, clips_needed, log):
         try:
             return channel_tools.channel_videos(ch["url"], 15)
         except Exception as e:  # noqa: BLE001 — one dead channel must not stop the day
-            log(f"Could not read {ch.get('name') or ch['url']}: {type(e).__name__}")
+            log(f"Could not read {ch.get('name') or ch['url']}: {channel_tools.why_not(e)}")
             return []
 
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -161,6 +274,11 @@ def pick_videos(cfg, clips_needed, log):
                 fresh.append(v)
             elif used["seconds"] < 0.4 * v["seconds"]:
                 partly.append(v)
+    if cfg.get("research"):
+        r_fresh, r_partly = research_videos(cfg, log)
+        known = {v["url"] for v in fresh + partly}
+        fresh += [v for v in r_fresh if v["url"] not in known]
+        partly += [v for v in r_partly if v["url"] not in known]
     picked, left = [], clips_needed
     for v in fresh + partly:
         if left <= 0:
@@ -207,10 +325,10 @@ async def run_now(submit, reason="schedule"):
     log = run["notes"].append
     loop = asyncio.get_event_loop()
 
-    if cfg["comedy_per_day"] and cfg["channels"]:
+    if cfg["comedy_per_day"] and (cfg["channels"] or cfg.get("research")):
         picked = await loop.run_in_executor(None, pick_videos, cfg, cfg["comedy_per_day"], log)
         if not picked:
-            log("No new comedy video found on your source channels today.")
+            log("No new reuse-allowed comedy video found today.")
         for video, n in picked:
             payload = {**look("comedy"), "url": video["url"], "genre": "comedy", "acknowledged": True,
                        "target_clips": n}
@@ -221,7 +339,7 @@ async def run_now(submit, reason="schedule"):
             except Exception as e:  # noqa: BLE001
                 log(f"Could not start a job for {video['title'][:60]}: {e}")
     elif cfg["comedy_per_day"]:
-        log("Add a source channel to make comedy Shorts.")
+        log("Add a source channel or turn on research to make comedy Shorts.")
 
     if cfg["cricket_per_day"]:
         ideas = await loop.run_in_executor(None, pick_ideas, cfg, cfg["cricket_per_day"], log)

@@ -2016,6 +2016,7 @@ function App() {
               }}
               onOpenAutopilot={() => setActiveTab('local-autopilot')}
               onNewShorts={() => setActiveTab('finder')}
+              onOpenChannel={() => setActiveTab('channel')}
             />
           )}
           {activeTab === 'comments' && !billingEnabled && <CommentsTab />}
