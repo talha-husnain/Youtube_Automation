@@ -346,6 +346,8 @@ def run(urls, output_dir, pipeline):
                    for w in " ".join(c["dub_lines"]).split()]} for c in clips]}
     seo_copy.apply(clips, dub_text, source_title="",
                    context=SEO_CONTEXT.format(premise="; ".join(c["dub_premise"] for c in clips)))
+    import credits
+    credits.apply(clips, [url])
     kit.finish(output_dir, stem, clips, None, pipeline, extra={"genre": "movies"}, margin=margin)
     used_moments.record(url, ranges, os.path.basename(output_dir))
     for path in [os.path.join(output_dir, ".movie")] + [

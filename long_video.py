@@ -199,10 +199,15 @@ def build(job_dir, shorts, handle, bg="#2B0F3D", client=None, model=None, progre
             progress(f"copy fallback ({type(e).__name__})")
     title = (copy.title if copy else f"Top {n} funny moments is hafte ke 😂")[:100]
     tags = [h if h.startswith("#") else f"#{h}" for h in (copy.hashtags if copy else ["#comedy", "#funny"])][:5]
+    # Creative Commons sources are credited here, never on screen (credits.py).
+    import credits
+    credit = credits.block(credits.sources([u for s in shorts for u in s.get("sources") or []])) \
+        if credits._on() else ""
     description = "\n\n".join(x for x in [
         copy.intro if copy else "Is hafte ke sabse funny moments, ek hi video mein.",
         "Chapters:\n" + chapters(starts),
         f"Subscribe karo {handle} for daily funny Shorts." if handle else "",
+        credit,
         " ".join(tags)] if x)
     for p, _ in parts:
         os.remove(p)

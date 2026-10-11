@@ -2654,6 +2654,10 @@ if __name__ == '__main__':
             import seo_copy
             seo_copy.apply(clips_data['shorts'], transcript,
                            source_title=video_title.replace("_", " "))
+            # Creative Commons sources are credited in the description (credits.py).
+            if args.url:
+                import credits
+                credits.apply(clips_data['shorts'], [args.url])
             # The channel's spoken take after each clip (ai_take.py), framed only.
             takes = {}
             if output_format == "framed" and transcript is not None:

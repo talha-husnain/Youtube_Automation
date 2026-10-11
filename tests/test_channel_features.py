@@ -411,7 +411,9 @@ def test_hook_text_files_have_plain_line_ends(tmp_path):
 
 
 @pytest.mark.skipif(not _shutil.which("ffmpeg"), reason="ffmpeg not installed")
-def test_a_long_video_is_built_wide_with_end_cards_cut(tmp_path):
+def test_a_long_video_is_built_wide_with_end_cards_cut(tmp_path, monkeypatch):
+    import channel_tools
+    monkeypatch.setattr(channel_tools, "licence", lambda url: {"licence": "creative_commons", "title": "Stage show", "channel": "FSD Fun Zone"})
     shorts = []
     for k in range(3):
         src = str(tmp_path / f"s{k}.mp4")
@@ -419,7 +421,8 @@ def test_a_long_video_is_built_wide_with_end_cards_cut(tmp_path):
                  "-f", "lavfi", "-i", "sine=f=440:d=4", "-shortest", "-c:v", "libx264", "-c:a", "aac", src], check=True)
         keep = lv.keep_seconds(src, {"outro": True, "outro_seconds": 1.5})
         assert abs(keep - 2.5) < 0.1
-        shorts.append({"id": f"j:{k}", "path": src, "hook": f"Hook number {k} 😂", "title": "t", "keep_seconds": keep})
+        shorts.append({"id": f"j:{k}", "path": src, "hook": f"Hook number {k} 😂", "title": "t", "keep_seconds": keep,
+                       "sources": ["https://youtu.be/AAAAAAAAAAA"]})
     meta = lv.build(str(tmp_path / "job"), shorts, "@PunchlineBazaar", progress=lambda s: None)
     out = tmp_path / "job" / [f for f in __import__("os").listdir(tmp_path / "job") if f.endswith("_clip_1.mp4")][0]
     dims = _sp.check_output(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "stream=width,height",
@@ -429,6 +432,8 @@ def test_a_long_video_is_built_wide_with_end_cards_cut(tmp_path):
     assert abs(total - (lv.INTRO_SECONDS + 3 * 2.5 + lv.OUTRO_SECONDS)) < 0.6
     d = meta["shorts"][0]["seo_description"]
     assert "0:00 Intro" in d and "#3 Hook number 0" in d and "#1 Hook number 2" in d
+    # One credit for the one CC source, after the chapters and before the hashtags; never on screen.
+    assert d.count("FSD Fun Zone") == 1 and d.index("Chapters") < d.index("Credit") < d.index("#comedy")
     assert meta["genre"] == "long" and not any(f.startswith(".part") for f in __import__("os").listdir(tmp_path / "job"))
     with pytest.raises(ValueError):
         lv.build(str(tmp_path / "x"), shorts[:2], "@x")
@@ -748,3 +753,32 @@ def test_take_voice_is_checked_and_kept_for_autopilot(monkeypatch):
     assert c.get("/api/take-voice/sample", params={"voice": "Kore"}).json()["url"].endswith("/voice_samples/Kore.wav")
     c.get("/api/take-voice/sample", params={"voice": "Kore"})
     assert made == ["Kore"]                                                         # made once, then kept
+
+
+# ------------------------------------------------------------- credits for CC sources
+
+def test_cc_sources_are_credited_in_the_copy_only(monkeypatch):
+    import channel_tools
+    import credits
+    lic = {"AAAAAAAAAAA": {"licence": "creative_commons", "title": "Stage Drama 2016", "channel": "FSD Fun Zone"},
+           "BBBBBBBBBBB": {"licence": "standard", "title": "Big Show", "channel": "Real Owner"}}
+    monkeypatch.setattr(channel_tools, "licence", lambda url: lic[url[-11:]])
+    clip = {"seo_description": "Hook\n\nBody\n\nFollow @PunchlineBazaar for daily clips\n\n#shorts #funny",
+            "video_description_for_instagram": "Hook\n\nBody\n\n#shorts #funny #comedy",
+            "video_description_for_tiktok": "Funny one 😂 #shorts", "seo_title": "Title stays"}
+    found = credits.apply([clip], ["https://www.youtube.com/watch?v=AAAAAAAAAAA", "https://youtu.be/AAAAAAAAAAA"])
+    assert len(found) == 1                                                     # same video once
+    d = clip["seo_description"]
+    assert '"Stage Drama 2016" by FSD Fun Zone: https://www.youtube.com/watch?v=AAAAAAAAAAA' in d
+    assert d.index("Follow") < d.index("Credit") < d.index("#shorts") and d.endswith("#shorts #funny")
+    assert "FSD Fun Zone" in clip["video_description_for_instagram"]
+    assert clip["video_description_for_tiktok"].startswith("Funny one")
+    assert "Credit: FSD Fun Zone (CC BY)" in clip["video_description_for_tiktok"]
+    assert clip["seo_title"] == "Title stays"                                  # nothing on screen or in the title
+    credits.apply([clip], ["https://youtu.be/AAAAAAAAAAA"])
+    assert clip["seo_description"].count("Credit") == 1                        # never twice
+    plain = {"seo_description": "Hook\n\n#shorts"}
+    assert credits.apply([plain], ["https://youtu.be/BBBBBBBBBBB"]) == [] and "credit" not in plain   # standard: owner's rule
+    monkeypatch.setenv("CREDIT_CC", "0")
+    off = {"seo_description": "Hook"}
+    assert credits.apply([off], ["https://youtu.be/AAAAAAAAAAA"]) == [] and off["seo_description"] == "Hook"

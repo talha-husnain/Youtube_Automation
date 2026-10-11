@@ -3433,8 +3433,10 @@ def _start_long_video(ids):
                 except (OSError, ValueError):
                     cfg = {}
                 path = os.path.join(OUTPUT_DIR, c["video_url"].split("/videos/", 1)[1].replace("/", os.sep))
+                src = _job_source(src_dir)
                 shorts.append({"id": c["id"], "path": path, "hook": c["hook"] or c["title"], "title": c["title"],
-                               "keep_seconds": long_video.keep_seconds(path, cfg), "bg": cfg.get("bg")})
+                               "keep_seconds": long_video.keep_seconds(path, cfg), "bg": cfg.get("bg"),
+                               "sources": src.get("urls") or ([src["url"]] if src.get("url") else [])})
             bg = next((x["bg"] for x in shorts if x.get("bg")), "#2B0F3D")
             try:
                 client, model = short_kit.gemini(), short_kit.text_model()

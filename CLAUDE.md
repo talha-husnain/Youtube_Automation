@@ -302,6 +302,16 @@ never finished:
     names): samples at `/thumbnails/voice_samples/<voice>.wav` (never swept).
   - Autopilot/batch jobs stopped by the quality gate say "quality too low
     (224p), skipped" (`_autopilot_submit`), not a KeyError.
+- **Credit for Creative Commons sources** (`credits.py`, `CREDIT_CC=0` off,
+  12-oct-2026): CC BY allows reuse only with credit (YouTube answer/2797468),
+  which the "never name the creator" rule broke. The owner agreed to credit
+  in the copy, never on screen: after seo_copy (main, compilation, movie
+  dub) a "Credit (original video, licensed under CC BY)" block goes before
+  the hashtag line of the description and the Instagram text, a short line
+  into the TikTok caption; the long video credits every CC source of its
+  Shorts (`sources` from each job's `.source.json`). Standard-licence
+  sources get nothing. Tests run with `.venv/Scripts/python` (the system
+  Python has no httpx) and `--continue-on-collection-errors`.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file
   got CLAUDE.md committed as CRLF once). The scratch `patchlib.patch`

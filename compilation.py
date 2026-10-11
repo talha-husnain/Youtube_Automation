@@ -283,6 +283,8 @@ def run(urls, output_dir, pipeline):
                             f"from {len(used_videos)} different videos, joined back to back. "
                             "Write the copy for the whole compilation, not one moment."),
                    text_limit=4000)
+    import credits
+    credits.apply([clip], [urls[v] for v in used_videos])
     clip_name = f"{stem}_clip_1.mp4"
     look = framed_layout.settings()
     # The channel's take (ai_take.py): skipped by itself when the compilation
