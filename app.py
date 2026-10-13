@@ -2908,7 +2908,7 @@ async def youtube_upload(request: Request):
 # other, each scheduled into the next free posting time. One run at a time;
 # the dashboard follows it on GET.
 _post_all = {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "errors": [], "finished": None,
-             "uploaded": []}
+             "uploaded": [], "limit": False}
 _post_all_lock = threading.Lock()
 
 
@@ -2934,6 +2934,15 @@ def _post_all_run(items):
                 clip["path"], clip["title"], clip["description"], clip["tags"], clip["genre"],
                 publish_at=slot, ai_made=clip["ai_made"],
                 meta={"job_id": it["job_id"], "clip_index": it["index"], "post_all": True})
+            if row.get("status") != "done" and youtube_account.upload_limit_hit(row.get("error")):
+                # Every later upload would get the same refusal: stop, the
+                # rest stay in Ready to post for tomorrow.
+                st["failed"] += 1
+                left = len(items) - st["done"] - st["failed"]
+                st["limit"] = True
+                st["errors"].append(f"YouTube's daily upload limit for your channel is reached after {st['done']} "
+                                    f"uploads. The other {left + 1} stay in Ready to post: press again tomorrow.")
+                break
             if row.get("status") == "done":
                 st["done"] += 1
                 # Until the project passes the API audit YouTube keeps these
@@ -2969,7 +2978,7 @@ async def youtube_post_all(request: Request):
         if _post_all["running"]:
             raise HTTPException(status_code=409, detail="Already posting. Wait for it to finish.")
         _post_all.update(running=True, total=len(items), done=0, failed=0, current="", errors=[], finished=None,
-                         uploaded=[])
+                         uploaded=[], limit=False)
     _spawn(_post_all_run, items)
     return {"ok": True, "total": len(items)}
 

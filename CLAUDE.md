@@ -322,7 +322,13 @@ never finished:
   Short in slot order, each into the next free posting time (`_spawn` is
   the test seam: patching `threading.Thread` breaks the executor).
   videos.insert has its own 100-a-day quota now (quota calculator,
-  12-oct-2026), so 7+ a day fits. Posting times go up to 10. Tests run with `.venv/Scripts/python` (the system
+  12-oct-2026), so 7+ a day fits. Posting times go up to 10. The real cap
+  is the channel's own daily upload limit (`uploadLimitExceeded`, no
+  published number): the 2-subscriber channel took 10 on 14-oct-2026 and
+  refused the 11th, so post-all stops at the first refusal and auto upload
+  retries refused rows later. publishAt was kept on all 10 uploads from the
+  unaudited project (status private + publishAt; whether they really go
+  public at the time was not yet seen). Tests run with `.venv/Scripts/python` (the system
   Python has no httpx) and `--continue-on-collection-errors`.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file

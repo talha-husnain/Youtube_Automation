@@ -455,7 +455,8 @@ def upload_finished(job_clips, log=print):
     cfg = settings()
     if not cfg["auto_upload"] or not youtube_account.status()["connected"]:
         return 0
-    done = {(u.get("job_id"), u.get("clip_index")) for u in youtube_account.uploads()}
+    # A refused upload (daily limit, network) is tried again on a later tick.
+    done = {(u.get("job_id"), u.get("clip_index")) for u in youtube_account.uploads() if u.get("status") != "failed"}
     count = 0
     for run in cfg.get("runs", [])[:3]:
         for job in run["jobs"]:
@@ -472,6 +473,9 @@ def upload_finished(job_clips, log=print):
                     meta={"job_id": job["job_id"], "clip_index": clip["index"], "auto": True})
                 log(f"Autopilot upload {row['status']}: {row['title'][:60]}")
                 count += 1
+                if row.get("status") != "done" and youtube_account.upload_limit_hit(row.get("error")):
+                    log("YouTube's daily upload limit is reached; the rest go up on a later tick.")
+                    return count
     return count
 
 

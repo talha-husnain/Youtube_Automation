@@ -162,12 +162,26 @@ def _get(url, params):
     return r.json()
 
 
+# The channel's own daily upload cap (reason uploadLimitExceeded). YouTube
+# publishes no number: it is per channel, lower for new ones, and it let a
+# 2-subscriber channel upload 10 on 14-oct-2026 before refusing the 11th.
+UPLOAD_LIMIT_TEXT = "YouTube's daily upload limit for your channel is reached."
+
+
+def upload_limit_hit(text):
+    t = (text or "").lower()
+    return "uploadlimitexceeded" in t or "exceeded the number of videos" in t or UPLOAD_LIMIT_TEXT.lower() in t
+
+
 def _google_error(r):
     try:
         err = r.json().get("error") or {}
         msg = err.get("message") if isinstance(err, dict) else str(err)
+        reasons = [e.get("reason", "") for e in (err.get("errors") or [])] if isinstance(err, dict) else []
     except ValueError:
-        msg = r.text[:200]
+        msg, reasons = r.text[:200], []
+    if "uploadLimitExceeded" in reasons or upload_limit_hit(msg):
+        return UPLOAD_LIMIT_TEXT
     return f"YouTube said {r.status_code}: {msg}"
 
 

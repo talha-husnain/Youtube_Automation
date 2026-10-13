@@ -890,3 +890,46 @@ def test_channel_errors_are_plain_words():
     assert "no videos" in channel_tools.why_not(Exception("ERROR: [youtube:tab] @JanRambo: This channel does not have a videos tab"))
     assert "No YouTube channel" in channel_tools.why_not(Exception("HTTP Error 404: Not Found"))
     assert "Try again" in channel_tools.why_not(Exception("timed out"))
+
+
+def test_post_all_stops_at_the_channels_daily_upload_limit(monkeypatch):
+    app_module = pytest.importorskip("app")
+    import youtube_account
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    c = TestClient(app_module.app)
+    monkeypatch.setattr(youtube_account, "status", lambda: {"connected": True})
+    items = [{"id": f"j{k}:0", "job_id": f"j{k}", "index": 0, "status": "ready", "title": f"T{k}",
+              "slot": f"2026-10-14T{11 + k}:00"} for k in range(5)]
+    monkeypatch.setattr(app_module, "_plan_items", lambda: items)
+    monkeypatch.setattr(app_module, "_job_clips", lambda job_id: ("completed", [
+        {"index": 0, "path": "x.mp4", "title": job_id, "description": "D", "tags": [], "genre": "comedy", "ai_made": False}]))
+    monkeypatch.setattr(youtube_account, "next_slots", lambda times, n=1: [__import__("datetime").datetime(2026, 10, 14, 11, 0).astimezone()])
+    tried = []
+
+    def fake_upload(path, title, *a, meta=None, **k):
+        tried.append(title)
+        if len(tried) <= 2:
+            return {"status": "done", "video_id": f"v{len(tried)}"}
+        return {"status": "failed", "error": youtube_account.UPLOAD_LIMIT_TEXT}
+    monkeypatch.setattr(youtube_account, "upload_and_mark", fake_upload)
+    monkeypatch.setattr(app_module, "_spawn", lambda fn, *a: fn(*a))
+    c.post("/api/youtube/post-all", json={})
+    st = c.get("/api/youtube/post-all").json()
+    assert tried == ["j0", "j1", "j2"]                                        # stopped at the first refusal
+    assert st["done"] == 2 and st["limit"] and "The other 3 stay in Ready to post" in st["errors"][0]
+
+
+def test_youtube_names_the_upload_limit_in_plain_words():
+    import youtube_account
+
+    class R:
+        status_code = 400
+        text = ""
+
+        def json(self):
+            return {"error": {"message": "The user has exceeded the number of videos they may upload.",
+                              "errors": [{"reason": "uploadLimitExceeded"}]}}
+    assert youtube_account._google_error(R()) == youtube_account.UPLOAD_LIMIT_TEXT
+    assert youtube_account.upload_limit_hit("YouTube said 400: The user has exceeded the number of videos they may upload.")
+    assert not youtube_account.upload_limit_hit("YouTube said 500: backend error")
