@@ -2907,7 +2907,8 @@ async def youtube_upload(request: Request):
 # "Post all to YouTube" (Ready to post): every waiting Short, one after the
 # other, each scheduled into the next free posting time. One run at a time;
 # the dashboard follows it on GET.
-_post_all = {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "errors": [], "finished": None}
+_post_all = {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "errors": [], "finished": None,
+             "uploaded": []}
 _post_all_lock = threading.Lock()
 
 
@@ -2935,6 +2936,11 @@ def _post_all_run(items):
                 meta={"job_id": it["job_id"], "clip_index": it["index"], "post_all": True})
             if row.get("status") == "done":
                 st["done"] += 1
+                # Until the project passes the API audit YouTube keeps these
+                # private and ignores publishAt, so the dashboard lists each
+                # one with its planned time and a Studio link.
+                st["uploaded"].append({"title": st["current"], "slot": slot.isoformat(),
+                                       "video_id": row.get("video_id")})
             else:
                 st["failed"] += 1
                 st["errors"].append(f"{st['current'][:50]}: {row.get('error') or 'upload failed'}"[:300])
@@ -2962,7 +2968,8 @@ async def youtube_post_all(request: Request):
     with _post_all_lock:
         if _post_all["running"]:
             raise HTTPException(status_code=409, detail="Already posting. Wait for it to finish.")
-        _post_all.update(running=True, total=len(items), done=0, failed=0, current="", errors=[], finished=None)
+        _post_all.update(running=True, total=len(items), done=0, failed=0, current="", errors=[], finished=None,
+                         uploaded=[])
     _spawn(_post_all_run, items)
     return {"ok": True, "total": len(items)}
 

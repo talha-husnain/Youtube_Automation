@@ -125,7 +125,7 @@ export default function ChannelTab({ notice }) {
                     <p className="text-[11px] text-warn leading-relaxed">
                         YouTube keeps every video uploaded from your own Google project private until that project passes YouTube&apos;s API audit.
                         Fill in the <a href={AUDIT_FORM} target="_blank" rel="noreferrer" className="underline">audit form</a> once (free, can take a few weeks).
-                        Until then, upload from the YouTube app; the report below works now.
+                        Until then, &quot;post all to YouTube&quot; in Ready to post still uploads every Short with its title, description and tags, but YouTube keeps them private: set each one to Public or Schedule in YouTube Studio (Ready to post lists them with their times). The report below works now.
                         Ready-made answers for the form: docs/youtube-api-audit.md in the Shortkaar folder.
                     </p>
                 </div>

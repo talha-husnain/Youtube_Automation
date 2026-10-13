@@ -285,6 +285,23 @@ function PostAll({ ready, yt, onDone, onOpenChannel }) {
                 </p>
             )}
             {(run?.errors || []).slice(0, 4).map((e) => <p key={e} className="text-[11px] text-danger break-words">{e}</p>)}
+            {!busy && (run?.uploaded || []).length > 0 && (
+                <div className="rounded-input border border-rule p-2.5 space-y-1.5">
+                    <p className="text-[11px] text-muted leading-relaxed">
+                        Until your Google project passes the YouTube audit, YouTube keeps these private. In Studio, set each one to Schedule at its time (or Public when the time comes).
+                    </p>
+                    {run.uploaded.map((u) => (
+                        <div key={u.video_id || u.slot} className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="readout shrink-0">{slotText(u.slot)}</span>
+                            <span className="text-ink2 flex-1 min-w-0 truncate">{u.title}</span>
+                            {u.video_id && (
+                                <a href={`https://studio.youtube.com/video/${u.video_id}/edit`} target="_blank" rel="noreferrer"
+                                    className="btn-ghost px-2 py-1 text-[11px]"><ExternalLink size={12} /> open in Studio</a>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
             {error && <p className="text-xs text-danger" role="alert">{error}</p>}
         </div>
     );

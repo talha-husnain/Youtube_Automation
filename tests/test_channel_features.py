@@ -879,6 +879,7 @@ def test_post_all_uploads_every_waiting_short_into_its_slot(monkeypatch):
     assert done == [("c", 1, True), ("a", 0, True)]                            # by slot, all scheduled
     st = c.get("/api/youtube/post-all").json()
     assert not st["running"] and st["done"] == 1 and st["failed"] == 2
+    assert [u["title"] for u in st["uploaded"]] == ["C"] and st["uploaded"][0]["slot"].startswith("2026-10-13T13:00")
     assert any("quota" in e for e in st["errors"]) and any("no longer on this computer" in e for e in st["errors"])
     monkeypatch.setattr(app_module, "_plan_items", lambda: [items[1]])
     assert c.post("/api/youtube/post-all", json={}).json()["detail"] == "Nothing is waiting to be posted."
