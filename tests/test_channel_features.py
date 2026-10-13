@@ -933,3 +933,93 @@ def test_youtube_names_the_upload_limit_in_plain_words():
     assert youtube_account._google_error(R()) == youtube_account.UPLOAD_LIMIT_TEXT
     assert youtube_account.upload_limit_hit("YouTube said 400: The user has exceeded the number of videos they may upload.")
     assert not youtube_account.upload_limit_hit("YouTube said 500: backend error")
+
+
+# ------------------------------------------------------------- claims, auto upload, sound tags
+
+def test_series_titles_are_left_out_of_research():
+    assert ap.looks_like_a_series("PATI PATNI AUR PADOSAN - Episode 14 | New Twist")
+    assert ap.looks_like_a_series("PAKISTANI STAGE DRAMA 2016 ZAFRI KHAN")
+    assert ap.looks_like_a_series("Dhoka - EP 01 | Love, Loss, Betrayal")
+    assert not ap.looks_like_a_series("EP 29: From Reels to Stage | Mubar podcast")
+    assert not ap.looks_like_a_series("The Jan Rambo Show | Agha Majid | Saleem Albela")
+    assert not ap.looks_like_a_series("Terrorism has a religion - Aakash Deep | Stand Up Comedy 2024")
+
+
+def test_claim_check_finds_blocked_uploads(monkeypatch):
+    import youtube_account as ya
+    rows = [{"id": "r1", "video_id": "AAA", "status": "done", "created": int(__import__("time").time()), "job_id": "j1", "clip_index": 0},
+            {"id": "r2", "video_id": "BBB", "status": "done", "created": int(__import__("time").time()), "job_id": "j2", "clip_index": 0},
+            {"id": "r3", "video_id": "CCC", "status": "done", "created": int(__import__("time").time()), "job_id": "j3", "clip_index": 0}]
+    for r in rows:
+        ya._save_upload(r)
+    monkeypatch.setattr(ya, "_get", lambda url, params: {"items": [
+        {"id": "AAA", "contentDetails": {"regionRestriction": {"blocked": [f"C{i}" for i in range(250)]}}, "status": {}},
+        {"id": "BBB", "contentDetails": {}, "status": {"uploadStatus": "processed"}},
+        {"id": "CCC", "contentDetails": {"regionRestriction": {"blocked": ["PK"]}}, "status": {}}]})
+    found = ya.claim_check()
+    assert [r["video_id"] for r in found] == ["AAA", "CCC"]
+    assert ya.claim_check() == []                                              # marked once
+    assert {r["video_id"]: bool(r.get("blocked")) for r in ya.uploads()} == {"AAA": True, "BBB": False, "CCC": True}
+
+
+def test_a_blocked_short_bans_its_source_and_pulls_its_siblings(monkeypatch):
+    app_module = pytest.importorskip("app")
+    import channel_tools
+    import post_queue
+    import youtube_account
+    monkeypatch.setattr(youtube_account, "status", lambda: {"connected": True})
+    monkeypatch.setattr(youtube_account, "claim_check", lambda: [{"job_id": "j1", "clip_index": 0, "block_reason": "copyright claim"}])
+    src = "https://www.youtube.com/watch?v=HuDEDfAntiw"
+    # j1's dir is gone (24 h retention): its link comes from Autopilot's run log.
+    monkeypatch.setattr(app_module, "_job_source", lambda d: {"url": src} if d.endswith("j2") else {} if d.endswith("j1") else {"url": "other"})
+    cfg0 = ap.settings()
+    cfg0["runs"] = [{"date": "2026-10-12", "jobs": [{"job_id": "j1", "source": src}]}]
+    ap._write(ap.SETTINGS_FILE, cfg0)
+    monkeypatch.setattr(app_module, "_plan_items", lambda: [
+        {"id": "j1:2", "job_id": "j1", "status": "ready", "title": "sibling"},
+        {"id": "j2:0", "job_id": "j2", "status": "ready", "title": "same video, other job"},
+        {"id": "j3:0", "job_id": "j3", "status": "ready", "title": "different video"}])
+    monkeypatch.setattr(channel_tools, "licence", lambda url: {"licence": "creative_commons", "title": "PATI PATNI Episode 14",
+                                                            "channel": "Golden Hyderabadiz", "channel_url": "https://www.youtube.com/@gh"})
+    ap.save({"channels": [{"url": "https://www.youtube.com/@gh", "name": "GH"}, {"url": "https://www.youtube.com/@ok"}]})
+    notes = []
+    app_module._check_claims(notes.append)
+    state = post_queue._load()
+    assert state["j1:0"]["blocked"] and state["j1:2"]["status"] == "skipped" and state["j2:0"]["status"] == "skipped"
+    assert "j3:0" not in state
+    cfg = ap.settings()
+    assert cfg["blocked_sources"][0]["video"] == "HuDEDfAntiw" and [c["url"] for c in cfg["channels"]] == ["https://www.youtube.com/@ok"]
+    assert ap.is_blocked(cfg, {"url": "https://youtu.be/XXXXXXXXXXX", "channel_url": "https://www.youtube.com/@gh"})
+    assert ap.is_blocked(cfg, {"url": src, "channel_url": ""}) and not ap.is_blocked(cfg, {"url": "https://youtu.be/YYYYYYYYYYY"})
+    assert not ap.block_source(src, "again")                                   # once
+
+
+def test_auto_upload_waits_three_hours_after_the_daily_limit(monkeypatch):
+    import time as _t
+    import youtube_account
+    monkeypatch.setattr(youtube_account, "status", lambda: {"connected": True})
+    ap.save({"auto_upload": True})
+    assert ap.auto_post_due(ap.settings())
+    calls = []
+
+    def post_ready():
+        calls.append(1)
+        return {"done": 3, "limit": True}
+    ap.run_auto_post(post_ready, print)
+    cfg = ap.settings()
+    assert calls and cfg["upload_paused_until"] >= _t.time() + 3 * 3600 - 5
+    assert not ap.auto_post_due(cfg)                                           # paused
+    assert not ap.auto_post_due(cfg, now=_t.time() + 3 * 3600 - 60)
+    assert ap.auto_post_due(cfg, now=_t.time() + 3 * 3600 + 60)
+    ap.save({"auto_upload": False})
+    assert not ap.auto_post_due(ap.settings(), now=_t.time() + 10 ** 6)
+
+
+def test_sound_tags_are_never_burned_as_captions():
+    import subtitles
+    tr = {"segments": [{"words": [{"word": "[Music]", "start": 0.0, "end": 2.0},
+                                  {"word": " Jab", "start": 2.0, "end": 2.3}, {"word": " date", "start": 2.3, "end": 2.6},
+                                  {"word": "(applause)", "start": 2.6, "end": 3.0}]}]}
+    words = [w["word"] for b in subtitles._collect_word_blocks(tr, 0, 5) for w in b]
+    assert words == ["Jab", "date"]

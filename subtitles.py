@@ -148,6 +148,9 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
     return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration)
 
 
+_SOUND_TAG = re.compile(r"^\s*[\[(].*[\])]\s*$")
+
+
 def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0):
     """
     Flatten transcript words for a clip range and group them into short blocks
@@ -161,13 +164,17 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
     flat_words = []
     for segment in transcript.get('segments', []):
         flat_words.extend(segment.get('words', []))
+    # Before merging: a tag with no leading space would join the word before it.
+    flat_words = [w for w in flat_words if not _SOUND_TAG.match(str(w.get('word') or ''))]
     flat_words = merge_continuation_words(flat_words)
 
     words = []
     for word_info in flat_words:
         if word_info.get('end', 0) > clip_start and word_info.get('start', 0) < clip_end:
             cleaned_word = _normalize_subtitle_word(word_info.get('word', ''))
-            if not cleaned_word:
+            # "[Music]" / "[Applause]" are YouTube caption sound tags, not
+            # speech: burned, a Short showed "[MUSIC]" as its caption (14-oct-2026).
+            if not cleaned_word or _SOUND_TAG.match(cleaned_word):
                 continue
             words.append({
                 'word': cleaned_word,

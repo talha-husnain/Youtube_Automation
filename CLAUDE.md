@@ -328,7 +328,24 @@ never finished:
   refused the 11th, so post-all stops at the first refusal and auto upload
   retries refused rows later. publishAt was kept on all 10 uploads from the
   unaudited project (status private + publishAt; whether they really go
-  public at the time was not yet seen). Tests run with `.venv/Scripts/python` (the system
+  public at the time was not yet seen).
+- **Full autopilot** (14-oct-2026): `auto_upload` now runs the post-all
+  routine over all of Ready to post every `AUTO_POST_EVERY` (10 min) and
+  pauses `UPLOAD_PAUSE_SECONDS` (3 h) after the daily limit. `autostart.bat`
+  starts server + dashboard; a `Shortkaar.lnk` to it is in the user's
+  Startup folder.
+- **Copyright claims**: two Shorts from a CC-labelled "PATI PATNI AUR PADOSAN
+  - Episode 14" were blocked worldwide by Content ID. The API shows it as
+  `contentDetails.regionRestriction.blocked` (249 countries; clean uploads
+  have none). `youtube_account.claim_check` every 30 min marks the row,
+  `app._check_claims` bans the source (`blocked_sources`: video + channel,
+  never used again) and skips its waiting siblings. Job dirs go after 24 h,
+  so the source link is stored in the upload row (`_source_of` falls back to
+  Autopilot's run log). Research drops titles that read as series / drama /
+  film (`looks_like_a_series`; a podcast's "EP 29" stays) and the vet prompt
+  drops TV broadcast footage (it kept a Lux Style Awards clip before).
+- Captions never burn sound tags (`subtitles._SOUND_TAG`, filtered before
+  continuation merging): a Short showed "[MUSIC]" as its caption. Tests run with `.venv/Scripts/python` (the system
   Python has no httpx) and `--continue-on-collection-errors`.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file

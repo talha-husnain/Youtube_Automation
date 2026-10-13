@@ -22,6 +22,7 @@ newest uploads. So an empty channel list still gives a full day of Shorts.
 import asyncio
 import json
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -31,6 +32,17 @@ SETTINGS_FILE = os.path.join(ROOT, "output", ".autopilot.json")
 LAST_SETTINGS_FILE = os.path.join(ROOT, "output", ".last_settings.json")
 CLIPS_PER_VIDEO = 3
 MAX_CHANNELS = 10
+# Auto upload walks Ready to post this often; after the channel's daily
+# upload limit it waits UPLOAD_PAUSE_SECONDS (one refused call per tick
+# would be 1,440 a day).
+AUTO_POST_EVERY = 600
+UPLOAD_PAUSE_SECONDS = 3 * 3600
+CLAIM_CHECK_EVERY = 1800
+# Series and shows by title: "PATI PATNI AUR PADOSAN - Episode 14", marked
+# Creative Commons, got two Shorts blocked worldwide by a Content ID claim
+# (14-oct-2026). A podcast's "EP 29" is the creator's own and stays.
+SERIES_TITLE = re.compile(r"\b(drama|serial|natak|film|movie|trailer|web ?series|season \d+)\b", re.I)
+EPISODE_TITLE = re.compile(r"\b(episode|epi|ep\.? ?\d+)\b", re.I)
 MAX_QUERIES = 8
 RESEARCH_PER_CHANNEL = 2
 RESEARCH_QUERIES = ["pakistani stand up comedy", "urdu stand up comedy", "pakistani comedy show",
@@ -54,6 +66,9 @@ DEFAULTS = {
     "match_watch": False, "match_team": "Pakistan", "last_match_check": 0,
     # Research: find viral reuse-allowed videos by search, not only the channels.
     "research": True, "research_queries": RESEARCH_QUERIES, "min_views": 20000,
+    "last_auto_post": 0, "upload_paused_until": 0,
+    # Sources a Content ID claim blocked: research and channels never use them again.
+    "blocked_sources": [], "last_claim_check": 0,
     "last_run": None, "runs": [],
 }
 
@@ -149,6 +164,54 @@ def looks_saved():
 
 # ------------------------------------------------------------------ picking
 
+def looks_like_a_series(title):
+    t = title or ""
+    return bool(SERIES_TITLE.search(t) or (EPISODE_TITLE.search(t) and "podcast" not in t.lower()))
+
+
+def is_blocked(cfg, v):
+    """A video or channel a claim already blocked a Short of."""
+    import used_moments
+    vid = used_moments.video_id(v.get("url") or "") or v.get("id")
+    for b in cfg.get("blocked_sources") or []:
+        if (vid and vid == b.get("video")) or (b.get("channel_url") and b.get("channel_url") == v.get("channel_url")):
+            return True
+    return False
+
+
+def block_source(url, reason, log=print):
+    """Never use this video's channel again (a claim blocked a Short of it)."""
+    import channel_tools
+    import used_moments
+    vid = used_moments.video_id(url or "")
+    cfg = settings()
+    if not vid or any(b.get("video") == vid for b in cfg["blocked_sources"]):
+        return False
+    try:
+        info = channel_tools.licence(url)
+    except Exception:  # noqa: BLE001 — the video id alone still blocks it
+        info = {}
+    cfg["blocked_sources"] = (cfg["blocked_sources"] + [{
+        "video": vid, "title": (info.get("title") or "")[:120], "channel": info.get("channel") or "",
+        "channel_url": info.get("channel_url") or "", "reason": reason, "at": int(time.time())}])[-200:]
+    # Its channel may also be a source channel: take it out.
+    cfg["channels"] = [c for c in cfg["channels"] if not info.get("channel_url") or c.get("url") != info["channel_url"]]
+    _write(SETTINGS_FILE, cfg)
+    log(f"Blocked source: {info.get('channel') or vid} ({reason}). It is never used again.")
+    return True
+
+
+def claims_due(cfg, now=None):
+    return (now or time.time()) - cfg.get("last_claim_check", 0) >= CLAIM_CHECK_EVERY
+
+
+def run_claim_check(check_claims, log=print):
+    cfg = settings()
+    cfg["last_claim_check"] = int(time.time())
+    _write(SETTINGS_FILE, cfg)
+    return check_claims(log)
+
+
 def research_videos(cfg, log):
     """Most-viewed Creative Commons videos for the research searches, unused
     first, at most RESEARCH_PER_CHANNEL per channel. Search results carry
@@ -175,6 +238,8 @@ def research_videos(cfg, log):
             continue
         seen.add(v["id"])
         if (v.get("views") or 0) < cfg.get("min_views", 0):
+            continue
+        if is_blocked(cfg, v) or looks_like_a_series(v.get("title")):
             continue
         used = used_moments.summary(v["url"])
         if used["count"] and used["seconds"] >= 0.4 * v["seconds"]:
@@ -207,7 +272,10 @@ channel copyright claims. Keep a video only when ALL of these are true:
   comedian's or the show's own name), not a channel re-uploading a TV
   channel's programme, a film, a web series or another creator's video;
 - it is not a reaction video, a drama serial or episode, a film or web series,
-  a news clip, a song, or a compilation of other people's clips.
+  a news clip, a song, or a compilation of other people's clips;
+- it is not footage of a TV broadcast (award show, morning show, a TV
+  channel's comedy programme): broadcasters claim their footage, and a
+  claimed source got two Shorts blocked worldwide.
 When unsure, do not keep it. Answer for every candidate: its id, keep, and a
 reason of a few words."""
 
@@ -267,7 +335,7 @@ def pick_videos(cfg, clips_needed, log):
             if depth >= len(videos):
                 continue
             v = videos[depth]
-            if not v.get("seconds") or not lo <= v["seconds"] <= hi:
+            if not v.get("seconds") or not lo <= v["seconds"] <= hi or is_blocked(cfg, v):
                 continue
             used = used_moments.summary(v["url"])
             if used["count"] == 0:
@@ -470,13 +538,40 @@ def upload_finished(job_clips, log=print):
                 row = youtube_account.upload_and_mark(
                     clip["path"], clip["title"], clip["description"], clip["tags"], job["kind"],
                     publish_at=slot, ai_made=clip.get("ai_made", False),
-                    meta={"job_id": job["job_id"], "clip_index": clip["index"], "auto": True})
+                    meta={"job_id": job["job_id"], "clip_index": clip["index"], "auto": True,
+                          "source": job.get("source")})
                 log(f"Autopilot upload {row['status']}: {row['title'][:60]}")
                 count += 1
                 if row.get("status") != "done" and youtube_account.upload_limit_hit(row.get("error")):
                     log("YouTube's daily upload limit is reached; the rest go up on a later tick.")
                     return count
     return count
+
+
+def auto_post_due(cfg, now=None):
+    now = now or time.time()
+    return (cfg["auto_upload"] and now >= cfg.get("upload_paused_until", 0)
+            and now - cfg.get("last_auto_post", 0) >= AUTO_POST_EVERY)
+
+
+def run_auto_post(post_ready, log=print):
+    """Upload every Short waiting in Ready to post (``post_ready()`` -> {done,
+    limit} or None when nothing waits); pause after the daily limit."""
+    import youtube_account
+    cfg = settings()
+    cfg["last_auto_post"] = int(time.time())
+    _write(SETTINGS_FILE, cfg)
+    if not youtube_account.status()["connected"]:
+        return None
+    got = post_ready()
+    if got and got.get("limit"):
+        cfg = settings()
+        cfg["upload_paused_until"] = int(time.time()) + UPLOAD_PAUSE_SECONDS
+        _write(SETTINGS_FILE, cfg)
+        log(f"Auto upload: {got.get('done', 0)} up, then YouTube's daily limit. Trying again in 3 hours.")
+    elif got and got.get("done"):
+        log(f"Auto upload: {got['done']} Short(s) uploaded and scheduled.")
+    return got
 
 
 def phone_finished(plan_items, send, log=print):
@@ -501,7 +596,8 @@ def phone_finished(plan_items, send, log=print):
     return sent
 
 
-async def loop_forever(submit, job_clips, is_active=lambda: True, build_weekly=None, to_phone=None):
+async def loop_forever(submit, job_clips, is_active=lambda: True, build_weekly=None, to_phone=None,
+                       post_ready=None, check_claims=None):
     while True:
         await asyncio.sleep(TICK_SECONDS)
         if not is_active():
@@ -516,7 +612,14 @@ async def loop_forever(submit, job_clips, is_active=lambda: True, build_weekly=N
             if build_weekly and weekly_due(settings()):
                 print("🤖 Autopilot: building this week's long video.")
                 await asyncio.get_event_loop().run_in_executor(None, run_weekly, build_weekly)
-            await asyncio.get_event_loop().run_in_executor(None, upload_finished, job_clips)
+            if check_claims and claims_due(settings()):
+                await asyncio.get_event_loop().run_in_executor(None, run_claim_check, check_claims)
+            if post_ready:
+                # Everything in Ready to post, hand-made Shorts too.
+                if auto_post_due(settings()):
+                    await asyncio.get_event_loop().run_in_executor(None, run_auto_post, post_ready)
+            else:
+                await asyncio.get_event_loop().run_in_executor(None, upload_finished, job_clips)
             if to_phone:
                 await asyncio.get_event_loop().run_in_executor(None, phone_finished, *to_phone)
         except Exception as e:  # noqa: BLE001 — the loop must survive a bad day

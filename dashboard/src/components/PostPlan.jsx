@@ -431,7 +431,8 @@ export default function PostPlan({ onMakeShorts, onOpenAutopilot, onNewShorts, o
                             <div key={p.id} className="card p-3 flex flex-wrap items-center gap-3">
                                 <span className={`readout w-20 text-right shrink-0 ${p.views && p.views === best ? 'text-brass' : ''}`}>{p.views == null ? '?' : `${p.views} views`}</span>
                                 <span className="text-sm text-ink2 flex-1 min-w-[50%] break-words">{p.title}
-                                    {weak(p) && <span className="badge-warn ml-2 align-middle">needs a new title</span>}</span>
+                                    {p.blocked && <span className="badge-warn ml-2 align-middle">blocked by a copyright claim</span>}
+                                    {weak(p) && !p.blocked && <span className="badge-warn ml-2 align-middle">needs a new title</span>}</span>
                                 {p.youtube_id && <a href={`https://youtube.com/shorts/${p.youtube_id}`} target="_blank" rel="noreferrer" className="text-muted hover:text-brass" aria-label="open on YouTube"><ExternalLink size={13} /></a>}
                                 {p.source_url && p.genre !== 'cricket' && (
                                     <button onClick={() => onMakeShorts(p.source_url)} className="btn-ghost px-2.5 py-1 text-[11px]" title="New Shorts from the same video, never the same moment">

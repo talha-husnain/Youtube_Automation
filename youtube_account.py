@@ -274,6 +274,38 @@ def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
     return row
 
 
+CLAIM_LOOKBACK_DAYS = 7
+
+
+def claim_check():
+    """Uploads of the last week that a copyright claim blocked: YouTube lists
+    the blocked countries in contentDetails.regionRestriction (on 14-oct-2026
+    the two claimed Shorts listed ~250, the clean eight none). Marks the
+    uploads.json rows; returns the rows newly found blocked."""
+    since = time.time() - CLAIM_LOOKBACK_DAYS * 86400
+    rows = [r for r in uploads() if r.get("video_id") and r.get("status") == "done"
+            and r.get("created", 0) >= since and not r.get("blocked")]
+    found = []
+    for k in range(0, len(rows), 50):
+        part = rows[k:k + 50]
+        items = _get(f"{API}/videos", {"part": "contentDetails,status",
+                                       "id": ",".join(r["video_id"] for r in part)}).get("items") or []
+        by_id = {v["id"]: v for v in items}
+        for r in part:
+            v = by_id.get(r["video_id"])
+            if not v:
+                continue
+            blocked = ((v.get("contentDetails") or {}).get("regionRestriction") or {}).get("blocked") or []
+            rejected = (v.get("status") or {}).get("uploadStatus") == "rejected"
+            # Worldwide (the claim case seen) or in Pakistan, where the audience is.
+            if len(blocked) >= 100 or "PK" in blocked or rejected:
+                r.update(blocked=len(blocked) or True,
+                         block_reason=(v.get("status") or {}).get("rejectionReason") or "copyright claim")
+                _save_upload(r)
+                found.append(r)
+    return found
+
+
 def upload_and_mark(*args, **kwargs):
     """upload(), then take the Short out of Ready to post once YouTube has it,
     so its posting time is not handed out twice."""

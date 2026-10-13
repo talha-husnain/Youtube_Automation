@@ -2319,7 +2319,8 @@ async def lifespan(app: FastAPI):
         import autopilot_local
         asyncio.create_task(autopilot_local.loop_forever(
             _autopilot_submit, _job_clips, is_active=lambda: not _draining,
-            build_weekly=_autopilot_weekly, to_phone=(_plan_items, _send_to_phone)))
+            build_weekly=_autopilot_weekly, to_phone=(_plan_items, _send_to_phone),
+            post_ready=_auto_post_ready, check_claims=_check_claims))
     yield
     # Cleanup (optional: cancel worker)
 
@@ -2933,7 +2934,8 @@ def _post_all_run(items):
             row = youtube_account.upload_and_mark(
                 clip["path"], clip["title"], clip["description"], clip["tags"], clip["genre"],
                 publish_at=slot, ai_made=clip["ai_made"],
-                meta={"job_id": it["job_id"], "clip_index": it["index"], "post_all": True})
+                meta={"job_id": it["job_id"], "clip_index": it["index"], "post_all": True,
+                      "source": _source_of(it["job_id"])})
             if row.get("status") != "done" and youtube_account.upload_limit_hit(row.get("error")):
                 # Every later upload would get the same refusal: stop, the
                 # rest stay in Ready to post for tomorrow.
@@ -2955,6 +2957,60 @@ def _post_all_run(items):
                 st["errors"].append(f"{st['current'][:50]}: {row.get('error') or 'upload failed'}"[:300])
     finally:
         st.update(running=False, current="", finished=int(time.time()))
+
+
+def _source_of(job_id):
+    """The link a job was cut from: its .source.json, or Autopilot's run log
+    once the job dir is gone (24 h retention; a claim can land days later)."""
+    import autopilot_local
+    src = _job_source(os.path.join(OUTPUT_DIR, job_id)).get("url")
+    if src:
+        return src
+    for run in autopilot_local.settings().get("runs") or []:
+        for j in run.get("jobs") or []:
+            if j.get("job_id") == job_id and j.get("source"):
+                return j["source"]
+    return None
+
+
+def _check_claims(log=print):
+    """Autopilot's claim check: a Short blocked by a copyright claim bans its
+    source (autopilot_local.block_source) and pulls the waiting Shorts cut
+    from the same video out of Ready to post."""
+    import autopilot_local
+    import post_queue
+    import youtube_account
+    if not youtube_account.status()["connected"]:
+        return []
+    found = youtube_account.claim_check()
+    for row in found:
+        if row.get("job_id") is None:
+            continue
+        src = row.get("source") or _source_of(row["job_id"])
+        post_queue.update(post_queue.item_id(row["job_id"], row["clip_index"]), blocked=True)
+        if not src:
+            continue
+        autopilot_local.block_source(src, row.get("block_reason") or "copyright claim", log)
+        for x in _plan_items():
+            if x["status"] == "ready" and _source_of(x["job_id"]) == src:
+                post_queue.update(x["id"], status="skipped")
+                log(f"Skipped (same source as a blocked Short): {x['title'][:60]}")
+    return found
+
+
+def _auto_post_ready():
+    """Autopilot's auto upload: the same run as the "post all" button, in the
+    calling thread. None when a run is already going or nothing waits."""
+    items = sorted((x for x in _plan_items() if x["status"] == "ready"), key=lambda x: x.get("slot") or "")
+    if not items:
+        return None
+    with _post_all_lock:
+        if _post_all["running"]:
+            return None
+        _post_all.update(running=True, total=len(items), done=0, failed=0, current="", errors=[], finished=None,
+                         uploaded=[], limit=False)
+    _post_all_run(items)
+    return {"done": _post_all["done"], "limit": _post_all["limit"]}
 
 
 @app.post("/api/youtube/post-all")

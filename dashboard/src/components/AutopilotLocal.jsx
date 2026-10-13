@@ -227,7 +227,17 @@ export default function AutopilotLocal({ onOpenChannelTab }) {
                             <Num value={cfg.min_views ?? 20000} onChange={(v) => set('min_views', v)} max={100000000} label="min views" wide />
                             views
                         </label>
-                        <p className="text-[11px] text-muted leading-relaxed">The Creative Commons label is what the uploader says. Many are re-uploads of stage shows by channels that do not own them, so a claim can still happen. The description always credits the original video.</p>
+                        <p className="text-[11px] text-muted leading-relaxed">The Creative Commons label is what the uploader says. Many are re-uploads of stage shows by channels that do not own them, so a claim can still happen. The description always credits the original video. Dramas, serials, films and series episodes are left out.</p>
+                        {(cfg.blocked_sources || []).length > 0 && (
+                            <div className="space-y-1">
+                                <p className="text-xs text-ink2">Never used again (a copyright claim blocked a Short from them):</p>
+                                {cfg.blocked_sources.map((b) => (
+                                    <p key={b.video} className="text-[11px] text-muted break-words">
+                                        {b.channel || 'unknown channel'}{b.title ? `: ${b.title}` : ''}
+                                    </p>
+                                ))}
+                            </div>
+                        )}
                     </>}
                 </div>
 
