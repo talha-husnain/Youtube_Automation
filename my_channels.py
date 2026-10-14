@@ -58,6 +58,11 @@ KINDS = {
              "times": ["10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00", "00:00"],
              "about": "General knowledge questions, paheliyan and quick maths puzzles with a countdown. "
                       "Viewers answer in the comments before the reveal."},
+    "controversy": {"label": "Controversies, explained", "genre": "controversy", "color": "#2A0A0A",
+                    "times": ["11:15", "13:15", "15:15", "17:15", "19:15", "21:15", "23:15", "00:45"],
+                    "about": "What really happened in famous people's controversies: researched with sources, "
+                             "allegations told as allegations, both sides, a fairness check before every video. "
+                             "No religion, politics or army."},
     "music": {"label": "AI songs in English", "genre": "music", "color": "#2A0B2E",
               "times": ["01:00", "04:00", "07:00", "10:00", "13:00", "16:00", "19:00", "22:00"],
               "about": "Original songs under a minute: AI lyrics, sung by Google Lyria, with a cover "
@@ -379,14 +384,15 @@ def next_payload(ch, client_fn, log=print):
     kind = ch["kind"]
     look = _look(ch)
     stats = ch.get("stats") or {}
-    if kind == "cricket":
+    if kind in ("cricket", "controversy"):
         if not ch.get("ideas"):
             if time.time() - _ideas_failed.get(ch["id"], 0) < IDEAS_RETRY:
                 return None, None
-            import cricket_shorts
+            import importlib
+            planner = importlib.import_module("cricket_shorts" if kind == "cricket" else "controversy_shorts")
             try:
-                got = cricket_shorts.channel_ideas(client_fn(), ch["per_day"], avoid=ch.get("used") or [],
-                                                   best=stats.get("best") or [], worst=stats.get("worst") or [])
+                got = planner.channel_ideas(client_fn(), ch["per_day"], avoid=ch.get("used") or [],
+                                            best=stats.get("best") or [], worst=stats.get("worst") or [])
             except Exception as e:  # noqa: BLE001
                 _ideas_failed[ch["id"]] = time.time()
                 log(f"⚠️ {ch['name']}: could not plan cricket ideas ({type(e).__name__}).")
@@ -398,6 +404,9 @@ def next_payload(ch, client_fn, log=print):
             ch = get(ch["id"])
         idea = ch["ideas"][0]
         _change(ch["id"], lambda c: c.update(ideas=(c.get("ideas") or [])[1:]))
+        if kind == "controversy":
+            return ({**look, "genre": "controversy", "controversy_topic": idea["text"], "bg_music": True},
+                    {"label": idea["text"], "format": "controversy", "topic": idea["text"]})
         return ({**look, "genre": "cricket", "cricket_mode": idea["kind"], "cricket_match": idea["text"],
                  "bg_music": True},
                 {"label": idea["text"], "format": idea["kind"], "topic": idea["text"],
@@ -534,7 +543,7 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
                         j["error"] = err
             topic = next((j.get("topic") for j in c["jobs"] if j.get("job_id") == job_id), None)
             if status == "done":
-                adds = used or ([topic] if c["kind"] == "cricket" and topic else [])
+                adds = used or ([topic] if c["kind"] in ("cricket", "controversy") and topic else [])
                 c["used"] = ((c.get("used") or []) + [str(u)[:140] for u in adds if u])[-300:]
     return _change(ch["id"], fn)
 

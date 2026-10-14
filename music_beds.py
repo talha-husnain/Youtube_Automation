@@ -22,6 +22,12 @@ PROMPTS = {
         "Cinematic sports build-up: pulsing bass, taiko drums, heroic synth chords, tense and exciting",
         "Fun bouncy sports beat: dhol rhythm with modern trap drums and playful plucks",
     ],
+    "controversy": [
+        "Dark investigative documentary bed: low pulsing synth, soft ticking, tense strings, mysterious",
+        "Suspenseful news explainer music: deep bass drone, sparse piano notes, slow heartbeat drum",
+        "Moody true-story background: atmospheric pads, subtle glitch percussion, serious and steady",
+        "Tense reveal music: muted cinematic drums, rising strings, restrained and dramatic",
+    ],
     "quiz": [
         "Playful game show background loop: ticking clock percussion, light plucked strings, curious mood",
         "Suspenseful quiz countdown music: soft pulsing synth, ticking hi-hats, thinking mood, steady",

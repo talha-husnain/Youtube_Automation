@@ -80,18 +80,32 @@ def _page_image(title):
     return page.get("title"), page.get("pageimage"), page.get("description") or ""
 
 
-def lookup(name):
+# kind "person" (the controversy channel): anyone famous, so the article's
+# short description must say what they are, or a namesake gets their photo.
+PERSON = re.compile(r"actor|actress|singer|cricketer|footballer|player|athlete|businessman|businesswoman|"
+                    r"entrepreneur|youtuber|influencer|presenter|host|model|rapper|musician|director|"
+                    r"producer|comedian|journalist|television|film|personality|boxer|wrestler|author|chef",
+                    re.I)
+
+
+def _fits(desc, kind):
+    return "cricket" in desc.lower() if kind == "cricket" else bool(PERSON.search(desc or ""))
+
+
+def lookup(name, kind="cricket"):
     """{"player", "file", "url", "licence", "artist", "page"} for a cricketer's
-    free photo, or None. Cached (a miss too, so a player without one is not
-    asked again every Short)."""
+    (kind "person": anyone famous's) free photo, or None. Cached (a miss too,
+    so a player without one is not asked again every Short)."""
     key = " ".join((name or "").split()).lower()
     if len(key) < 3:
         return None
+    if kind != "cricket":
+        key = f"{key}|{kind}"
     with _lock:
         hit = _read().get(key)
     if hit and time.time() - hit.get("at", 0) < CACHE_DAYS * 86400:
         return hit.get("photo")
-    photo = _lookup(name)
+    photo = _lookup(name, kind)
     with _lock:
         data = _read()
         data[key] = {"at": int(time.time()), "photo": photo}
@@ -99,17 +113,18 @@ def lookup(name):
     return photo
 
 
-def _lookup(name):
+def _lookup(name, kind="cricket"):
     title, file, desc = _page_image(name)
     # The article must be the cricketer, not a namesake ("Shoaib Malik" the
     # politician): its short description says "cricketer".
-    if not title or "cricket" not in desc.lower():
-        res = _api({"action": "query", "list": "search", "srsearch": f"{name} cricketer", "srlimit": 1})
+    if not title or not _fits(desc, kind):
+        res = _api({"action": "query", "list": "search", "srlimit": 1,
+                    "srsearch": f"{name} cricketer" if kind == "cricket" else name})
         hits = ((res or {}).get("query") or {}).get("search") or []
         if not hits:
             return None
         title, file, desc = _page_image(hits[0]["title"])
-        if not title or "cricket" not in desc.lower():
+        if not title or not _fits(desc, kind):
             return None
     if not file:
         return None
@@ -134,12 +149,12 @@ def credit_line(photo):
             f"via Wikimedia Commons ({photo['page']})")
 
 
-def fetch(name, out_dir, size=(700, 760)):
+def fetch(name, out_dir, size=(700, 760), kind="cricket"):
     """{"card", "avatar", "badge", "info"} for a player, or None. The card is
     the photo cover-cropped (face kept: the crop leans to the top), rounded,
     with a gold frame and a soft shadow; avatar (300 px) and badge (150 px)
     are round. All ready for short_kit.render(images=)."""
-    photo = lookup(name)
+    photo = lookup(name, kind)
     if not photo:
         return None
     try:

@@ -52,16 +52,19 @@ FIRST_COMMENTS = {
              "Pehli baar mein kitne sahi? Sach batana 😄👇"],
     "music": ["Which line hit you the hardest? 🎧👇", "Rate this song from 1 to 10 👇",
               "Who are you sending this to? 🎶"],
+    "controversy": ["Aap kis ki side par hain? 👇", "Aap ke hisab se asal ghalti kis ki thi? 👇",
+                    "Agli controversy kis ki explain karein? 👇"],
 }
 FOLLOW_LINE = {"comedy": "Roz naye funny Shorts: follow karo 🔔", "cricket": "Roz naye cricket facts: follow karo 🔔",
                "quiz": "Roz naya quiz: follow karo aur apna streak banao 🔔",
-               "music": "A new song every day: follow so you don't miss it 🔔"}
+               "music": "A new song every day: follow so you don't miss it 🔔",
+               "controversy": "Roz ek controversy, sources ke saath: follow karo 🔔"}
 PLAYLISTS = {
     ("cricket", "match"): "Cricket match results", ("cricket", "topic"): "Cricket facts and records",
     ("cricket", "versus"): "Who is better? Player vs player", ("quiz", "mcq"): "GK quiz",
     ("quiz", "riddle"): "Paheliyan", ("quiz", "math"): "Dimagh lagao: maths puzzles",
     ("quiz", "flags"): "Flag quiz: guess the country", ("music", None): "New AI songs",
-    ("comedy", None): "Comedy Shorts",
+    ("comedy", None): "Comedy Shorts", ("controversy", None): "Controversies explained",
 }
 
 REPLY_PROMPT = """You reply to viewer comments for {who} ({handle}).
@@ -75,7 +78,11 @@ nothing explicit, nothing about religion, politics, caste, ethnicity or children
 COMMENTS (JSON):
 {comments}"""
 WHO = {"comedy": "a Pakistani comedy Shorts channel", "cricket": "a cricket facts channel for Pakistani and Indian fans",
-       "quiz": "a quiz and paheli Shorts channel", "music": "an English AI music channel (songs made with AI)"}
+       "quiz": "a quiz and paheli Shorts channel", "music": "an English AI music channel (songs made with AI)",
+       "controversy": "a channel that explains controversies about famous people fairly, with sources"}
+# Replies on a controversy must not become new accusations.
+CONTROVERSY_EXTRA = ("Stay neutral and fair: never agree with insults or new accusations about the person, "
+                     "never add claims the video did not make; thank people for their view and ask what they think. ")
 QUIZ_EXTRA = ("These are quiz Shorts: each comment's short_answers lists the right answers of that Short. "
               "When the comment gives answers or a score, say warmly whether they got it right (\"Bilkul sahi!\" / "
               "\"Ufff, galat! Sahi jawab tha ...\"), never mocking. ")
@@ -262,7 +269,8 @@ def auto_replies(acct, kind, handle, my_channel_id, client_fn, log=print, model=
     resp = client_fn().models.generate_content(
         model=model or kit.text_model(),
         contents=REPLY_PROMPT.format(who=WHO.get(kind, WHO["comedy"]), handle=handle or "this channel",
-                                     extra=QUIZ_EXTRA if kind == "quiz" else "",
+                                     extra=QUIZ_EXTRA if kind == "quiz" else CONTROVERSY_EXTRA
+                                     if kind == "controversy" else "",
                                      comments=json.dumps(payload, ensure_ascii=False)),
         config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=Replies,
                                            temperature=0.8))
@@ -330,7 +338,8 @@ def add_to_playlists(acct, kind, log=print):
 
 # ------------------------------------------------------------------ cross promotion
 
-PROMO_LABEL = {"comedy": "comedy", "cricket": "cricket facts", "quiz": "daily quiz", "music": "new songs"}
+PROMO_LABEL = {"comedy": "comedy", "cricket": "cricket facts", "quiz": "daily quiz", "music": "new songs",
+               "controversy": "controversies explained"}
 
 
 def promo_line(others):

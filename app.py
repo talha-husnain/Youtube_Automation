@@ -963,9 +963,9 @@ def _recover_jobs_from_disk():
 _RESUME_FILE = ".resume.json"
 # Video types (CONTENT_GENRE): comedy is the main pipeline; the others are
 # song_shorts.py, movie_dub.py and cricket_shorts.py.
-CONTENT_GENRES = ("comedy", "songs", "movies", "cricket", "quiz", "music")
+CONTENT_GENRES = ("comedy", "songs", "movies", "cricket", "quiz", "music", "controversy")
 # Made from nothing but a prompt (main.py --generate): no link, no upload.
-GENERATED_GENRES = ("cricket", "quiz", "music")
+GENERATED_GENRES = ("cricket", "quiz", "music", "controversy")
 MAX_RESUME_ATTEMPTS = 2
 
 # --- Deploy handover (two instances, one disk) -------------------------------
@@ -4379,6 +4379,7 @@ async def process_endpoint(
     music_style: Optional[str] = Form(None),
     music_theme: Optional[str] = Form(None),
     music_avoid: Optional[str] = Form(None),
+    controversy_topic: Optional[str] = Form(None),
     channel: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
@@ -4442,6 +4443,7 @@ async def process_endpoint(
         music_style = body.get("music_style")
         music_theme = body.get("music_theme")
         music_avoid = body.get("music_avoid")
+        controversy_topic = body.get("controversy_topic")
         channel = body.get("channel")
 
     # Two or more links: one short made of their best moments (compilation.py),
@@ -4677,8 +4679,10 @@ async def process_endpoint(
     if genre_val == "cricket":
         env["CRICKET_MATCH"] = cricket_match
         env["CRICKET_MODE"] = cricket_mode
-    if genre_val in ("cricket", "quiz") and str(bg_music).lower() in ("1", "true", "yes"):
+    if genre_val in ("cricket", "quiz", "controversy") and str(bg_music).lower() in ("1", "true", "yes"):
         env["BG_MUSIC"] = "1"
+    if genre_val == "controversy":
+        env["CONTROVERSY_TOPIC"] = re.sub(r"\s+", " ", str(controversy_topic or ""))[:200]
     # The channel kinds of my_channels.py; avoid lists keep a channel from
     # asking a question or making a song title twice.
     if genre_val == "quiz":

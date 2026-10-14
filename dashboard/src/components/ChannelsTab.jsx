@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     Loader2, Youtube, Plus, Play, Trash2, LogOut, Layers, X, Copy, Check, ExternalLink, Rocket, AlertTriangle,
-    Trophy, Brain, Music, HelpCircle,
+    Trophy, Brain, Music, HelpCircle, Flame,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
@@ -10,7 +10,7 @@ import { getApiUrl } from '../config';
 // the main one (comedy, set up in Autopilot) and the others, each with its
 // own Google connection, kind of Short, number a day and posting times.
 
-const KIND_ICON = { comedy: Rocket, cricket: Trophy, quiz: HelpCircle, music: Music };
+const KIND_ICON = { comedy: Rocket, cricket: Trophy, quiz: HelpCircle, music: Music, controversy: Flame };
 const STATUS = { running: 'making', done: 'waiting to upload', uploaded: 'uploaded', failed: 'failed', skipped: 'skipped' };
 const PUBLISH_STEPS = `1. Open console.cloud.google.com and pick your Shortkaar project.
 2. Go to: APIs & Services > OAuth consent screen (Google Auth Platform > Audience).

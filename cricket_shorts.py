@@ -539,7 +539,7 @@ def _flash(t0):
                   at=(0, 0), alpha="C8", extra=r"\t(0,220,\1a&HFF&)")
 
 
-def fact_events(k, n, fact, t0, t1):
+def fact_events(k, n, fact, t0, t1, count=True):
     """One numbered fact card: badge, headline, big stat, what it means, progress.
     The whole card swipes in from the right with a flash, then fades out."""
     out = r"\fad(0,200)"
@@ -557,7 +557,7 @@ def fact_events(k, n, fact, t0, t1):
         kit.dialogue(4, t0 + 0.6, t1, "CkNote", rf"{{\an5\pos({CX},1130)\fad(180,200)}}{_txt(fact.detail, 130)}"),
     ]
     if fact.stat.strip():
-        if re.fullmatch(r"\d{1,6}", fact.stat.strip()):
+        if count and re.fullmatch(r"\d{1,6}", fact.stat.strip()):
             ev += _count_up(t0 + 0.35, t1, CX, 950, fact.stat.strip(), style_name="CkBigC")
         else:
             ev.append(kit.dialogue(5, t0 + 0.35, t1, "CkBigC",
@@ -582,10 +582,10 @@ def topic_frame_events(story, total, handle):
     return ev
 
 
-def _voice_timeline(client, lines, output_dir, stem):
+def _voice_timeline(client, lines, output_dir, stem, voice=None, style=None):
     """Voice every line; (windows [(k, start, end)], voices, caption lines, end)."""
-    voice = os.environ.get("CRICKET_VOICE") or "Fenrir"
-    said = kit.voice_lines(client, [{"text": t, "voice": voice, "style": VOICE_STYLE} for t in lines],
+    voice = voice or os.environ.get("CRICKET_VOICE") or "Fenrir"
+    said = kit.voice_lines(client, [{"text": t, "voice": voice, "style": style or VOICE_STYLE} for t in lines],
                            output_dir, stem)
     if not any(p for p, _ in said):
         raise RuntimeError("The AI voice failed for every line; try again in a minute.")
@@ -600,46 +600,49 @@ def _voice_timeline(client, lines, output_dir, stem):
     return windows, voices, caps, t + 0.6
 
 
-def _bed():
+def _bed(kind="cricket"):
     """A background track for the voice, or None (BG_MUSIC off)."""
     if os.environ.get("BG_MUSIC", "0") != "1":
         return None
-    track = kit.music_track("cricket")
+    track = kit.music_track(kind)
     if not track:
         import music_beds
-        music_beds.ensure("cricket", 1)
-        track = kit.music_track("cricket")
+        music_beds.ensure(kind, 1)
+        track = kit.music_track(kind)
     if not track:
         print("   ℹ️ Background music is on but none could be found or made: no music this time.")
     return track
 
 
-def _photo(name, output_dir):
-    """{"card", "avatar", "info"} for a player's free photo, or None."""
+def _photo(name, output_dir, kind="cricket"):
+    """{"card", "avatar", "info"} for a player's (or, kind "person", anyone
+    famous's) free photo, or None."""
     if not (name or "").strip() or os.environ.get("CRICKET_PHOTOS", "1") == "0":
         return None
     import player_photo
-    got = player_photo.fetch(name.strip(), output_dir)
+    got = player_photo.fetch(name.strip(), output_dir, kind=kind)
     if got:
         print(f"   🖼️ Photo of {got['info']['player']} ({got['info']['licence']}, Wikimedia Commons).")
     return got
 
 
 def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_end, clip, seo,
-            images=(), photos=()):
+            images=(), photos=(), genre="cricket", after_seo=None):
     import seo_copy
     outro_s = cfg["outro_seconds"]
     card_ev, card_sfx = kit.end_card(body_end, outro_s)
     total = body_end + (outro_s if card_ev else 0.0)
-    track = _bed()
+    track = _bed(genre)
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
-    print(f"🎬 Rendering the cricket short ({total:.0f}s"
+    print(f"🎬 Rendering the {genre} short ({total:.0f}s"
           + (f", music: {os.path.basename(track)}" if track else "") + ")...")
     kit.render(final, total, colors, kit.ambient_events(total) + events + card_ev, STYLES,
                voices=voices, sfx=sfx + card_sfx, bed=(track, body_end) if track else None, images=images)
     clip.update({"end": round(total, 3), "seconds": round(total, 3), "file": final,
                  "background_music": os.path.basename(track) if track else None})
     seo_copy.apply([clip], clip["captions"], **seo)
+    if after_seo:
+        after_seo(clip)
     if photos:
         # Free licences ask for credit: in the copy, never on screen.
         import credits
@@ -649,7 +652,7 @@ def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_e
         for field in ("seo_description", "video_description_for_instagram"):
             if clip.get(field):
                 clip[field] = credits.insert(clip[field], credit)
-    kit.finish(output_dir, stem, [clip], clip["captions"], pipeline, extra={"genre": "cricket"})
+    kit.finish(output_dir, stem, [clip], clip["captions"], pipeline, extra={"genre": genre})
 
 
 def run_topic(topic, output_dir, pipeline):

@@ -46,7 +46,8 @@ API = "https://www.googleapis.com/youtube/v3"
 UPLOAD_API = "https://www.googleapis.com/upload/youtube/v3/videos"
 ANALYTICS_API = "https://youtubeanalytics.googleapis.com/v2/reports"
 # Comedy, Sports, Film, Music, Education, Music
-CATEGORY = {"comedy": "23", "cricket": "17", "movies": "1", "songs": "10", "quiz": "27", "music": "10"}
+CATEGORY = {"comedy": "23", "cricket": "17", "movies": "1", "songs": "10", "quiz": "27", "music": "10",
+            "controversy": "24"}
 TITLE_MAX, DESCRIPTION_MAX, TAGS_MAX = 100, 4900, 480
 _states = {}          # OAuth state -> (time, dashboard origin, account): a callback we did not start is refused
 _lock = threading.Lock()

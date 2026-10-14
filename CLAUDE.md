@@ -439,7 +439,21 @@ never finished:
   article's lead image, public domain, cached in output/flags/; wrong options
   from the same region. `QUIZ_NUMBER` makes "QUIZ #12" a daily series.
 - **Songs end without an end card** (`frame_outro` false in the payload):
-  a Short that ends on the music loops, and replays count as views. Tests run with `.venv/Scripts/python` (the system
+  a Short that ends on the music loops, and replays count as views.
+- **Controversies, explained** (`controversy_shorts.py`, genre/channel kind
+  `controversy`, 15-oct-2026): no news footage (Content ID) and no rumour
+  told as fact. Three gates: grounded research with every claim labelled
+  REPORTED/ALLEGED/ADMITTED/RULED and at least 3 sources; a script that says
+  "ilzaam" for allegations and gives the person's side; a second call that
+  checks the script against the facts for defamation risk (one rewrite with
+  its notes, then no video). `RULES` (religion, politics, army, minors,
+  unruled sexual allegations, health...) are refused at every step. Grounding
+  source links are vertexaisearch redirects that expire: `_real_url` follows
+  each to the article for the description's "Sources:" block. Photos through
+  `player_photo` kind "person" (the article description must say what they
+  are). Cricket helpers are shared (`_voice_timeline(voice, style)`,
+  `_bed(kind)`, `_finish(genre, after_seo)`, `fact_events(count=False)` so a
+  year is not counted up from 0). Tests run with `.venv/Scripts/python` (the system
   Python has no httpx) and `--continue-on-collection-errors`.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file
