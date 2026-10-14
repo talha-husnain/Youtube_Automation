@@ -405,7 +405,41 @@ never finished:
   `scale=eval=frame` (overlay copes with the size change) and a cover
   background panned by a moving crop (cheaper than zoompan).
 - Bash heredocs in this shell turn `\n` inside a Python string into a real
-  newline even with a quoted delimiter: write patch scripts with the Write tool. Tests run with `.venv/Scripts/python` (the system
+  newline even with a quoted delimiter: write patch scripts with the Write tool.
+- **Engagement** (`engage.py`, 15-oct-2026), per channel switches run from
+  `my_channels.engage_pass` every 15 min: first comment once a Short is
+  public (its own `comment_question`, else a template; the API cannot pin),
+  auto replies (Gemini, 15 a day, quiz replies check the viewer's answer
+  against `answers` in the upload row), playlists per kind/format, and a
+  "More from us" line in descriptions (`my_channels.promote`). All off on
+  the main channel until the owner switches them on (they post on a live
+  channel); on for new channels. API writes cost 50 units of the project's
+  10,000/day shared by every channel: `youtube_account.spend/quota_used`
+  (per Pacific day), engagement stops at `engage.QUOTA_BUDGET` (6,000).
+- **Today tab + reminders** (`/api/today`, `app._today`, `reminders.py`,
+  `notify.py`): self-host opens on Today (the dashboard checks /api/today,
+  which 404s in cloud mode). Windows toasts through PowerShell 5.1's WinRT
+  classes (no package) at 11:00 and 19:00 when something needs the owner
+  (a Google token expiring within 5 days, one already stopped, a channel
+  not connected), and the day's numbers at 21:30. `snooze_until` holds the
+  reminders: the owner asked for Friday or Saturday (set to 16-oct 10:59).
+- **Player vs player** (cricket `CRICKET_MODE=versus`): the code decides
+  each row's winner from the numbers (`fix_better`), because the model got
+  it wrong twice on a real run: a bowler's strike rate and average are
+  lower-is-better (`context()` = bowling/batting/mixed, mixed keeps the
+  model's call for a bare "AVERAGE"), "4/15" beats "4/22", matches played
+  wins nothing; when the code changes the result the voiced verdict is
+  rewritten to match the screen.
+- **Fast results** (`my_channels.match_watch`, cricket channel, every 2 h):
+  a finished Pakistan or India match jumps the idea queue (`urgent`), is
+  made even past the day's count and is scheduled 20 min after it is done.
+  Duplicates are found by the two teams within 20 h, not by the text: the
+  same match comes back with its date written differently.
+- **Flag quiz** (`flags.py`, quiz format `flags`): the "Flag of <country>"
+  article's lead image, public domain, cached in output/flags/; wrong options
+  from the same region. `QUIZ_NUMBER` makes "QUIZ #12" a daily series.
+- **Songs end without an end card** (`frame_outro` false in the payload):
+  a Short that ends on the music loops, and replays count as views. Tests run with `.venv/Scripts/python` (the system
   Python has no httpx) and `--continue-on-collection-errors`.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file

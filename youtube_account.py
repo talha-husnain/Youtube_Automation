@@ -242,6 +242,35 @@ def upload_limit_hit(text):
     return "uploadlimitexceeded" in t or "exceeded the number of videos" in t or UPLOAD_LIMIT_TEXT.lower() in t
 
 
+# The Google project's daily API quota (10,000 units, reset at midnight
+# Pacific time) is shared by every channel's token. engage.py spends it on
+# comments and playlists (50 units a write), so it is counted here, per
+# Pacific day, in one file for the whole project. videos.insert has its own
+# 100-a-day quota and is not counted.
+QUOTA_FILE = os.path.join(ROOT, "output", ".yt_quota.json")
+QUOTA_DAILY = 10_000
+
+
+def _quota_day():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d")
+    except Exception:  # noqa: BLE001 — no tz database: UTC-8 is close enough
+        return (datetime.now(timezone.utc) - timedelta(hours=8)).strftime("%Y-%m-%d")
+
+
+def spend(units):
+    with _lock:
+        data = _read(QUOTA_FILE, {})
+        day = _quota_day()
+        data = {day: int(data.get(day, 0)) + int(units)}
+        _write(QUOTA_FILE, data)
+
+
+def quota_used():
+    return int(_read(QUOTA_FILE, {}).get(_quota_day(), 0))
+
+
 def _google_error(r):
     try:
         err = r.json().get("error") or {}

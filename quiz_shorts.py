@@ -15,8 +15,12 @@ check does not confirm is dropped, and the Short needs enough left.
 
 Formats (QUIZ_FORMAT): ``mcq`` 3 general-knowledge questions with 4 options,
 ``riddle`` 2 paheliyan with the answer revealed, ``math`` 2 quick maths or
-logic puzzles with 3 options. QUIZ_TOPIC narrows the questions, QUIZ_AVOID
-(a JSON list) holds questions already asked on the channel.
+logic puzzles with 3 options, ``flags`` 4 real flags (flags.py, public
+domain) with 4 countries of the same region each: the answer is known in
+code, so only the fun fact comes from Gemini. QUIZ_TOPIC narrows the
+questions, QUIZ_AVOID (a JSON list) holds questions already asked on the
+channel ("flag:<country>" for flags), QUIZ_NUMBER is the channel's running
+quiz number ("QUIZ #12"), which turns single videos into a daily series.
 """
 import json
 import os
@@ -37,7 +41,11 @@ FORMATS = {
     "mcq": {"count": 3, "options": 4, "timer": 5, "label": "SAWAL"},
     "riddle": {"count": 2, "options": 0, "timer": 7, "label": "PAHELI"},
     "math": {"count": 2, "options": 3, "timer": 6, "label": "DIMAGH LAGAO"},
+    "flags": {"count": 4, "options": 4, "timer": 4, "label": "JHANDA"},
 }
+FLAG_QUESTIONS = ["Ye jhanda kis mulk ka hai?", "Aur ye wala jhanda?", "Ab ye pehchano!",
+                  "Last one: ye kis mulk ka hai?"]
+FLAG_Y = 470
 TOPICS = ["Pakistan general knowledge", "world general knowledge", "science", "geography and capitals",
           "space and planets", "human body", "animals", "inventions and inventors", "history",
           "sports general knowledge", "food and fruits", "famous places of the world"]
@@ -92,6 +100,7 @@ FORMAT_TEXT = {
     "mcq": "3 general-knowledge multiple-choice questions, 4 options each.",
     "riddle": "2 paheliyan (riddles) with a clever one- or two-word answer; no options.",
     "math": "2 quick maths or logic puzzles anyone can solve in their head in 6 seconds, 3 options each.",
+    "flags": "4 country flags to recognise, 4 country names each.",
 }
 
 CHECK_PROMPT = """Check this quiz carefully. For each question say if the marked answer is
@@ -107,6 +116,57 @@ def _avoid():
         return [str(x)[:140] for x in got if x][-80:]
     except ValueError:
         return []
+
+
+class FlagCopy(BaseModel):
+    title: str
+    hook_line: str
+    outro_line: str
+    facts: List[str]
+
+
+FLAG_PROMPT = """You write the words for a flag quiz YouTube Short for Pakistani and Indian viewers
+({handle}). The countries, in order: {countries}.
+Return:
+- title: max 45 characters, Roman Urdu hook, no emoji, never naming a country
+  ("Sirf geniuses {n}/{n} jhande pehchan paate hain").
+- hook_line: Roman Urdu voice line, 6-12 words, a challenge.
+- outro_line: Roman Urdu voice line, max 12 words, asking for their score in the comments.
+- facts: one per country in the same order: a true, well-known fact about that
+  country's flag (its colours, symbol or story), Roman Urdu, max 70 characters.
+Everyday Roman Urdu in Latin letters, never Devanagari or Arabic script."""
+
+
+def write_flags(client, handle, rnd=None):
+    """(Quiz, [flag png per question]) from flags.py: four flags with pictures."""
+    import random
+    import flags
+    rnd = rnd or random.Random()
+    used = [a[5:] for a in _avoid() if a.lower().startswith("flag:")]
+    picked = []
+    for country, options, answer in flags.pick(8, used, rnd):
+        path = flags.fetch(country)
+        if path:
+            picked.append((country, options, answer, path))
+        if len(picked) == FORMATS["flags"]["count"]:
+            break
+    if len(picked) < FORMATS["flags"]["count"]:
+        raise RuntimeError("Could not get enough flag pictures from Wikipedia; try again later.")
+    n = len(picked)
+    try:
+        copy = kit.ask_json(client, FlagCopy, FLAG_PROMPT.format(
+            handle=handle or "this channel", countries=", ".join(c for c, *_ in picked), n=n), model=quiz_model())
+    except Exception as e:  # noqa: BLE001 — the quiz works without the facts
+        print(f"   ℹ️ No flag facts ({type(e).__name__}); plain answers.")
+        copy = FlagCopy(title=f"Sirf geniuses {n}/{n} jhande pehchan paate hain",
+                        hook_line="Kitne jhande pehchan sakte ho? Chalo dekhte hain!",
+                        outro_line="Kitne sahi hue? Apna score comment karo!", facts=[])
+    questions = [Question(question=FLAG_QUESTIONS[min(k, len(FLAG_QUESTIONS) - 1)] if k < n - 1 else FLAG_QUESTIONS[-1],
+                          options=options, answer=answer, answer_text=country,
+                          explain=(copy.facts[k] if k < len(copy.facts) else ""))
+                 for k, (country, options, answer, _p) in enumerate(picked)]
+    return (Quiz(title=copy.title, hook_line=copy.hook_line, questions=questions, outro_line=copy.outro_line),
+            [p for *_x, p in picked])
 
 
 def write(client, fmt, topic, handle):
@@ -206,20 +266,27 @@ def _flash(t0):
                   alpha="C8", extra=r"\t(0,220,\1a&HFF&)")
 
 
-def option_rows(n):
-    """Centre y of each option box."""
+def option_rows(n, picture=False):
+    """Centre y of each option box (lower when a flag sits above them)."""
+    if picture:
+        return [820 + k * 130 for k in range(n)]
     return [700 + k * 140 for k in range(n)] if n == 4 else [720 + k * 160 for k in range(n)]
 
 
-def question_events(k, n, label, q, q0, timer0, reveal0, end):
-    """One question: card, options swiping in, countdown, the reveal."""
+def question_events(k, n, label, q, q0, timer0, reveal0, end, picture=False):
+    """One question: card (or the flag above, drawn by render), options
+    swiping in, countdown, the reveal."""
     ev = [_flash(q0)]
     ev += _pill(q0, end, 190, f"{label} {k}/{n}")
-    ev.append(_shape(2, q0, end, fl._round_rect(980, 360, 40), "&H2B140E&", (50, 250), alpha="40",
-                     extra=r"\fad(200,200)"))
-    ev.append(kit.dialogue(4, q0, end, "QzQ", rf"{{\an5\pos({CX},430)\fad(200,200)\fscx90\fscy90"
-                                               rf"\t(0,220,\fscx100\fscy100)}}{_t(q.question, 140)}"))
-    rows = option_rows(len(q.options))
+    if picture:
+        ev.append(kit.dialogue(4, q0 + 0.2, end, "QzNote", rf"{{\an5\pos({CX},735)\fad(200,200)}}{_t(q.question, 60)}"))
+    else:
+        ev.append(_shape(2, q0, end, fl._round_rect(980, 360, 40), "&H2B140E&", (50, 250), alpha="40",
+                         extra=r"\fad(200,200)"))
+        ev.append(kit.dialogue(4, q0, end, "QzQ", rf"{{\an5\pos({CX},430)\fad(200,200)\fscx90\fscy90"
+                                                   rf"\t(0,220,\fscx100\fscy100)}}{_t(q.question, 140)}"))
+    rows = option_rows(len(q.options), picture)
+    timer_y = 1340 if picture else 1290
     for i, (opt, y) in enumerate(zip(q.options, rows)):
         a = q0 + 0.5 + 0.15 * i
         swipe = (90 + 1100, y - 59, 90, y - 59, 0, 280)
@@ -257,11 +324,12 @@ def question_events(k, n, label, q, q0, timer0, reveal0, end):
     for s in range(secs):
         a = timer0 + s * (reveal0 - timer0) / secs
         b = timer0 + (s + 1) * (reveal0 - timer0) / secs
-        ev.append(_shape(5, a, b, fl._circle(70), _c(fl.GOLD), (CX - 70, 1290 - 70)))
-        ev.append(kit.dialogue(6, a, b, "QzNum", rf"{{\an5\pos({CX},1292)\fscx140\fscy140"
+        ev.append(_shape(5, a, b, fl._circle(70), _c(fl.GOLD), (CX - 70, timer_y - 70)))
+        ev.append(kit.dialogue(6, a, b, "QzNum", rf"{{\an5\pos({CX},{timer_y + 2})\fscx140\fscy140"
                                                  rf"\t(0,180,\fscx100\fscy100)}}{secs - s}"))
-    ev.append(kit.dialogue(4, reveal0 + 0.2, end, "QzNote",
-                           rf"{{\an5\pos({CX},1300)\fad(200,200)}}{_t(q.explain, 80)}"))
+    if q.explain.strip():
+        ev.append(kit.dialogue(4, reveal0 + 0.2, end, "QzNote",
+                               rf"{{\an5\pos({CX},{timer_y + 10})\fad(200,200)}}{_t(q.explain, 80)}"))
     return ev
 
 
@@ -274,8 +342,19 @@ def run(output_dir, pipeline):
     topic = (os.environ.get("QUIZ_TOPIC") or "").strip()[:80]
     print(f"🧠 Quiz short ({fmt}{', ' + topic if topic else ''}): writing and checking the questions...")
     client = kit.gemini()
-    quiz = write(client, fmt, topic, cfg["handle"])
-    print(f"   ✅ {len(quiz.questions)} questions passed the check.")
+    pictures = []
+    if fmt == "flags":
+        quiz, flag_pngs = write_flags(client, cfg["handle"])
+        import flags
+        pictures = [flags.card(p, os.path.join(output_dir, f".flag_{k}.png")) for k, p in enumerate(flag_pngs)]
+        print(f"   ✅ {len(quiz.questions)} flags: {', '.join(q.answer_text for q in quiz.questions)}.")
+    else:
+        quiz = write(client, fmt, topic, cfg["handle"])
+        print(f"   ✅ {len(quiz.questions)} questions passed the check.")
+    try:
+        number = max(0, int(os.environ.get("QUIZ_NUMBER") or 0))
+    except ValueError:
+        number = 0
     stem = kit.neutral_stem("Quiz")
     voice = os.environ.get("QUIZ_VOICE") or "Kore"
     lines = [quiz.hook_line]
@@ -290,13 +369,13 @@ def run(output_dir, pipeline):
         raise RuntimeError("The AI voice failed for every line; try again in a minute.")
     lens = [s or max(2.0, len(t.split()) / 2.6) for t, (_p, s) in zip(lines, said)]
 
-    t, voices, caps, events, sfx = 0.4, [], [], [], []
+    t, voices, caps, events, sfx, images = 0.4, [], [], [], [], []
     # Hook: the title pops in the middle.
     hook_end = t + lens[0] + GAP
     events.append(kit.dialogue(4, t, hook_end, "QzTitle",
                                rf"{{\an5\pos({CX},820)\fscx60\fscy60\t(0,260,\fscx105\fscy105)"
                                rf"\t(260,400,\fscx100\fscy100)\fad(0,200)}}{fl.clean_title(quiz.title)}"))
-    events += _pill(t + 0.2, hook_end, 1040, f"{f['count']} {f['label']}")
+    events += _pill(t + 0.2, hook_end, 1040, (f"QUIZ #{number} | " if number else "") + f"{len(quiz.questions)} {f['label']}")
     if said[0][0]:
         voices.append((said[0][0], t))
     caps.append((lines[0], t, t + lens[0]))
@@ -317,7 +396,10 @@ def run(output_dir, pipeline):
             voices.append((said[ri][0], reveal0 + 0.15))
         caps.append((lines[ri], reveal0 + 0.15, reveal0 + 0.15 + lens[ri]))
         end = reveal0 + 0.15 + lens[ri] + 0.5
-        events += question_events(k + 1, len(quiz.questions), f["label"], q, q0, timer0, reveal0, end)
+        events += question_events(k + 1, len(quiz.questions), f["label"], q, q0, timer0, reveal0, end,
+                                  picture=bool(pictures))
+        if pictures:
+            images.append({"path": pictures[k], "t0": q0, "t1": end, "y": FLAG_Y, "zoom": 0.03})
         t = end
     o0 = t
     events.append(_flash(o0))
@@ -344,16 +426,21 @@ def run(output_dir, pipeline):
           + (f", music: {os.path.basename(track)}" if track else "") + ")...")
     kit.render(final, total, [cfg["bg"], kit.blend("#4C1D95", cfg["bg"], 0.35), kit.blend("#1E3A8A", cfg["bg"], 0.3)],
                kit.ambient_events(total) + frame + events + card_ev, STYLES, voices=voices,
-               sfx=sfx + card_sfx, bed=(track, body_end) if track else None)
+               sfx=sfx + card_sfx, bed=(track, body_end) if track else None, images=images)
     transcript = kit.timed_transcript(caps)
     clip = {"start": 0.0, "end": round(total, 3), "seconds": round(total, 3), "file": final,
             "video_title_for_youtube_short": quiz.title, "viral_hook_text": quiz.hook_line,
             "why": f"Quiz ({fmt}): {topic or 'mixed'}", "predicted_score": 85, "genre": "quiz",
             "ai_voice": "AI voice", "background_music": os.path.basename(track) if track else None,
-            "quiz": {"format": fmt, "topic": topic, "questions": [q.question for q in quiz.questions],
+            "comment_question": quiz.outro_line,
+            "quiz": {"format": fmt, "topic": topic, "number": number,
+                     "questions": ([f"flag:{q.answer_text}" for q in quiz.questions] if fmt == "flags"
+                                   else [q.question for q in quiz.questions]),
                      "answers": [q.answer_text for q in quiz.questions]}}
     seo_copy.apply([clip], transcript, source_title=quiz.title,
-                   context=SEO_CONTEXT.format(kind=FORMAT_TEXT[fmt], topic=topic or "mixed", n=len(quiz.questions)),
+                   context=SEO_CONTEXT.format(kind=FORMAT_TEXT[fmt], topic=topic or "mixed", n=len(quiz.questions))
+                   + (f" It is the channel's daily quiz number {number}: start the title with \"Quiz #{number}:\"."
+                      if number else ""),
                    text_limit=4000)
     # The question is on screen already: no burned captions.
     clip["captions"] = None

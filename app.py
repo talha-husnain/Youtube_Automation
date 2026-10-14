@@ -2336,7 +2336,8 @@ async def lifespan(app: FastAPI):
         import my_channels
         import short_kit
         asyncio.create_task(my_channels.loop_forever(
-            _autopilot_submit, _job_clips, OUTPUT_DIR, short_kit.gemini, is_active=lambda: not _draining))
+            _autopilot_submit, _job_clips, OUTPUT_DIR, short_kit.gemini, is_active=lambda: not _draining,
+            today_fn=_today))
     yield
     # Cleanup (optional: cancel worker)
 
@@ -2801,6 +2802,11 @@ def _job_clips(job_id):
                     "tiktok": c.get("video_description_for_tiktok") or "",
                     "instagram": c.get("video_description_for_instagram") or "",
                     "seconds": round(float(c.get("end", 0)) - float(c.get("start", 0)), 1),
+                    # The Short's own question for the first comment (engage.py),
+                    # and a quiz's answers so replies can say who got it right.
+                    "question": (c.get("comment_question") or (c.get("cricket_topic") or {}).get("question")
+                                 or (c.get("cricket") or {}).get("question") or ""),
+                    "answers": (c.get("quiz") or {}).get("answers") or [],
                     # Dubbed actors say lines they never said, and an AI song's
                     # voice is a realistic voice nobody sang: YouTube asks for the label.
                     "ai_made": genre in ("movies", "music")})
@@ -2978,11 +2984,13 @@ def _post_all_run(items):
                 st["errors"].append(f"{st['current'][:50]}: no longer on this computer")
                 continue
             slot = youtube_account.next_slots(autopilot_local.settings()["post_times"], 1)[0]
+            import my_channels
             row = youtube_account.upload_and_mark(
-                clip["path"], clip["title"], clip["description"], clip["tags"], clip["genre"],
-                publish_at=slot, ai_made=clip["ai_made"],
+                clip["path"], clip["title"], my_channels.promote(clip["description"], "main"), clip["tags"],
+                clip["genre"], publish_at=slot, ai_made=clip["ai_made"],
                 meta={"job_id": it["job_id"], "clip_index": it["index"], "post_all": True,
                       "source": _source_of(it["job_id"]), "seconds": clip.get("seconds"),
+                      "question": clip.get("question") or "",
                       **dict(zip(("exp", "arm"), __import__("learning")._arm_of(it["job_id"])))})
             if row.get("status") != "done" and youtube_account.upload_limit_hit(row.get("error")):
                 # Every later upload would get the same refusal: stop, the
@@ -3097,14 +3105,152 @@ async def youtube_post_all_status():
 
 def _main_channel_row():
     import autopilot_local
+    import my_channels
     import youtube_account
     cfg = autopilot_local.settings()
     yt = youtube_account.status()
     return {"id": "main", "kind": "comedy", "main": True,
-            "name": (yt.get("channel") or {}).get("title") or "Main channel",
+            "name": ((yt.get("channel") or {}).get("title") or "Main channel").strip(),
             "kind_label": "Comedy (Autopilot, Ready to post)", "enabled": cfg["enabled"],
             "auto_upload": cfg["auto_upload"], "per_day": cfg["comedy_per_day"] + cfg["cricket_per_day"],
-            "post_times": cfg["post_times"], "youtube": yt}
+            "post_times": cfg["post_times"], "youtube": yt, **my_channels.main_settings()}
+
+
+# ------------------------------------------------------------------ today
+
+# One line per step: the box wraps them itself (hard breaks wrapped badly on a phone).
+PUBLISH_STEPS = "\n".join([
+    '1. Make the new channels: open youtube.com/channel_switcher, press "Create a channel" and give it a name. Once for each new channel.',
+    "2. Open console.cloud.google.com and pick your Shortkaar project.",
+    '3. Go to APIs & Services > OAuth consent screen (or Google Auth Platform > Audience), press "Publish app" and confirm.',
+    '4. In Shortkaar open Channels. On your main channel press "reconnect".',
+    '5. On each new channel press "connect youtube channel" and pick it on Google\'s screen. If Google says "Google hasn\'t verified this app": Advanced > Go to ... (it is your app).',
+])
+_fresh = {}
+
+
+def _fresh_channel(key):
+    """The connected channel's own numbers, at most every 15 minutes (1 unit)."""
+    import youtube_account
+    hit = _fresh.get(key)
+    if hit and time.time() - hit[0] < 900:
+        return hit[1]
+    try:
+        me = youtube_account.channel()
+        youtube_account.spend(1)
+    except Exception:  # noqa: BLE001 — the saved copy from the sign-in will do
+        me = None
+    _fresh[key] = (time.time(), me)
+    return me
+
+
+def _today_row(cid, name, kind, per_day, made, views, problems, enabled=True):
+    """One channel's line on the Today tab (inside youtube_account.use)."""
+    import youtube_account
+    from datetime import datetime, timezone
+    yt = youtube_account.status()
+    ups = youtube_account.uploads()
+    now = datetime.now(timezone.utc)
+    day = datetime.now().strftime("%Y-%m-%d")
+    done = [r for r in ups if r.get("status") == "done"]
+    future = []
+    for r in done:
+        try:
+            if r.get("publish_at") and datetime.fromisoformat(r["publish_at"]) > now:
+                future.append(r)
+        except ValueError:
+            pass
+    future.sort(key=lambda r: r["publish_at"])
+    me = (_fresh_channel(cid) if yt.get("connected") else None) or yt.get("channel") or {}
+    if not yt.get("connected"):
+        problems = ["not connected"] + problems
+    return {"id": cid, "name": name, "kind": kind, "connected": bool(yt.get("connected")), "enabled": enabled,
+            "expires": yt.get("expires"), "thumbnail": me.get("thumbnail"), "handle": me.get("handle"),
+            "subscribers": me.get("subscribers"), "per_day": per_day, "made_today": made,
+            "uploaded_today": sum(1 for r in done if datetime.fromtimestamp(r.get("created", 0)).strftime("%Y-%m-%d") == day),
+            "scheduled": len(future), "next_post": future[0]["publish_at"] if future else None,
+            "views": views, "problems": problems,
+            "upcoming": [{"title": r.get("title"), "at": r["publish_at"], "video_id": r.get("video_id")}
+                         for r in future[:4]]}
+
+
+def _today():
+    """Everything the Today tab and the reminders need, for every channel."""
+    import autopilot_local
+    import learning
+    import my_channels
+    import reminders
+    import youtube_account
+    from datetime import datetime
+    now = time.time()
+    day = datetime.now().strftime("%Y-%m-%d")
+    cfg = autopilot_local.settings()
+    run = (cfg.get("runs") or [{}])[0]
+    made = sum(int(j.get("clips") or 1) for j in run.get("jobs") or []) if run.get("date") == day else 0
+    problems = []
+    if not cfg["enabled"]:
+        problems.append("Autopilot is off")
+    if cfg.get("upload_paused_until", 0) > now:
+        problems.append("daily upload limit reached, uploads start again later")
+    try:
+        main_views = learning.summary().get("total_views")
+    except Exception:  # noqa: BLE001
+        main_views = None
+    with youtube_account.use(None):
+        main_name = ((youtube_account.status().get("channel") or {}).get("title") or "Main channel").strip()
+        rows = [_today_row("main", main_name, "comedy", cfg["comedy_per_day"] + cfg["cricket_per_day"], made,
+                           main_views, problems, cfg["enabled"])]
+    for ch in my_channels.channels():
+        p = []
+        if not ch.get("enabled"):
+            p.append("switched off")
+        if ch.get("upload_paused_until", 0) > now:
+            p.append("daily upload limit reached, uploads start again later")
+        failed = len(my_channels._jobs_on(ch, day, ("failed",)))
+        if failed:
+            p.append(f"{failed} Short(s) failed today")
+        with youtube_account.use(my_channels.account(ch["id"])):
+            rows.append(_today_row(ch["id"], ch["name"], ch["kind"], ch["per_day"],
+                                   len(my_channels._jobs_on(ch, day)), (ch.get("stats") or {}).get("views"),
+                                   p, bool(ch.get("enabled"))))
+    connected = [r for r in rows if r["connected"]]
+    expiring = [r["expires"] for r in connected if r.get("expires")]
+    views = sum(r["views"] or 0 for r in rows) if any(r["views"] is not None for r in rows) else None
+    setup = [{"key": "keys", "done": youtube_account.configured(), "title": "YouTube keys in .env"},
+             {"key": "publish", "done": bool(connected) and not expiring,
+              "title": "Google project published, so the connections never stop",
+              "deadline": min(expiring) if expiring else None, "steps": PUBLISH_STEPS}]
+    setup += [{"key": f"connect_{r['id']}", "done": r["connected"], "title": f"{r['name']} connected",
+               "tab": "channels"} for r in rows]
+    setup.append({"key": "autopilot", "done": bool(cfg["enabled"]), "title": "Autopilot on for the main channel",
+                  "tab": "local-autopilot"})
+    upcoming = sorted(({**u, "channel": r["name"]} for r in rows for u in r["upcoming"]), key=lambda u: u["at"])
+    rem = reminders.load()
+    return {"channels": rows, "setup": setup, "upcoming": upcoming[:8],
+            "totals": {"made_today": sum(r["made_today"] for r in rows),
+                       "uploaded_today": sum(r["uploaded_today"] for r in rows),
+                       "scheduled": sum(r["scheduled"] for r in rows), "views": views,
+                       "views_gain": reminders.views_gain(views) if views is not None else 0,
+                       "subscribers": sum(r["subscribers"] or 0 for r in rows)},
+            "todo": reminders.things_to_do({"channels": rows}),
+            "notify": {"reminders": rem["reminders"], "summary": rem["summary"],
+                       "snooze_until": rem["snooze_until"], "slots": list(reminders.SLOTS),
+                       "summary_at": reminders.SUMMARY_AT},
+            "quota_used": youtube_account.quota_used()}
+
+
+@app.get("/api/today")
+async def today_get():
+    _local_only()
+    return await _in_thread(_today)
+
+
+@app.put("/api/today/settings")
+async def today_settings(request: Request):
+    _local_only()
+    import reminders
+    reminders.update(await request.json())
+    return await _in_thread(_today)
 
 
 def _channel_view(ch):
@@ -3148,6 +3294,10 @@ async def my_channels_add(request: Request):
 async def my_channels_update(cid: str, request: Request):
     _local_only()
     import my_channels
+    if cid == "main":
+        # Only its engagement switches live here; the rest is Autopilot's.
+        my_channels.update_main(await request.json())
+        return await _in_thread(_main_channel_row)
     ch = my_channels.update(cid, await request.json())
     if not ch:
         raise HTTPException(status_code=404, detail="Unknown channel.")
@@ -4225,6 +4375,7 @@ async def process_endpoint(
     quiz_format: Optional[str] = Form(None),
     quiz_topic: Optional[str] = Form(None),
     quiz_avoid: Optional[str] = Form(None),
+    quiz_number: Optional[str] = Form(None),
     music_style: Optional[str] = Form(None),
     music_theme: Optional[str] = Form(None),
     music_avoid: Optional[str] = Form(None),
@@ -4287,6 +4438,7 @@ async def process_endpoint(
         quiz_format = body.get("quiz_format")
         quiz_topic = body.get("quiz_topic")
         quiz_avoid = body.get("quiz_avoid")
+        quiz_number = body.get("quiz_number")
         music_style = body.get("music_style")
         music_theme = body.get("music_theme")
         music_avoid = body.get("music_avoid")
@@ -4331,7 +4483,8 @@ async def process_endpoint(
             raise HTTPException(status_code=400, detail="Unknown channel.")
     song_urls = []
     owned_music = str(song_owned).lower() in ("1", "true", "yes")
-    cricket_mode = "topic" if str(cricket_mode or "").strip().lower() == "topic" else "match"
+    cricket_mode = str(cricket_mode or "").strip().lower()
+    cricket_mode = cricket_mode if cricket_mode in ("topic", "versus") else "match"
     if genre_val != "comedy":
         output_format = "framed"
         if genre_val == "cricket":
@@ -4531,6 +4684,8 @@ async def process_endpoint(
     if genre_val == "quiz":
         env["QUIZ_FORMAT"] = str(quiz_format or "mcq")[:20]
         env["QUIZ_TOPIC"] = re.sub(r"\s+", " ", str(quiz_topic or ""))[:80]
+        if str(quiz_number or "").isdigit():
+            env["QUIZ_NUMBER"] = str(min(int(quiz_number), 99999))
     if genre_val == "music":
         env["MUSIC_STYLE"] = re.sub(r"\s+", " ", str(music_style or ""))[:60]
         env["MUSIC_THEME"] = re.sub(r"\s+", " ", str(music_theme or ""))[:60]

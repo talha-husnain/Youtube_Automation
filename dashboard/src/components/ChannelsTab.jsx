@@ -90,6 +90,31 @@ function Connection({ ch }) {
     );
 }
 
+// engage.py switches; the main channel has them too (its replies default off:
+// the Comments tab drafts them for you to send).
+const ENGAGE = [
+    ['first_comment', 'first comment with a question when each Short goes live'],
+    ['auto_reply', 'reply to new comments (up to 15 a day; the quiz says who got it right)'],
+    ['playlists', 'add each Short to a playlist for its kind'],
+    ['cross_promo', 'name my other channels in the description ("More from us")'],
+];
+
+function EngageSwitches({ ch, save }) {
+    return (
+        <div className="space-y-1">
+            <p className="text-xs text-muted">
+                Engagement after posting{ch.main ? ' (off until you switch them on: they post on your live channel)' : ''}
+            </p>
+            {ENGAGE.map(([key, label]) => (
+                <label key={key} className="flex items-start gap-2 text-xs text-ink2">
+                    <input type="checkbox" checked={!!ch[key]} onChange={() => save({ [key]: !ch[key] })} aria-label={key} className="mt-0.5" />
+                    {label}
+                </label>
+            ))}
+        </div>
+    );
+}
+
 function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
     const [busy, setBusy] = useState('');
     const [error, setError] = useState('');
@@ -141,9 +166,12 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
             {error && <p className="text-xs text-danger" role="alert">{error}</p>}
 
             {ch.main ? (
-                <p className="text-xs text-ink2">
-                    {ch.per_day} Shorts a day at {ch.post_times.join(', ')}. Ready to post and Autopilot run this channel as before.
-                </p>
+                <>
+                    <p className="text-xs text-ink2">
+                        {ch.per_day} Shorts a day at {ch.post_times.join(', ')}. Ready to post and Autopilot run this channel as before.
+                    </p>
+                    <EngageSwitches ch={ch} save={save} />
+                </>
             ) : (
                 <>
                     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-ink2">
@@ -168,6 +196,13 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                             <input type="color" value={ch.color} onChange={(e) => save({ color: e.target.value })} className="h-7 w-9 rounded border border-rule bg-transparent" aria-label="colour" />
                         </label>
                     </div>
+                    {ch.kind === 'cricket' && (
+                        <label className="flex items-start gap-2 text-xs text-ink2">
+                            <input type="checkbox" checked={!!ch.match_watch} onChange={() => save({ match_watch: !ch.match_watch })}
+                                aria-label="fast match results" className="mt-0.5" />
+                            fast results: when Pakistan or India finish a match, make its Short next and post it 20 minutes later (checked every 2 hours)
+                        </label>
+                    )}
                     {ch.kind === 'quiz' && (
                         <input defaultValue={ch.notes} onBlur={(e) => e.target.value !== ch.notes && save({ notes: e.target.value })}
                             placeholder="Favourite quiz topics, optional (e.g. Pakistan history, science)"
@@ -177,6 +212,7 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                         <p className="text-xs text-muted mb-2">Posting times (every day, this computer&apos;s time)</p>
                         <Times times={ch.post_times} max={maxPerDay} onChange={(t) => save({ post_times: t })} />
                     </div>
+                    <EngageSwitches ch={ch} save={save} />
 
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-input border border-rule p-3">
                         <p className="text-xs text-ink2">

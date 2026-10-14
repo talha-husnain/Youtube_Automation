@@ -313,7 +313,7 @@ def ideas(client):
 def _idea_lines(text):
     out = []
     for line in (text or "").splitlines():
-        m = re.match(r"\W*(match|topic)\s*:\s*(.+)", line.strip(), re.I)
+        m = re.match(r"\W*(match|topic|versus)\s*:\s*(.+)", line.strip(), re.I)
         if m:
             out.append({"kind": m.group(1).lower(), "text": _txt(m.group(2).strip(" *"), 120)})
     return out
@@ -323,13 +323,15 @@ CHANNEL_IDEAS_PROMPT = """Today is {today}. Plan the next {count} YouTube Shorts
 and updates channel for Pakistani and Indian fans. Use Google Search for what is
 happening in cricket right now.
 Mix: about a quarter are matches finished in the last 3 days (exact "Team vs Team,
-tournament, stage" so they can be looked up); the rest are catchy facts that promise
+tournament, stage" so they can be looked up); one or two are "who is better" fights
+fans argue about, two players of the same role by numbers ("Babar Azam vs Virat Kohli
+ODI", "Shaheen Afridi vs Jasprit Bumrah T20I"); the rest are catchy facts that promise
 a surprise: one star player's stats or records (name the player), a crazy record, a
-"did you know", a rivalry by numbers, a rule people argue about, history on this date.
+"did you know", a rule people argue about, history on this date.
 Most fact ideas should be about ONE named player people love or argue about.
 {learn}Never repeat any of these, already made:
 {avoid}
-One per line, each starting with "match: " or "topic: ". Nothing else."""
+One per line, each starting with "match: ", "versus: " or "topic: ". Nothing else."""
 
 
 def channel_ideas(client, count=8, avoid=(), best=(), worst=()):
@@ -413,16 +415,17 @@ def _count_up(t0, t1, x, y, score, style_name="CkScore", steps=12, secs=0.9):
 PILL_MAX = 1000
 
 
-def _pill(t0, t1, y, text, colour=fl.GOLD, text_colour="#14142B"):
+def _pill(t0, t1, y, text, colour=fl.GOLD, text_colour="#14142B", layer=3):
     # A long match line made a bar wider than the screen (1202 px for 42
     # characters): the pill stops at PILL_MAX and the text shrinks to fit.
     need = 26 * len(text) + 110
     w, h = min(PILL_MAX, max(260, need)), 78
     size = rf"\fs{max(22, int(36 * PILL_MAX / need))}" if need > PILL_MAX else ""
     return [
-        _shape(3, t0, t1, fl._round_rect(w, h, h // 2), _c(colour), at=(CX - w // 2, y - h // 2),
+        _shape(layer, t0, t1, fl._round_rect(w, h, h // 2), _c(colour), at=(CX - w // 2, y - h // 2),
                extra=r"\fad(150,150)"),
-        kit.dialogue(4, t0, t1, "CkPill", rf"{{\an5\pos({CX},{y})\1c{_c(text_colour)}{size}\fad(150,150)}}{text}"),
+        kit.dialogue(layer + 1, t0, t1, "CkPill",
+                     rf"{{\an5\pos({CX},{y})\1c{_c(text_colour)}{size}\fad(150,150)}}{text}"),
     ]
 
 
@@ -692,13 +695,274 @@ def run_topic(topic, output_dir, pipeline):
              "text_limit": 4000}, images=images, photos=[photo["info"]] if photo else [])
 
 
+# ---------------------------------------------------------------- player vs player
+
+class Side(BaseModel):
+    name: str
+    team: str
+
+
+class Row(BaseModel):
+    label: str
+    a: str
+    b: str
+    better: int
+    line: str
+
+
+class Versus(BaseModel):
+    found: bool
+    title: str
+    format_label: str
+    players: List[Side]
+    hook_line: str
+    rows: List[Row]
+    verdict_line: str
+    question: str
+
+
+VERSUS_FACTS_PROMPT = """Today is {today}. Compare these two cricketers by numbers: {topic}
+Use Google Search. For the format named (ODI when none is named), give each player's
+current career numbers as of today: matches, runs or wickets, average, strike rate or
+economy, hundreds and fifties (or 5-wicket hauls), highest score or best figures, and
+ICC titles won. Exact numbers only. Say NOT FOUND if either player or the numbers are
+unclear."""
+
+VERSUS_PROMPT = """You make a 35-45 second "who is better?" YouTube Short comparing two
+cricketers by numbers, for Pakistani and Indian fans, voiced by the channel {handle}.
+Topic: {topic}. Use ONLY the facts below; never invent a number. If they say NOT FOUND,
+return found=false and empty lists.
+
+Facts:
+{facts}
+
+Return:
+- found
+- title: max 45 characters, Roman Urdu hook ("Babar ya Kohli: ODI mein kaun aage?"), no emoji.
+- format_label: 1-3 words like "ODI CAREER", "T20I CAREER", "TEST CAREER".
+- players: exactly 2: name (full name as the Wikipedia article title), team (2-4 capital letters).
+- hook_line: first voice line, Roman Urdu, 8-14 words, sets up the fight.
+- rows: 4 to 6 stats that fit both players' roles (two batters: never wickets; two
+  bowlers: never runs scored; never matches or innings played, they are not a win),
+  mostly rates and per-innings numbers (average, strike
+  rate, 100s per innings, economy) so a longer career does not win by length alone,
+  plus one or two totals; the most telling first. Each: label (max 12 characters, English
+  cricket term in capitals: "RUNS", "AVERAGE", "STRIKE RATE", "100s", "WICKETS",
+  "ECONOMY"), a (first player's value, max 8 characters), b (second player's value),
+  better (0 first, 1 second, -1 level; for economy and bowling average lower is
+  better), line (Roman Urdu voice line, 8-16 words, numbers exactly as in the facts).
+- verdict_line: Roman Urdu, 10-18 words: who leads on these numbers and by how many
+  stats, respectful to both, no insults.
+- question: Roman Urdu, max 70 characters, asking fans who is better, ending with
+  "comment mein batao" or similar.
+Everyday spoken Roman Urdu in Latin letters, never Devanagari or Arabic script."""
+
+VERSUS_SEO_CONTEXT = ("IMPORTANT: this short is NOT comedy. It is a cricket 'who is better' Short "
+                      "comparing two players by their numbers: {topic}. Ignore the comedy phrases and "
+                      "hashtags above: use the two players' names, 'vs', 'comparison', 'stats', "
+                      "'who is better'. Never insult either player. creator is \"\".")
+POP = "0.3*sin(2*PI*880*t)*exp(-12*t)"   # a row's winner lights up
+LOWER_IS_BETTER = re.compile(r"ECON|BOWL(ING)? ?AV|BALLS PER|RUNS CONCEDED", re.I)
+# A bowler's strike rate is balls per wicket: lower wins. A batter's is runs
+# per 100 balls: higher wins. Shaheen vs Bumrah (15-oct-2026) had it the
+# batter's way round, so the label alone cannot decide.
+BOWLING = re.compile(r"ECON|BOWL|WICKET|5W|FIVE|MAIDEN|BEST FIG", re.I)
+BATTING = re.compile(r"RUNS|100|50|HUNDRED|FIFT|HIGHEST|\bHS\b|SIX|FOUR", re.I)
+# Played, not won: more matches is not "better" (Shaheen 103 vs Bumrah 100
+# counted as a win for Shaheen, 15-oct-2026).
+NEUTRAL = re.compile(r"MATCH|INNINGS|\bINNS\b|CAPS|YEARS|SPAN|DEBUT|\bAGE\b", re.I)
+RATE = re.compile(r"AVERAGE|\bAVG\b|STRIKE", re.I)
+FIGURES = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*$")
+
+
+def _number(text):
+    m = re.match(r"\s*(\d+(?:\.\d+)?)", (text or "").replace(",", ""))
+    return float(m.group(1)) if m else None
+
+
+def context(rows):
+    """"bowling", "batting" or "mixed" (all-rounders, or labels that say both)."""
+    bowl = sum(1 for r in rows if BOWLING.search(r.label or ""))
+    bat = sum(1 for r in rows if BATTING.search(r.label or ""))
+    return "bowling" if bowl and not bat else "batting" if bat and not bowl else "mixed"
+
+
+def fix_better(row, bowling=False, mixed=False):
+    """Who wins a row, worked out from the numbers when both are numbers
+    (the model is told the rule, the code makes sure of it). ``bowling``:
+    the comparison is between bowlers; ``mixed``: batting and bowling rows
+    together, where a bare "AVERAGE" could be either and the model decides."""
+    if NEUTRAL.search(row.label or ""):
+        return -1
+    fa, fb = FIGURES.match(row.a or ""), FIGURES.match(row.b or "")
+    if fa and fb:
+        # Best figures: more wickets, then fewer runs ("4/15" beats "4/22").
+        a = (int(fa.group(1)), -int(fa.group(2)))
+        b = (int(fb.group(1)), -int(fb.group(2)))
+        return -1 if a == b else 0 if a > b else 1
+    a, b = _number(row.a), _number(row.b)
+    if a is None or b is None:
+        return row.better if row.better in (-1, 0, 1) else -1
+    if a == b:
+        return -1
+    label = row.label or ""
+    if LOWER_IS_BETTER.search(label):
+        low = True
+    elif RATE.search(label):
+        if mixed:
+            return row.better if row.better in (-1, 0, 1) else -1
+        low = bowling
+    else:
+        low = False
+    return 0 if (a < b) == low else 1
+
+
+def _score(rows, key):
+    s = [0, 0]
+    for r in rows:
+        w = key(r)
+        if w in (0, 1):
+            s[w] += 1
+    return s
+
+
+def find_versus(client, topic, handle):
+    import time
+    for attempt in range(2):
+        facts, sources = grounded(client, VERSUS_FACTS_PROMPT.format(topic=topic, today=time.strftime("%d %B %Y")))
+        if facts and "NOT FOUND" not in facts[:200].upper():
+            break
+    if not facts or "NOT FOUND" in facts[:200].upper():
+        raise RuntimeError(f"Could not find both players' numbers ({facts[:160] or 'no answer'}).")
+    story = kit.ask_json(client, Versus, VERSUS_PROMPT.format(handle=handle, topic=topic, facts=facts))
+    if not story.found or len(story.players) != 2 or len(story.rows) < 3:
+        raise RuntimeError("The comparison came back too thin for a video; try two better-known players.")
+    story.rows = story.rows[:6]
+    ctx = context(story.rows)
+    said = _score(story.rows, lambda r: r.better)
+    for r in story.rows:
+        r.better = fix_better(r, bowling=ctx == "bowling", mixed=ctx == "mixed")
+    shown = _score(story.rows, lambda r: r.better)
+    if shown != said:
+        # The voice must say what the screen shows.
+        a, b = story.players[0].name, story.players[1].name
+        lead, other = ((a, b) if shown[0] > shown[1] else (b, a))
+        hi, lo = max(shown), min(shown)
+        story.verdict_line = (f"Numbers barabar hain: dono {hi} {hi} stats mein aage. Faisla aap ka!"
+                              if hi == lo else
+                              f"In numbers ke hisaab se {lead} {hi} stats mein aage hain, aur {other} {lo} mein.")
+    return story, facts, sources
+
+
+VS_X = (270, 810)
+VS_Y = 640
+ROW_Y0, ROW_GAP = 965, 86
+
+
+def versus_events(story, windows, body_end, handle, photos):
+    """Two players face each other; each stat row slides in and its winner
+    lights up; a running score, then the verdict."""
+    ev = []
+    if handle:
+        ev.append(kit.dialogue(1, 0, body_end, "CkSmall", rf"{{\an5\pos({CX},70)\alpha&H40&}}{handle}"))
+    ev += _pill(0.1, body_end, 190, _txt(story.format_label.upper(), 24))
+    ev.append(kit.dialogue(1, 0, body_end, "CkTitle",
+                           rf"{{\an5\pos({CX},380)\fad(150,0)\fscx70\fscy70\t(0,260,\fscx106\fscy106)"
+                           rf"\t(260,400,\fscx100\fscy100)}}{fl.clean_title(story.title)}"))
+    for k, (side, x) in enumerate(zip(story.players, VS_X)):
+        if not photos[k]:
+            ev.append(_shape(3, 0.2, body_end, fl._circle(130), _c(fl.GOLD if k == 0 else "#38BDF8"),
+                             move=(x + (-600 if k == 0 else 600), VS_Y, x, VS_Y, 0, 350), an=5))
+            initials = "".join(w[0] for w in side.name.split()[:2]).upper()
+            ev.append(kit.dialogue(4, 0.2, body_end, "CkBadgeDark",
+                                   rf"{{\an5\move({x + (-600 if k == 0 else 600)},{VS_Y},{x},{VS_Y},0,350)}}{initials}"))
+        name = _txt(side.name, 34)
+        # Two names side by side: each has about 500 px.
+        fs = "" if len(name) <= 14 else r"\fs38" if len(name) <= 20 else r"\fs30"
+        ev.append(kit.dialogue(4, 0.4, body_end, "CkName", rf"{{\an5\pos({x},{VS_Y + 200}){fs}\fad(200,0)}}{name}"))
+        ev.append(kit.dialogue(4, 0.5, body_end, "CkSmall", rf"{{\an5\pos({x},{VS_Y + 250})\fad(200,0)}}{_txt(side.team, 6)}"))
+    ev.append(kit.dialogue(5, 0.45, body_end, "CkVs",
+                           rf"{{\an5\pos({CX},{VS_Y})\fs110\fscx300\fscy300\alpha&HFF&"
+                           rf"\t(0,200,\fscx100\fscy100\alpha&H00&)}}VS"))
+    score = [0, 0]
+    n = len(story.rows)
+    for k, row in enumerate(story.rows):
+        _k, a, b = windows[1 + k]
+        y = ROW_Y0 + k * ROW_GAP
+        slide = r"\fad(0,0)"
+        ev.append(_shape(2, a, body_end, fl._round_rect(960, 74, 37), "&H2B140E&", alpha="40",
+                         move=(60 + 1100, y - 37, 60, y - 37, 0, 280)))
+        ev.append(kit.dialogue(4, a, body_end, "CkSmall",
+                               rf"{{\an5\move({CX + 1100},{y},{CX},{y},0,280)\1c{_c(fl.GOLD)}}}{_txt(row.label, 14).upper()}"))
+        for side, x in ((0, VS_X[0]), (1, VS_X[1])):
+            val = _txt(row.a if side == 0 else row.b, 10)
+            win = row.better == side
+            # White with an outline while it slides in; the winner then turns
+            # dark on a gold pill with no outline (dark + black outline on
+            # gold smudged, first render 15-oct-2026).
+            ev.append(kit.dialogue(5, a + 0.15, a + 0.6 if win else body_end, "CkNote",
+                                   rf"{{\an5\move({x + 1100},{y},{x},{y},0,280)\fs50}}{val}"))
+            if win:
+                ev.append(_shape(3, a + 0.6, body_end, fl._round_rect(220, 62, 31), _c(fl.GOLD),
+                                 at=(x - 110, y - 31), extra=r"\fad(120,0)"))
+                ev.append(kit.dialogue(5, a + 0.6, body_end, "CkNote",
+                                       rf"{{\an5\pos({x},{y})\fs50\bord0\shad0\1c{_c('#14142B')}"
+                                       rf"\fscx125\fscy125\t(0,180,\fscx100\fscy100)}}{val}"))
+        if row.better in (0, 1):
+            score[row.better] += 1
+        # The running score under VS, changing as each row is won.
+        nxt = windows[2 + k][1] if k < n - 1 else body_end
+        ev.append(kit.dialogue(5, a + 0.6, nxt, "CkStar",
+                               rf"{{\an5\pos({CX},{VS_Y + 110})\fs56}}{score[0]} - {score[1]}"))
+    # The verdict covers the table: who leads, and by how much.
+    _k, va, vb = windows[1 + n]
+    lead = 0 if score[0] > score[1] else 1 if score[1] > score[0] else -1
+    ev.append(_shape(6, va, body_end, fl._round_rect(980, 330, 40), "&H1A0E08&", at=(50, 1015), alpha="08",
+                     extra=r"\fad(200,0)"))
+    ev += _pill(va + 0.1, body_end, 1090, "AAGE: " + (_txt(story.players[lead].name.split()[-1], 14).upper()
+                                                       if lead >= 0 else "BARABAR"), layer=7)
+    ev.append(kit.dialogue(8, va + 0.2, body_end, "CkBigC",
+                           rf"{{\an5\pos({CX},1240)\fs130\fscx40\fscy40\t(0,260,\fscx100\fscy100)}}"
+                           rf"{score[0]} - {score[1]}"))
+    return ev
+
+
+def run_versus(topic, output_dir, pipeline):
+    cfg = fl.settings()
+    client = kit.gemini()
+    print(f"🏏 Player vs player short: researching \"{topic}\"...")
+    story, facts, sources = find_versus(client, topic, cfg["handle"] or "this channel")
+    print(f"   ✅ {story.players[0].name} vs {story.players[1].name}: {len(story.rows)} stats ({len(sources)} sources)")
+    stem = kit.neutral_stem("Cricket")
+    photos = [_photo(p.name, output_dir) for p in story.players]
+    lines = [story.hook_line] + [r.line for r in story.rows] + [story.verdict_line, story.question]
+    print(f"🎙️ Voicing {len(lines)} lines...")
+    windows, voices, caps, body_end = _voice_timeline(client, lines, output_dir, stem)
+    events = versus_events(story, windows, body_end, cfg["handle"], photos)
+    images = [{"path": p["avatar"], "t0": 0.2, "t1": body_end, "x": x, "y": VS_Y, "zoom": 0.04}
+              for p, x in zip(photos, VS_X) if p]
+    sfx = [(kit.WHOOSH, 0.3, max(0.0, a - 0.15)) for _k, a, _b in windows]
+    sfx += [(POP, 0.4, windows[1 + k][1] + 0.6) for k, r in enumerate(story.rows) if r.better in (0, 1)]
+    clip = {"start": 0.0, "video_title_for_youtube_short": story.title, "viral_hook_text": story.hook_line,
+            "why": f"Who is better: {topic}", "predicted_score": 92, "captions": kit.timed_transcript(caps),
+            "genre": "cricket", "ai_voice": "AI voice", "sources": sources[:8], "cricket_versus": story.model_dump(),
+            "comment_question": story.question}
+    _finish(output_dir, stem, pipeline, cfg, events, [cfg["bg"], kit.blend("#1E3A8A", cfg["bg"], 0.3)],
+            voices, sfx, body_end, clip,
+            {"source_title": topic, "context": VERSUS_SEO_CONTEXT.format(topic=topic), "text_limit": 4000},
+            images=images, photos=[p["info"] for p in photos if p])
+
+
 def run(match, output_dir, pipeline):
     """A cricket short for what the user typed or pasted (CRICKET_MODE)."""
     match = re.sub(r"\s+", " ", match or "").strip()[:300]
     if len(match) < 3:
         raise RuntimeError("Write which match (or paste its link), or a cricket topic.")
-    if (os.environ.get("CRICKET_MODE") or "match").lower() == "topic":
+    mode = (os.environ.get("CRICKET_MODE") or "match").lower()
+    if mode == "topic":
         return run_topic(match, output_dir, pipeline)
+    if mode == "versus":
+        return run_versus(match, output_dir, pipeline)
     return run_match(match, output_dir, pipeline)
 
 

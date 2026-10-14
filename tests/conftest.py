@@ -47,3 +47,8 @@ def _private_channel_files(tmp_path, monkeypatch):
     monkeypatch.setattr(my_channels, "STATE_FILE", str(tmp_path / "my_channels.json"))
     monkeypatch.setattr(my_channels, "CHANNELS_DIR", str(tmp_path / "channels"))
     monkeypatch.setattr(player_photo, "CACHE_FILE", str(tmp_path / "player_photos.json"))
+    import engage
+    monkeypatch.setattr(engage, "MAIN_STATE", str(tmp_path / "engage.json"))
+    monkeypatch.setattr(youtube_account, "QUOTA_FILE", str(tmp_path / "yt_quota.json"))
+    import reminders
+    monkeypatch.setattr(reminders, "STATE_FILE", str(tmp_path / "reminders.json"))

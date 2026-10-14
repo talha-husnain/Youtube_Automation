@@ -331,6 +331,12 @@ def run(output_dir, pipeline):
     total = body + (outro_s if card_ev else 0.0)
     colors = [c for c in p.colors if re.fullmatch(r"#[0-9A-Fa-f]{6}", c or "")][:2] or [cfg["bg"]]
     events = lyric_events(lines, body, p.title, p.genre, cfg["handle"]) + card_ev
+    if not card_ev:
+        # Loop-friendly ending (no end card): a small follow line over the
+        # last seconds of the music instead.
+        events.append(kit.dialogue(6, max(0.0, body - 4.0), body, "MuPill",
+                                   rf"{{\an5\pos({CX},1640)\1c&HFFFFFF&\fad(300,300)}}"
+                                   rf"NEW SONG EVERY DAY{(' | ' + cfg['handle']) if cfg['handle'] else ''}"))
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
     print(f"🎬 Rendering the song short ({total:.0f}s{', with cover' if art else ''})...")
     kit.render(final, total, [kit.blend(colors[0], "#000000", 0.6), kit.blend(colors[-1], "#000000", 0.5)],
@@ -348,6 +354,7 @@ def run(output_dir, pipeline):
             "video_description_for_tiktok": f"{p.title} {hashtags}".strip(),
             "video_description_for_instagram": description,
             "ai_voice": "AI music and vocals (Google Lyria)",
+            "comment_question": "Which line hit you the hardest? 🎧",
             "song": {"title": p.title, "style": style, "theme": theme, "genre": p.genre,
                      "lyrics": lyrics, "cover": bool(art)}}
     kit.finish(output_dir, stem, [clip], None, pipeline, extra={"genre": "music"})

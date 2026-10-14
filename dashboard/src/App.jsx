@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle, Film, Eye, Layers } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle, Film, Eye, Layers, Sun } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
@@ -30,6 +30,7 @@ import FinderTab from './components/FinderTab';
 import AutopilotLocal from './components/AutopilotLocal';
 import ChannelTab from './components/ChannelTab';
 import ChannelsTab from './components/ChannelsTab';
+import TodayTab from './components/TodayTab';
 import PostPlan from './components/PostPlan';
 import CommentsTab from './components/CommentsTab';
 import ReadyBanner from './components/ReadyBanner';
@@ -951,7 +952,7 @@ function App() {
   const [channelsNotice, setChannelsNotice] = useState(null);
   useEffect(() => {
     const DEEP_LINK_TABS = ['autopilot', 'history', 'gallery', 'settings', 'thumbnails', 'dashboard',
-      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments', 'long-video', 'rivals', 'channels'];
+      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments', 'long-video', 'rivals', 'channels', 'today'];
     const apply = () => {
       const hash = window.location.hash || '';
       if (!hash.startsWith('#app?')) return;
@@ -968,6 +969,17 @@ function App() {
     apply();
     window.addEventListener('hashchange', apply);
     return () => window.removeEventListener('hashchange', apply);
+  }, []);
+
+  // Self-host opens on Today (every channel at a glance). /api/today answers
+  // only on a self-hosted server, so the hosted product keeps Make Shorts.
+  useEffect(() => {
+    if ((window.location.hash || '').startsWith('#app?')) return undefined;
+    let live = true;
+    fetch(getApiUrl('/api/today')).then((r) => {
+      if (live && r.ok) setActiveTab((tab) => (tab === 'dashboard' ? 'today' : tab));
+    }).catch(() => { /* not self-hosted, or the server is still starting */ });
+    return () => { live = false; };
   }, []);
 
   useEffect(() => {
@@ -1262,6 +1274,8 @@ function App() {
   //   { id: 'ai-agent', icon: Bot, label: 'AI Agent', short: 'agent', byok: true },
   //   { id: 'ugc-gallery', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery' },
   const navItems = [
+    // Self-host: Today first (every channel at a glance).
+    ...(billingEnabled ? [] : [{ id: 'today', ord: '00', icon: Sun, label: 'Today', short: 'today', primary: true }]),
     { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Make Shorts', short: 'create', primary: true },
     { id: 'history', ord: '02', icon: History, label: 'History', short: 'history', primary: true },
     { id: 'gallery', ord: '03', icon: LayoutGrid, label: 'Gallery', short: 'gallery', primary: true },
@@ -2037,6 +2051,7 @@ function App() {
           {activeTab === 'channel' && !billingEnabled && (
             <ChannelTab notice={channelNotice} />
           )}
+          {activeTab === 'today' && !billingEnabled && <TodayTab onOpenTab={setActiveTab} />}
           {activeTab === 'channels' && !billingEnabled && (
             <ChannelsTab notice={channelsNotice} onOpenAutopilot={() => setActiveTab('local-autopilot')} />
           )}
