@@ -288,7 +288,7 @@ function PostAll({ ready, yt, onDone, onOpenChannel }) {
             {!busy && (run?.uploaded || []).length > 0 && (
                 <div className="rounded-input border border-rule p-2.5 space-y-1.5">
                     <p className="text-[11px] text-muted leading-relaxed">
-                        Until your Google project passes the YouTube audit, YouTube keeps these private. In Studio, set each one to Schedule at its time (or Public when the time comes).
+                        Uploaded and scheduled: YouTube makes each one public at its time.
                     </p>
                     {run.uploaded.map((u) => (
                         <div key={u.video_id || u.slot} className="flex flex-wrap items-center gap-2 text-xs">

@@ -1023,3 +1023,130 @@ def test_sound_tags_are_never_burned_as_captions():
                                   {"word": "(applause)", "start": 2.6, "end": 3.0}]}]}
     words = [w["word"] for b in subtitles._collect_word_blocks(tr, 0, 5) for w in b]
     assert words == ["Jab", "date"]
+
+
+# ------------------------------------------------------------- learning loop
+
+def _counted(n, exp, arm, views, start=0):
+    return {f"v{exp}{arm}{start + k}": {"counted": True, "exp": exp, "arm": arm, "views": views, "public": True}
+            for k in range(n)}
+
+
+def test_tests_alternate_per_job_and_a_clear_winner_is_kept():
+    import learning
+    sides = [learning.next_arm() for _ in range(4)]
+    assert [(s["exp"], s["arm"]) for s in sides] == [("end_card", "on"), ("end_card", "off")] * 2
+    assert sides[1]["overrides"] == {"frame_outro": False} and sides[0]["overrides"] == {}
+    st = learning.load()
+    st["stats"] = {**_counted(8, "end_card", "on", 4), **_counted(8, "end_card", "off", 20)}
+    notes = []
+    learning._evaluate(st, notes.append)
+    assert st["adopted"] == {"frame_outro": False} and st["done"] == ["end_card"]
+    assert st["experiment"]["key"] == "ai_take" and "'off' won" in notes[0]
+    learning._save(st)
+    nxt = learning.next_arm()
+    assert nxt["exp"] == "ai_take" and nxt["overrides"]["frame_outro"] is False   # kept change rides along
+    assert learning.summary()["kept"] == ["FOLLOW end card at the end: off"]
+
+
+def test_a_small_difference_keeps_the_current_look():
+    import learning
+    learning.next_arm()
+    st = learning.load()
+    st["stats"] = {**_counted(9, "end_card", "on", 6), **_counted(8, "end_card", "off", 8)}   # 1.33x but only 2 views
+    learning._evaluate(st, lambda t: None)
+    assert st["adopted"] == {} and st["done"] == ["end_card"] and "no clear difference" in st["history"][-2]["text"]
+    st2 = learning.load()
+    st2["experiment"] = {"key": "length", "started": int(__import__("time").time()) - 30 * 86400, "assigned": {}}
+    st2["stats"] = _counted(2, "length", "short", 50)
+    learning._evaluate(st2, lambda t: None)                                      # 21 days, still too few: stop
+    assert "length" in st2["done"] and st2["adopted"] == {}
+    off = learning.set_learn(False)
+    assert not off["learn"] and learning.next_arm()["exp"] is None             # learning off: no tests
+
+
+def test_sources_are_scored_and_a_poor_one_rests(monkeypatch):
+    import learning
+    st = learning.load()
+    st["stats"] = {f"g{k}": {"counted": True, "views": 40, "source": f"https://youtu.be/GOODGOODG{k:02d}"} for k in range(3)}
+    st["stats"].update({f"p{k}": {"counted": True, "views": 0, "source": f"https://youtu.be/POORPOORP{k:02d}"} for k in range(3)})
+    monkeypatch.setattr(learning, "_channel_of", lambda s, url: {"url": "https://www.youtube.com/@" + url[-11:-2],
+                                                                  "name": url[-11:-2]})
+    learning._score_sources(st, lambda t: None)
+    good, poor = st["sources"]["https://www.youtube.com/@GOODGOODG"], st["sources"]["https://www.youtube.com/@POORPOORP"]
+    assert good["score"] > 1 and poor["score"] == 0.3 and poor["rest_until"] > __import__("time").time()
+    assert learning.source_factor("https://www.youtube.com/@POORPOORP", st) == 0.0
+    assert learning.source_factor("https://www.youtube.com/@unknown", st) == 1.0
+
+
+def test_refresh_counts_shorts_after_two_days_and_spots_stuck_private(monkeypatch):
+    import learning
+    import time as _t
+    import youtube_account as ya
+    from datetime import datetime, timezone
+    now = _t.time()
+    iso = lambda ts: datetime.fromtimestamp(ts, timezone.utc).isoformat()
+    for vid, age_h in (("OLD", 60), ("NEW", 5), ("STUCK", 70)):
+        ya._save_upload({"id": vid, "video_id": vid, "status": "done", "created": int(now - age_h * 3600),
+                         "publish_at": iso(now - age_h * 3600), "title": vid, "job_id": "j" + vid, "clip_index": 0,
+                         "exp": "end_card", "arm": "on"})
+    monkeypatch.setattr(ya, "video_analytics", lambda days: {"OLD": {"avg_percent": 71.0, "subs": 1}})
+    monkeypatch.setattr(ya, "_get", lambda url, params: {"items": [
+        {"id": "OLD", "statistics": {"viewCount": "120"}, "status": {"privacyStatus": "public"}, "contentDetails": {"duration": "PT31S"}},
+        {"id": "NEW", "statistics": {"viewCount": "3"}, "status": {"privacyStatus": "public"}, "contentDetails": {}},
+        {"id": "STUCK", "statistics": {}, "status": {"privacyStatus": "private"}, "contentDetails": {}}]})
+    st = learning.load()
+    learning.refresh(st)
+    s = st["stats"]
+    assert s["OLD"]["counted"] and s["OLD"]["views"] == 120 and s["OLD"]["avg_percent"] == 71.0 and s["OLD"]["seconds"] == 31
+    assert not s["NEW"]["counted"] and not s["STUCK"]["counted"] and st["locked"] == 1
+
+
+def test_research_leaves_out_a_resting_source(monkeypatch):
+    import channel_tools
+    import learning
+    import short_kit
+    import used_moments
+    v = lambda i, ch, views: {"id": f"R{i:010d}", "url": f"https://www.youtube.com/watch?v=R{i:010d}", "title": f"stand up {i}",
+                              "channel": ch, "channel_url": f"https://www.youtube.com/@{ch}", "seconds": 900, "views": views}
+    monkeypatch.setattr(channel_tools, "search", lambda q, **k: [v(1, "resting", 900_000), v(2, "fine", 50_000)])
+    monkeypatch.setattr(used_moments, "summary", lambda url: {"count": 0, "seconds": 0})
+    monkeypatch.setattr(short_kit, "gemini", lambda: None)
+    monkeypatch.setattr(short_kit, "ask_json", lambda c, schema, contents, **k: schema.model_validate(
+        {"videos": [{"id": line.split('"id": "')[1][:11], "keep": True, "reason": "ok"}
+                    for line in contents.splitlines() if '"id": "' in line]}))
+    st = learning.load()
+    st["sources"] = {"https://www.youtube.com/@resting": {"score": 0.3, "rest_until": __import__("time").time() + 999}}
+    learning._save(st)
+    fresh, _ = ap.research_videos({**ap.settings(), "research_queries": ["x"]}, lambda t: None)
+    assert [x["channel"] for x in fresh] == ["fine"]
+
+
+def test_learning_endpoint_answers(monkeypatch):
+    app_module = pytest.importorskip("app")
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    c = TestClient(app_module.app)
+    d = c.get("/api/learning").json()
+    assert d["learn"] and d["counted"] == 0 and d["mature_hours"] == 48
+    assert c.put("/api/learning", json={"learn": False}).json()["learn"] is False
+
+
+def test_a_second_copy_of_the_app_never_runs_the_autopilot_loop(monkeypatch):
+    app_module = pytest.importorskip("app")
+    started = []
+
+    async def fake_loop(*a, **k):
+        started.append(1)
+    monkeypatch.setattr(ap, "loop_forever", fake_loop)
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+
+    async def enter():
+        async with app_module.app.router.lifespan_context(app_module.app):
+            await asyncio.sleep(0.05)
+    monkeypatch.setenv("AUTOPILOT_LOCAL", "0")
+    asyncio.run(enter())
+    assert started == []
+    monkeypatch.setenv("AUTOPILOT_LOCAL", "1")
+    asyncio.run(enter())
+    assert started == [1]

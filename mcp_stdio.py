@@ -26,6 +26,9 @@ import json
 import os
 import sys
 
+# Never a second Autopilot next to the real server (double jobs and uploads).
+os.environ.setdefault("AUTOPILOT_LOCAL", "0")
+
 # Must happen before importing app: import-time prints would land on stdout.
 _PROTOCOL_OUT = sys.stdout
 sys.stdout = sys.stderr

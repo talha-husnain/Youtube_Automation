@@ -2314,8 +2314,12 @@ async def lifespan(app: FastAPI):
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
         asyncio.create_task(_alerts.proxy_watch_loop())
-    else:
+    elif os.environ.get("AUTOPILOT_LOCAL", "1").strip() != "0":
         # Self-host Autopilot: daily Shorts + uploads into posting times.
+        # AUTOPILOT_LOCAL=0 for any second copy of the app (mcp_stdio, tests):
+        # one started by the MCP test ran a claim check and a learning pass
+        # on the real output/ files with the owner's token (14-oct-2026), and
+        # could as well have started the daily jobs or uploads twice.
         import autopilot_local
         asyncio.create_task(autopilot_local.loop_forever(
             _autopilot_submit, _job_clips, is_active=lambda: not _draining,
@@ -2935,7 +2939,8 @@ def _post_all_run(items):
                 clip["path"], clip["title"], clip["description"], clip["tags"], clip["genre"],
                 publish_at=slot, ai_made=clip["ai_made"],
                 meta={"job_id": it["job_id"], "clip_index": it["index"], "post_all": True,
-                      "source": _source_of(it["job_id"])})
+                      "source": _source_of(it["job_id"]), "seconds": clip.get("seconds"),
+                      **dict(zip(("exp", "arm"), __import__("learning")._arm_of(it["job_id"])))})
             if row.get("status") != "done" and youtube_account.upload_limit_hit(row.get("error")):
                 # Every later upload would get the same refusal: stop, the
                 # rest stay in Ready to post for tomorrow.
@@ -3043,6 +3048,35 @@ async def youtube_post_all(request: Request):
 async def youtube_post_all_status():
     _local_only()
     return dict(_post_all)
+
+
+@app.get("/api/learning")
+async def learning_get():
+    """What Shortkaar has learned from its own Shorts (learning.py)."""
+    _local_only()
+    import learning
+    return learning.summary()
+
+
+@app.put("/api/learning")
+async def learning_put(request: Request):
+    _local_only()
+    import learning
+    body = await request.json()
+    learning.set_learn(bool(body.get("learn", True)))
+    return learning.summary()
+
+
+@app.post("/api/learning/run")
+async def learning_run():
+    """One learning pass now (normally every 6 hours)."""
+    _local_only()
+    import autopilot_local
+    import learning
+    import youtube_account
+    if not youtube_account.status()["connected"]:
+        raise HTTPException(status_code=400, detail="Connect your YouTube channel first.")
+    return await _in_thread(learning.run, print, autopilot_local.look("comedy").get("frame_handle") or "")
 
 
 @app.get("/api/report")

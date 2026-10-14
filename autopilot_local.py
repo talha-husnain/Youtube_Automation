@@ -232,8 +232,17 @@ def research_videos(cfg, log):
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         found = [v for vs in pool.map(_one, queries) for v in vs]
+    import learning
+    learned = learning.load()
+
+    def weight(v):
+        # A source whose Shorts did well for this channel ranks up, a poor one
+        # down, a resting one (factor 0) is left out (learning.py).
+        return (v.get("views") or 0) * learning.source_factor(v.get("channel_url"), learned)
     seen, cands = set(), []
-    for v in sorted(found, key=lambda v: v.get("views") or 0, reverse=True):
+    for v in sorted(found, key=weight, reverse=True):
+        if weight(v) <= 0:
+            continue
         if v["id"] in seen or not v.get("seconds") or not lo <= v["seconds"] <= hi:
             continue
         seen.add(v["id"])
@@ -397,13 +406,15 @@ async def run_now(submit, reason="schedule"):
         picked = await loop.run_in_executor(None, pick_videos, cfg, cfg["comedy_per_day"], log)
         if not picked:
             log("No new reuse-allowed comedy video found today.")
+        import learning
         for video, n in picked:
-            payload = {**look("comedy"), "url": video["url"], "genre": "comedy", "acknowledged": True,
-                       "target_clips": n}
+            test = learning.next_arm()
+            payload = {**look("comedy"), **test["overrides"], "url": video["url"], "genre": "comedy",
+                       "acknowledged": True, "target_clips": n}
             try:
                 job_id = await submit(payload)
                 run["jobs"].append({"job_id": job_id, "kind": "comedy", "label": video["title"],
-                                    "source": video["url"], "clips": n})
+                                    "source": video["url"], "clips": n, "exp": test["exp"], "arm": test["arm"]})
             except Exception as e:  # noqa: BLE001
                 log(f"Could not start a job for {video['title'][:60]}: {e}")
     elif cfg["comedy_per_day"]:
@@ -614,6 +625,10 @@ async def loop_forever(submit, job_clips, is_active=lambda: True, build_weekly=N
                 await asyncio.get_event_loop().run_in_executor(None, run_weekly, build_weekly)
             if check_claims and claims_due(settings()):
                 await asyncio.get_event_loop().run_in_executor(None, run_claim_check, check_claims)
+            import learning
+            if learning.due():
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: learning.run(print, look("comedy").get("frame_handle") or ""))
             if post_ready:
                 # Everything in Ready to post, hand-made Shorts too.
                 if auto_post_due(settings()):

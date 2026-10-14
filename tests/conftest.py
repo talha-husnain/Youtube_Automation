@@ -9,6 +9,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # variable, so this must be set here — before any test module imports app — or
 # the suite's behavior would depend on the developer's personal .env.
 os.environ["BILLING_ENABLED"] = "0"
+# No test, and no app a test starts as a subprocess (test_mcp_stdio), may run
+# the local Autopilot loop: it acts on the real output/ files and YouTube token.
+os.environ["AUTOPILOT_LOCAL"] = "0"
 
 import pytest
 
@@ -37,3 +40,5 @@ def _private_channel_files(tmp_path, monkeypatch):
     monkeypatch.setattr(rivals, "STATE_FILE", str(tmp_path / "rivals.json"))
     import telegram_notify
     monkeypatch.setattr(telegram_notify, "STATE_FILE", str(tmp_path / "telegram.json"))
+    import learning
+    monkeypatch.setattr(learning, "STATE_FILE", str(tmp_path / "learning.json"))

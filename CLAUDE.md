@@ -345,7 +345,24 @@ never finished:
   film (`looks_like_a_series`; a podcast's "EP 29" stays) and the vet prompt
   drops TV broadcast footage (it kept a Lux Style Awards clip before).
 - Captions never burn sound tags (`subtitles._SOUND_TAG`, filtered before
-  continuation merging): a Short showed "[MUSIC]" as its caption. Tests run with `.venv/Scripts/python` (the system
+  continuation merging): a Short showed "[MUSIC]" as its caption.
+- **Scheduled uploads do go public** from the unaudited project (11:00 and
+  13:00 Shorts went public on time, 14-oct-2026), so the audit is not
+  needed; `learning.refresh` counts uploads still private an hour past their
+  time (`locked`) and only then does the dashboard mention the audit.
+- **Learning loop** (`learning.py`, `/api/learning*`, My channel card), every
+  6 h from the Autopilot loop: YouTube numbers for 30 days of uploads, a
+  Short counts after 48 h public; source channels scored by median views
+  (research sorts by views x `source_factor`, a poor channel rests 14 days);
+  one A/B test at a time on Autopilot comedy jobs (`next_arm`: end card, AI
+  take, 35 s clips; 8 counted per side, the challenger wins only at 1.3x
+  and +5 median views, else the current look stays); the what-works title
+  rules rebuild every 5 newly counted Shorts. Upload rows carry `exp`/`arm`
+  and `seconds`.
+- **`AUTOPILOT_LOCAL=0`** keeps the Autopilot loop off in any second copy of
+  the app: test_mcp_stdio runs mcp_stdio.py as a real subprocess that enters
+  the lifespan, and its loop ran a claim check and a learning pass on the
+  real output/ files with the owner's token. mcp_stdio and conftest set it. Tests run with `.venv/Scripts/python` (the system
   Python has no httpx) and `--continue-on-collection-errors`.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file

@@ -3,11 +3,11 @@ import { Loader2, Youtube, BarChart3, RefreshCw, ExternalLink, Copy, Check, LogO
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
 import TelegramCard from './TelegramCard';
+import LearningCard from './LearningCard';
 
 // "My channel": connect the user's own YouTube channel (youtube_account.py),
 // the "what works" report (what_works.py) and the uploads Shortkaar made.
 
-const AUDIT_FORM = 'https://support.google.com/youtube/contact/yt_api_form';
 const SETUP_STEPS = `1. Open https://console.cloud.google.com and create a project named Shortkaar.
 2. APIs & Services > Library: enable "YouTube Data API v3" and "YouTube Analytics API".
 3. Google Auth Platform (OAuth consent screen): choose External, app name Shortkaar,
@@ -122,13 +122,9 @@ export default function ChannelTab({ notice }) {
                             </div>
                         </div>
                     )}
-                    <p className="text-[11px] text-warn leading-relaxed">
-                        YouTube keeps every video uploaded from your own Google project private until that project passes YouTube&apos;s API audit.
-                        Fill in the <a href={AUDIT_FORM} target="_blank" rel="noreferrer" className="underline">audit form</a> once (free, can take a few weeks).
-                        Until then, &quot;post all to YouTube&quot; in Ready to post still uploads every Short with its title, description and tags, but YouTube keeps them private: set each one to Public or Schedule in YouTube Studio (Ready to post lists them with their times). The report below works now.
-                        Ready-made answers for the form: docs/youtube-api-audit.md in the Shortkaar folder.
-                    </p>
                 </div>
+
+                <LearningCard />
 
                 <TelegramCard />
 
