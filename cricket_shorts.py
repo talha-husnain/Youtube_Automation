@@ -17,11 +17,15 @@ Two kinds (CRICKET_MODE):
   records, history, "did you know"): researched with Google Search, told as
   4-6 numbered fact cards.
 
-No player photos or likeness (personality-rights orders for Gavaskar and
-Yuvraj, 2025-26) and no team or tournament logos: names and colours only.
+No team or tournament logos: names and colours only. Player photos only
+from Wikipedia's free-licence lead photo (player_photo.py, credited in the
+description, CRICKET_PHOTOS=0 turns them off), shown as they are: never
+edited, never put next to a product, never AI-made (the personality-rights
+orders for Gavaskar and Yuvraj, 2025-26, were about misuse of that kind).
 
 Env: CRICKET_MATCH (the match, link or topic typed), CRICKET_MODE,
-BG_MUSIC (1: a track from the music folder under the voice), CRICKET_VOICE.
+BG_MUSIC (1: a bed from music/cricket/, made by music_beds.py when empty,
+else the music folder), CRICKET_VOICE, CRICKET_PHOTOS.
 """
 import os
 import re
@@ -223,6 +227,7 @@ class TopicStory(BaseModel):
     hook_line: str
     facts: List[Fact]
     question: str
+    player: str
 
 
 TOPIC_FACTS_PROMPT = """Today is {today}. Research this cricket topic for a short video: {topic}
@@ -258,6 +263,9 @@ Return:
   excited, numbers exactly as in the facts).
 - question: a cheeky question for the comments, Roman Urdu, max 70 characters, ending
   with "comment mein batao" or similar.
+- player: the full name of the ONE player this Short is mainly about, as his
+  Wikipedia article is titled ("Babar Azam", "Jasprit Bumrah"), or "" when it is not
+  about one player.
 Everyday spoken Roman Urdu in Latin letters, the way fans talk: never formal words like
 "mutawatir", "wahid", "tareen" (say "lagatar", "akela", "sabse"). Never Devanagari or
 Arabic script. No swear words."""
@@ -299,12 +307,45 @@ def ideas(client):
     """[{"kind": "match"|"topic", "text"}] for the dashboard's idea chips."""
     import time
     text, _ = grounded(client, IDEAS_PROMPT.format(today=time.strftime("%d %B %Y")))
+    return _idea_lines(text)[:10]
+
+
+def _idea_lines(text):
     out = []
-    for line in text.splitlines():
+    for line in (text or "").splitlines():
         m = re.match(r"\W*(match|topic)\s*:\s*(.+)", line.strip(), re.I)
         if m:
             out.append({"kind": m.group(1).lower(), "text": _txt(m.group(2).strip(" *"), 120)})
-    return out[:10]
+    return out
+
+
+CHANNEL_IDEAS_PROMPT = """Today is {today}. Plan the next {count} YouTube Shorts of a cricket facts
+and updates channel for Pakistani and Indian fans. Use Google Search for what is
+happening in cricket right now.
+Mix: about a quarter are matches finished in the last 3 days (exact "Team vs Team,
+tournament, stage" so they can be looked up); the rest are catchy facts that promise
+a surprise: one star player's stats or records (name the player), a crazy record, a
+"did you know", a rivalry by numbers, a rule people argue about, history on this date.
+Most fact ideas should be about ONE named player people love or argue about.
+{learn}Never repeat any of these, already made:
+{avoid}
+One per line, each starting with "match: " or "topic: ". Nothing else."""
+
+
+def channel_ideas(client, count=8, avoid=(), best=(), worst=()):
+    """Today's ideas for the cricket channel (my_channels.py), steered by what
+    did best and worst there."""
+    import time
+    learn = ""
+    if best:
+        learn += "These did BEST on the channel, make more like them:\n" + "\n".join(best) + "\n"
+    if worst:
+        learn += "These did WORST, avoid their kind:\n" + "\n".join(worst) + "\n"
+    text, _ = grounded(client, CHANNEL_IDEAS_PROMPT.format(
+        today=time.strftime("%d %B %Y"), count=count, learn=learn,
+        avoid="\n".join(list(avoid)[-80:]) or "(nothing yet)"))
+    seen = {a.lower() for a in avoid}
+    return [i for i in _idea_lines(text) if i["text"].lower() not in seen][:count + 2]
 
 
 # ---------------------------------------------------------------- drawing
@@ -369,17 +410,29 @@ def _count_up(t0, t1, x, y, score, style_name="CkScore", steps=12, secs=0.9):
     return ev
 
 
+PILL_MAX = 1000
+
+
 def _pill(t0, t1, y, text, colour=fl.GOLD, text_colour="#14142B"):
-    w = max(260, 26 * len(text) + 110)
-    h = 78
+    # A long match line made a bar wider than the screen (1202 px for 42
+    # characters): the pill stops at PILL_MAX and the text shrinks to fit.
+    need = 26 * len(text) + 110
+    w, h = min(PILL_MAX, max(260, need)), 78
+    size = rf"\fs{max(22, int(36 * PILL_MAX / need))}" if need > PILL_MAX else ""
     return [
         _shape(3, t0, t1, fl._round_rect(w, h, h // 2), _c(colour), at=(CX - w // 2, y - h // 2),
                extra=r"\fad(150,150)"),
-        kit.dialogue(4, t0, t1, "CkPill", rf"{{\an5\pos({CX},{y})\1c{_c(text_colour)}\fad(150,150)}}{text}"),
+        kit.dialogue(4, t0, t1, "CkPill", rf"{{\an5\pos({CX},{y})\1c{_c(text_colour)}{size}\fad(150,150)}}{text}"),
     ]
 
 
-def scene_events(beat, t0, t1, story):
+def _name(name):
+    """A player's full name, smaller when long ("Mohammad Imran Randhawa" was cut to 22)."""
+    text = _txt(name, 34)
+    return (rf"\fs{54 if len(text) <= 26 else 44}" if len(text) > 18 else ""), text
+
+
+def scene_events(beat, t0, t1, story, with_photo=False):
     teams, ev = story.teams, []
     out = r"\fad(180,200)"
     if beat.scene == "intro":
@@ -408,12 +461,25 @@ def scene_events(beat, t0, t1, story):
                                    rf"{{\pos(960,{y + 190}){out}}}{team.overs} overs"))
             if win:
                 ev += _pill(t0 + 1.2, t1, y - 10, "WINNER")
+    elif beat.scene == "star" and story.stars and with_photo:
+        # His round photo sits at y 815 (short_kit images); the text moves below it.
+        star = story.stars[min(max(beat.ref, 0), len(story.stars) - 1)]
+        ev += _pill(t0, t1, 600, "STAR OF THE MATCH" if beat.ref == 0 else "STAR PERFORMER")
+        fs, name = _name(star.name)
+        ev.append(kit.dialogue(4, t0 + 0.15, t1, "CkStar",
+                               rf"{{\an5\pos({CX},1010){fs}\fscx80\fscy80\t(0,220,\fscx100\fscy100){out}}}"
+                               rf"{name}"))
+        ev.append(kit.dialogue(5, t0 + 0.4, t1, "CkBig",
+                               rf"{{\an5\pos({CX},1170)\fs120\fscx250\fscy250\alpha&HFF&"
+                               rf"\t(0,220,\fscx100\fscy100\alpha&H00&){out}}}{_txt(star.figures, 12)}"))
+        ev.append(kit.dialogue(4, t0 + 0.7, t1, "CkNote", rf"{{\an5\pos({CX},1300){out}}}{_txt(star.note, 44)}"))
     elif beat.scene == "star" and story.stars:
         star = story.stars[min(max(beat.ref, 0), len(story.stars) - 1)]
         ev += _pill(t0, t1, 640, "STAR OF THE MATCH" if beat.ref == 0 else "STAR PERFORMER")
+        fs, name = _name(star.name)
         ev.append(kit.dialogue(4, t0 + 0.15, t1, "CkStar",
-                               rf"{{\an5\pos({CX},800)\fscx80\fscy80\t(0,220,\fscx100\fscy100){out}}}"
-                               rf"{_txt(star.name, 22)}"))
+                               rf"{{\an5\pos({CX},800){fs}\fscx80\fscy80\t(0,220,\fscx100\fscy100){out}}}"
+                               rf"{name}"))
         ev.append(kit.dialogue(4, t0 + 0.2, t1, "CkSmall", rf"{{\an5\pos({CX},880){out}}}{_txt(star.team, 6)}"))
         ev.append(kit.dialogue(5, t0 + 0.4, t1, "CkBig",
                                rf"{{\an5\pos({CX},1040)\fscx250\fscy250\alpha&HFF&"
@@ -454,19 +520,38 @@ def frame_events(story, total, handle, title):
     return ev
 
 
+SWIPE = 1100     # fact cards swipe in from this far right
+SWIPE_MS = 300
+
+
+def _swipe(x, y, delay=0):
+    """\\move from off-screen right to (x, y): every part of a card arrives
+    together, ``delay`` ms after the card starts."""
+    return rf"\move({x + SWIPE},{y},{x},{y},{delay},{delay + SWIPE_MS})"
+
+
+def _flash(t0):
+    """A soft white flash as a new card swipes in: the cut reads as a transition."""
+    return _shape(7, t0, t0 + 0.25, fl._round_rect(kit.OUT_W, kit.OUT_H, 0), "&HFFFFFF&",
+                  at=(0, 0), alpha="C8", extra=r"\t(0,220,\1a&HFF&)")
+
+
 def fact_events(k, n, fact, t0, t1):
-    """One numbered fact card: badge, headline, big stat, what it means, progress."""
-    out = r"\fad(180,200)"
+    """One numbered fact card: badge, headline, big stat, what it means, progress.
+    The whole card swipes in from the right with a flash, then fades out."""
+    out = r"\fad(0,200)"
     ev = [
+        _flash(t0),
         _shape(2, t0, t1, fl._round_rect(920, 680, 44), "&H2B140E&", alpha="40",
-               move=(80, 640, 80, 600, 0, 260), extra=out),
-        _shape(3, t0, t1, fl._circle(64), _c(fl.GOLD), at=(CX - 64, 536), extra=out),
-        kit.dialogue(4, t0, t1, "CkBadgeDark", rf"{{\an5\pos({CX},600){out}}}{k}"),
+               move=(80 + SWIPE, 600, 80, 600, 0, SWIPE_MS), extra=out),
+        _shape(3, t0, t1, fl._circle(64), _c(fl.GOLD), move=(CX - 64 + SWIPE, 536, CX - 64, 536, 0, SWIPE_MS),
+               extra=out),
+        kit.dialogue(4, t0, t1, "CkBadgeDark", rf"{{\an5{_swipe(CX, 600)}{out}}}{k}"),
         # Long headlines shrink instead of being cut ("...Sabse Ziada Centur", first render).
-        kit.dialogue(4, t0 + 0.15, t1, "CkStar",
-                     rf"{{\an5\pos({CX},760)\fs{74 if len(fact.headline) <= 22 else 54}\fscx85\fscy85"
-                     rf"\t(0,220,\fscx100\fscy100){out}}}{_txt(fact.headline, 44)}"),
-        kit.dialogue(4, t0 + 0.6, t1, "CkNote", rf"{{\an5\pos({CX},1130){out}}}{_txt(fact.detail, 130)}"),
+        kit.dialogue(4, t0, t1, "CkStar",
+                     rf"{{\an5{_swipe(CX, 760, 60)}\fs{74 if len(fact.headline) <= 22 else 54}\fscx85\fscy85"
+                     rf"\t(150,370,\fscx100\fscy100){out}}}{_txt(fact.headline, 44)}"),
+        kit.dialogue(4, t0 + 0.6, t1, "CkNote", rf"{{\an5\pos({CX},1130)\fad(180,200)}}{_txt(fact.detail, 130)}"),
     ]
     if fact.stat.strip():
         if re.fullmatch(r"\d{1,6}", fact.stat.strip()):
@@ -512,22 +597,55 @@ def _voice_timeline(client, lines, output_dir, stem):
     return windows, voices, caps, t + 0.6
 
 
-def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_end, clip, seo):
+def _bed():
+    """A background track for the voice, or None (BG_MUSIC off)."""
+    if os.environ.get("BG_MUSIC", "0") != "1":
+        return None
+    track = kit.music_track("cricket")
+    if not track:
+        import music_beds
+        music_beds.ensure("cricket", 1)
+        track = kit.music_track("cricket")
+    if not track:
+        print("   ℹ️ Background music is on but none could be found or made: no music this time.")
+    return track
+
+
+def _photo(name, output_dir):
+    """{"card", "avatar", "info"} for a player's free photo, or None."""
+    if not (name or "").strip() or os.environ.get("CRICKET_PHOTOS", "1") == "0":
+        return None
+    import player_photo
+    got = player_photo.fetch(name.strip(), output_dir)
+    if got:
+        print(f"   🖼️ Photo of {got['info']['player']} ({got['info']['licence']}, Wikimedia Commons).")
+    return got
+
+
+def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_end, clip, seo,
+            images=(), photos=()):
     import seo_copy
     outro_s = cfg["outro_seconds"]
     card_ev, card_sfx = kit.end_card(body_end, outro_s)
     total = body_end + (outro_s if card_ev else 0.0)
-    track = kit.music_track() if os.environ.get("BG_MUSIC", "0") == "1" else None
-    if os.environ.get("BG_MUSIC", "0") == "1" and not track:
-        print("   ℹ️ Background music is on but the music folder is empty: no music this time.")
+    track = _bed()
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
     print(f"🎬 Rendering the cricket short ({total:.0f}s"
           + (f", music: {os.path.basename(track)}" if track else "") + ")...")
     kit.render(final, total, colors, kit.ambient_events(total) + events + card_ev, STYLES,
-               voices=voices, sfx=sfx + card_sfx, bed=(track, body_end) if track else None)
+               voices=voices, sfx=sfx + card_sfx, bed=(track, body_end) if track else None, images=images)
     clip.update({"end": round(total, 3), "seconds": round(total, 3), "file": final,
                  "background_music": os.path.basename(track) if track else None})
     seo_copy.apply([clip], clip["captions"], **seo)
+    if photos:
+        # Free licences ask for credit: in the copy, never on screen.
+        import credits
+        import player_photo
+        credit = "\n".join(player_photo.credit_line(p) for p in photos)
+        clip["photo_credit"] = credit
+        for field in ("seo_description", "video_description_for_instagram"):
+            if clip.get(field):
+                clip[field] = credits.insert(clip[field], credit)
     kit.finish(output_dir, stem, [clip], clip["captions"], pipeline, extra={"genre": "cricket"})
 
 
@@ -538,13 +656,22 @@ def run_topic(topic, output_dir, pipeline):
     story, facts, sources = find_topic(client, topic, cfg["handle"] or "this channel")
     print(f"   ✅ {story.kicker}: {len(story.facts)} facts ({len(sources)} sources)")
     stem = kit.neutral_stem("Cricket")
+    photo = _photo(story.player, output_dir)
     lines = [story.hook_line] + [f.line for f in story.facts] + [story.question]
     print(f"🎙️ Voicing {len(lines)} lines...")
     windows, voices, caps, body_end = _voice_timeline(client, lines, output_dir, stem)
     events, sfx, n = topic_frame_events(story, body_end, cfg["handle"]), [], len(story.facts)
+    images = []
     for k, a, b in windows:
         sfx.append((kit.WHOOSH, 0.3, max(0.0, a - 0.15)))
-        if k == 0:
+        if k == 0 and photo:
+            # The player opens the Short: his photo, his name, the hook in the captions.
+            images.append({"path": photo["card"], "t0": a, "t1": b, "y": 850, "zoom": 0.06})
+            events += _pill(a + 0.3, b, 1290, _txt(photo["info"]["player"], 26).upper())
+            # Then a round badge of him next to the label for the rest.
+            images.append({"path": photo["badge"], "t0": b, "t1": body_end, "y": 200, "zoom": 0.0,
+                           "x": kit.OUT_W - 150})
+        elif k == 0:
             events.append(kit.dialogue(4, a, b, "CkText",
                                        rf"{{\an5\pos({CX},900)\fad(200,200)\fscx90\fscy90"
                                        rf"\t(0,250,\fscx100\fscy100)}}{_txt(story.hook_line, 90)}"))
@@ -562,7 +689,7 @@ def run_topic(topic, output_dir, pipeline):
     _finish(output_dir, stem, pipeline, cfg, events, [cfg["bg"], kit.blend("#0B6E4F", cfg["bg"], 0.3)],
             voices, sfx, body_end, clip,
             {"source_title": topic, "context": TOPIC_SEO_CONTEXT.format(kind=story.kicker, topic=topic),
-             "text_limit": 4000})
+             "text_limit": 4000}, images=images, photos=[photo["info"]] if photo else [])
 
 
 def run(match, output_dir, pipeline):
@@ -591,9 +718,17 @@ def run_match(match, output_dir, pipeline):
     print(f"🎙️ Voicing {len(story.beats)} commentary lines...")
     windows, voices, caps, body_end = _voice_timeline(client, [b.line for b in story.beats],
                                                       output_dir, stem)
-    events, sfx = frame_events(story, body_end, handle, story.title), []
+    events, sfx, images, photos = frame_events(story, body_end, handle, story.title), [], [], {}
     for k, a, b in windows:
-        events += scene_events(story.beats[k], a, b, story)
+        beat = story.beats[k]
+        star = (story.stars[min(max(beat.ref, 0), len(story.stars) - 1)]
+                if beat.scene == "star" and story.stars else None)
+        if star and star.name not in photos:
+            photos[star.name] = _photo(star.name, output_dir) if len(photos) < 3 else None
+        got = photos.get(star.name) if star else None
+        if got:
+            images.append({"path": got["avatar"], "t0": a, "t1": b, "y": 815, "zoom": 0.08})
+        events += scene_events(beat, a, b, story, with_photo=bool(got))
         sfx.append((kit.WHOOSH, 0.3, max(0.0, a - 0.15)))
     colors = [cfg["bg"], kit.blend(story.teams[0].color, cfg["bg"], 0.25),
               kit.blend(story.teams[1].color, cfg["bg"], 0.25)]
@@ -605,4 +740,5 @@ def run_match(match, output_dir, pipeline):
             "ai_voice": "AI voice commentary", "sources": sources[:8],
             "cricket": story.model_dump()}
     _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_end, clip,
-            {"source_title": story.match_line, "context": SEO_CONTEXT, "text_limit": 4000})
+            {"source_title": story.match_line, "context": SEO_CONTEXT, "text_limit": 4000},
+            images=images, photos=[p["info"] for p in photos.values() if p])

@@ -963,7 +963,9 @@ def _recover_jobs_from_disk():
 _RESUME_FILE = ".resume.json"
 # Video types (CONTENT_GENRE): comedy is the main pipeline; the others are
 # song_shorts.py, movie_dub.py and cricket_shorts.py.
-CONTENT_GENRES = ("comedy", "songs", "movies", "cricket")
+CONTENT_GENRES = ("comedy", "songs", "movies", "cricket", "quiz", "music")
+# Made from nothing but a prompt (main.py --generate): no link, no upload.
+GENERATED_GENRES = ("cricket", "quiz", "music")
 MAX_RESUME_ATTEMPTS = 2
 
 # --- Deploy handover (two instances, one disk) -------------------------------
@@ -1475,8 +1477,12 @@ def _waiting_to_post(job_id, job_path, now):
         metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
         if not metas:
             return False
-        if _job_source(job_path).get("genre") == "long":
+        src = _job_source(job_path)
+        if src.get("genre") == "long":
             return now - os.path.getmtime(job_path) < post_queue.KEEP_DAYS * 86400
+        if src.get("channel") not in (None, "", "main"):
+            import my_channels
+            return my_channels.keeps(job_id, src["channel"], now - os.path.getmtime(job_path))
         with open(metas[0], encoding="utf-8") as f:
             n = len(json.load(f).get("shorts") or [])
         return post_queue.keeps(job_id, n, now - os.path.getmtime(job_path))
@@ -2325,6 +2331,12 @@ async def lifespan(app: FastAPI):
             _autopilot_submit, _job_clips, is_active=lambda: not _draining,
             build_weekly=_autopilot_weekly, to_phone=(_plan_items, _send_to_phone),
             post_ready=_auto_post_ready, check_claims=_check_claims))
+        # The owner's other channels (my_channels.py): their own loop, so the
+        # main channel's Autopilot above runs exactly as before.
+        import my_channels
+        import short_kit
+        asyncio.create_task(my_channels.loop_forever(
+            _autopilot_submit, _job_clips, OUTPUT_DIR, short_kit.gemini, is_active=lambda: not _draining))
     yield
     # Cleanup (optional: cancel worker)
 
@@ -2789,8 +2801,9 @@ def _job_clips(job_id):
                     "tiktok": c.get("video_description_for_tiktok") or "",
                     "instagram": c.get("video_description_for_instagram") or "",
                     "seconds": round(float(c.get("end", 0)) - float(c.get("start", 0)), 1),
-                    # Dubbed actors say lines they never said: YouTube asks for the label.
-                    "ai_made": genre == "movies"})
+                    # Dubbed actors say lines they never said, and an AI song's
+                    # voice is a realistic voice nobody sang: YouTube asks for the label.
+                    "ai_made": genre in ("movies", "music")})
     return state, out
 
 
@@ -2819,14 +2832,41 @@ async def youtube_status():
 
 
 @app.get("/api/youtube/connect")
-async def youtube_connect(back: str = ""):
+async def youtube_connect(back: str = "", channel: str = ""):
+    """Google's sign-in for the main channel, or for ``channel`` (my_channels)."""
     _local_only()
     import youtube_account
     from fastapi.responses import RedirectResponse
+    acct = None
+    if channel and channel != "main":
+        import my_channels
+        if not my_channels.get(channel):
+            raise HTTPException(status_code=404, detail="Unknown channel.")
+        acct = my_channels.account(channel)
     try:
-        return RedirectResponse(youtube_account.auth_url(back))
+        return RedirectResponse(youtube_account.auth_url(back, acct))
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _refuse_same_channel(me, account):
+    """A YouTube channel connects to one place only: picking Punchline Bazaar
+    again on Google's screen for a new channel would post its Shorts there."""
+    import my_channels
+    import youtube_account
+    here = (account or {}).get("id") or "main"
+    places = [("main", None, "your main channel")] + [
+        (c["id"], my_channels.account(c["id"]), c["name"]) for c in my_channels.channels()]
+    for cid, acct, name in places:
+        if cid == here:
+            continue
+        with youtube_account.use(acct):
+            other = youtube_account.status().get("channel") or {}
+        if other.get("id") and other["id"] == me.get("id"):
+            return (f"That is {me.get('title') or 'a channel'}, already connected here as {name}. "
+                    "Press Connect again and pick the other channel on Google's screen "
+                    "(channels you made are listed under your account).")
+    return None
 
 
 @app.get("/api/youtube/callback")
@@ -2836,13 +2876,16 @@ async def youtube_callback(code: str = "", state: str = "", error: str = ""):
     import youtube_account
     from fastapi.responses import RedirectResponse
     origin = youtube_account.origin_for(state)
+    # Another channel's sign-in returns to the Channels tab, the main one to My channel.
+    tab = "channels" if youtube_account.account_for(state) else "channel"
     if error or not code:
-        return RedirectResponse(youtube_account.back_url(origin, "yt_error=" + urllib.parse.quote(error or "cancelled")))
+        return RedirectResponse(youtube_account.back_url(
+            origin, "yt_error=" + urllib.parse.quote(error or "cancelled"), tab))
     try:
-        await _in_thread(youtube_account.finish_connect, code, state)
+        await _in_thread(youtube_account.finish_connect, code, state, _refuse_same_channel)
     except Exception as e:  # noqa: BLE001
-        return RedirectResponse(youtube_account.back_url(origin, "yt_error=" + urllib.parse.quote(str(e)[:200])))
-    return RedirectResponse(youtube_account.back_url(origin, "connected=1"))
+        return RedirectResponse(youtube_account.back_url(origin, "yt_error=" + urllib.parse.quote(str(e)[:200]), tab))
+    return RedirectResponse(youtube_account.back_url(origin, "connected=1", tab))
 
 
 @app.post("/api/youtube/disconnect")
@@ -3050,6 +3093,136 @@ async def youtube_post_all_status():
     return dict(_post_all)
 
 
+# ------------------------------------------------------------------ my channels
+
+def _main_channel_row():
+    import autopilot_local
+    import youtube_account
+    cfg = autopilot_local.settings()
+    yt = youtube_account.status()
+    return {"id": "main", "kind": "comedy", "main": True,
+            "name": (yt.get("channel") or {}).get("title") or "Main channel",
+            "kind_label": "Comedy (Autopilot, Ready to post)", "enabled": cfg["enabled"],
+            "auto_upload": cfg["auto_upload"], "per_day": cfg["comedy_per_day"] + cfg["cricket_per_day"],
+            "post_times": cfg["post_times"], "youtube": yt}
+
+
+def _channel_view(ch):
+    """my_channels.summary plus, per finished Short still here, its title and
+    a link to watch it before it goes up."""
+    import my_channels
+    out = my_channels.summary(ch)
+    for j in out["jobs"]:
+        if j.get("job_id") and j.get("status") in ("done", "uploaded"):
+            _state, clips = _job_clips(j["job_id"])
+            if clips:
+                j["title"] = clips[0]["title"]
+                j["video_url"] = f"/videos/{j['job_id']}/{clips[0]['name']}"
+    return out
+
+
+@app.get("/api/my-channels")
+async def my_channels_list():
+    """Every channel: the main one (its settings live in Autopilot) and the others."""
+    _local_only()
+    import my_channels
+    rows = await _in_thread(lambda: [_channel_view(c) for c in my_channels.channels()])
+    return {"channels": [await _in_thread(_main_channel_row)] + rows,
+            "kinds": {k: {"label": v["label"], "about": v["about"]} for k, v in my_channels.KINDS.items()},
+            "max_per_day": my_channels.MAX_PER_DAY}
+
+
+@app.post("/api/my-channels")
+async def my_channels_add(request: Request):
+    _local_only()
+    import my_channels
+    body = await request.json()
+    try:
+        ch = my_channels.add(str(body.get("kind") or ""), body.get("name") or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _in_thread(_channel_view, ch)
+
+
+@app.put("/api/my-channels/{cid}")
+async def my_channels_update(cid: str, request: Request):
+    _local_only()
+    import my_channels
+    ch = my_channels.update(cid, await request.json())
+    if not ch:
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+    return await _in_thread(_channel_view, ch)
+
+
+@app.delete("/api/my-channels/{cid}")
+async def my_channels_remove(cid: str):
+    _local_only()
+    import my_channels
+    if not my_channels.get(cid):
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+    my_channels.remove(cid)
+    return {"ok": True}
+
+
+@app.post("/api/my-channels/{cid}/disconnect")
+async def my_channels_disconnect(cid: str):
+    """Forget this channel's Google token. No revoke: when the same Google
+    identity also holds another channel's token, revoking would cut it too."""
+    _local_only()
+    import my_channels
+    import youtube_account
+    if not my_channels.get(cid):
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+
+    def run():
+        with youtube_account.use(my_channels.account(cid)):
+            youtube_account.disconnect(revoke=False)
+    await _in_thread(run)
+    return {"ok": True}
+
+
+@app.post("/api/my-channels/{cid}/make")
+async def my_channels_make(cid: str):
+    """Make this channel's next Short now (also before it is connected, to see one)."""
+    _local_only()
+    import my_channels
+    import short_kit
+    ch = my_channels.get(cid)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+    if my_channels.running(ch):
+        raise HTTPException(status_code=409, detail="A Short for this channel is being made. Wait for it.")
+    notes = []
+    job_id = await my_channels.make_one(_autopilot_submit, ch, short_kit.gemini, notes.append)
+    if not job_id:
+        raise HTTPException(status_code=502, detail=(notes[-1] if notes else "Could not start one; try again in a minute."))
+    return {"ok": True, "job_id": job_id}
+
+
+@app.post("/api/my-channels/{cid}/skip/{job_id}")
+async def my_channels_skip(cid: str, job_id: str):
+    """Keep a waiting Short off YouTube (the owner watched it and said no)."""
+    _local_only()
+    import my_channels
+    if not my_channels.skip(cid, job_id):
+        raise HTTPException(status_code=400, detail="That Short is not waiting to upload.")
+    return await _in_thread(_channel_view, my_channels.get(cid))
+
+
+@app.post("/api/my-channels/{cid}/learn")
+async def my_channels_learn(cid: str):
+    _local_only()
+    import my_channels
+    ch = my_channels.get(cid)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+    try:
+        ch = await _in_thread(my_channels.learn, ch)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _in_thread(_channel_view, ch)
+
+
 @app.get("/api/learning")
 async def learning_get():
     """What Shortkaar has learned from its own Shorts (learning.py)."""
@@ -3141,8 +3314,8 @@ def _queue_clips():
         if state != "completed" or not clips:
             continue
         src = _job_source(job_path)
-        if src.get("genre") == "long":
-            continue
+        if src.get("genre") == "long" or src.get("channel") not in (None, "", "main"):
+            continue   # another channel's Short (my_channels.py) never posts here
         created = os.path.getmtime(glob.glob(os.path.join(job_path, "*_metadata.json"))[0])
         if created < start:
             continue
@@ -4049,6 +4222,13 @@ async def process_endpoint(
     bg_music: Optional[str] = Form(None),
     moments: Optional[str] = Form(None),
     take_voice: Optional[str] = Form(None),
+    quiz_format: Optional[str] = Form(None),
+    quiz_topic: Optional[str] = Form(None),
+    quiz_avoid: Optional[str] = Form(None),
+    music_style: Optional[str] = Form(None),
+    music_theme: Optional[str] = Form(None),
+    music_avoid: Optional[str] = Form(None),
+    channel: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -4104,6 +4284,13 @@ async def process_endpoint(
         bg_music = body.get("bg_music")
         moments = body.get("moments")
         take_voice = body.get("take_voice")
+        quiz_format = body.get("quiz_format")
+        quiz_topic = body.get("quiz_topic")
+        quiz_avoid = body.get("quiz_avoid")
+        music_style = body.get("music_style")
+        music_theme = body.get("music_theme")
+        music_avoid = body.get("music_avoid")
+        channel = body.get("channel")
 
     # Two or more links: one short made of their best moments (compilation.py),
     # always in the framed style. One link stays a normal job.
@@ -4135,6 +4322,13 @@ async def process_endpoint(
     genre_val = str(genre or "comedy").strip().lower()
     if genre_val not in CONTENT_GENRES:
         raise HTTPException(status_code=400, detail=f"Unknown video type: {genre}")
+    channel_id = str(channel or "").strip() or None
+    if channel_id == "main":
+        channel_id = None
+    if channel_id:
+        import my_channels
+        if BILLING_ENABLED or not my_channels.get(channel_id):
+            raise HTTPException(status_code=400, detail="Unknown channel.")
     song_urls = []
     owned_music = str(song_owned).lower() in ("1", "true", "yes")
     cricket_mode = "topic" if str(cricket_mode or "").strip().lower() == "topic" else "match"
@@ -4148,6 +4342,8 @@ async def process_endpoint(
                     "Write which match (teams, tournament and date) or paste its video link."))
             if re.match(r"https?://", cricket_match):
                 await _validate_source_url(cricket_match)
+            url, compile_urls = None, []
+        elif genre_val in GENERATED_GENRES:
             url, compile_urls = None, []
         elif compile_urls:
             if genre_val == "songs" and owned_music:
@@ -4187,7 +4383,7 @@ async def process_endpoint(
     if upload_id and not url and not file and not thumb_session:
         upload_slot = _take_pending_upload(upload_id, await _owner_id(request))
 
-    if not url and not file and not thumb_session and not upload_slot and genre_val != "cricket":
+    if not url and not file and not thumb_session and not upload_slot and genre_val not in GENERATED_GENRES:
         raise HTTPException(status_code=400, detail="Must provide URL, File or upload_id")
 
     # Completion callback: reject unsafe targets NOW (clear 400) — delivery
@@ -4328,8 +4524,23 @@ async def process_endpoint(
     if genre_val == "cricket":
         env["CRICKET_MATCH"] = cricket_match
         env["CRICKET_MODE"] = cricket_mode
-        if str(bg_music).lower() in ("1", "true", "yes"):
-            env["BG_MUSIC"] = "1"
+    if genre_val in ("cricket", "quiz") and str(bg_music).lower() in ("1", "true", "yes"):
+        env["BG_MUSIC"] = "1"
+    # The channel kinds of my_channels.py; avoid lists keep a channel from
+    # asking a question or making a song title twice.
+    if genre_val == "quiz":
+        env["QUIZ_FORMAT"] = str(quiz_format or "mcq")[:20]
+        env["QUIZ_TOPIC"] = re.sub(r"\s+", " ", str(quiz_topic or ""))[:80]
+    if genre_val == "music":
+        env["MUSIC_STYLE"] = re.sub(r"\s+", " ", str(music_style or ""))[:60]
+        env["MUSIC_THEME"] = re.sub(r"\s+", " ", str(music_theme or ""))[:60]
+    for name, raw in (("QUIZ_AVOID", quiz_avoid), ("MUSIC_AVOID", music_avoid)):
+        if raw:
+            try:
+                got = raw if isinstance(raw, list) else json.loads(str(raw))
+                env[name] = json.dumps([str(x)[:140] for x in got if x][-80:])
+            except ValueError:
+                pass
     # Your own moments (comedy, one link): main.manual_clips cuts exactly these.
     if moments and str(moments).strip():
         if genre_val != "comedy" or compile_urls:
@@ -4392,8 +4603,8 @@ async def process_endpoint(
         # re-render path cuts new segments from it, and it ages out with the
         # rest of the job (retention window + OUTPUT_MAX_GB cap) either way.
         cmd.extend(["-u", url, "--keep-original"])
-    elif genre_val == "cricket":
-        cmd.append("--generate")  # no source video (cricket_shorts.py)
+    elif genre_val in GENERATED_GENRES:
+        cmd.append("--generate")  # no source video (cricket / quiz / music_shorts.py)
     elif thumb_session:
         # Hardlink (or copy) the session's video under the job's name so source
         # lookup, the clip editor and the preview treat it exactly like a normal
@@ -4539,7 +4750,10 @@ async def process_endpoint(
             with open(os.path.join(job_output_dir, ".source.json"), "w", encoding="utf-8") as f:
                 json.dump({"url": url, "urls": compile_urls or None, "genre": genre_val,
                            "cricket": cricket_match if genre_val == "cricket" else None,
-                           "autopilot": bool(request.headers.get("x-shortkaar-autopilot"))}, f)
+                           "autopilot": bool(request.headers.get("x-shortkaar-autopilot")),
+                           # Which of the owner's channels it is for (my_channels.py);
+                           # None is the main channel and its Ready to post.
+                           "channel": channel_id}, f)
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ Could not save the job's source: {e}")
 

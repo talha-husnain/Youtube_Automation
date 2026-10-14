@@ -362,7 +362,50 @@ never finished:
 - **`AUTOPILOT_LOCAL=0`** keeps the Autopilot loop off in any second copy of
   the app: test_mcp_stdio runs mcp_stdio.py as a real subprocess that enters
   the lifespan, and its loop ran a claim check and a learning pass on the
-  real output/ files with the owner's token. mcp_stdio and conftest set it. Tests run with `.venv/Scripts/python` (the system
+  real output/ files with the owner's token. mcp_stdio and conftest set it.
+- **Several channels** (`my_channels.py`, `/api/my-channels*`, dashboard tab
+  "Channels", 14-oct-2026): Punchline Bazaar stays "main" with its own files
+  and Autopilot, untouched. Each other channel has a kind (cricket facts,
+  quiz, AI songs), its own Google token + uploads log in
+  `output/channels/<id>/`, used through `youtube_account.use(account)` (a
+  contextvar; `run_in_executor` threads do not inherit it, so set it inside
+  the function that runs there). One OAuth client and callback serve every
+  channel: the sign-in state carries the account, `prompt=select_account
+  consent` shows the channel picker, and `_refuse_same_channel` refuses a
+  YouTube channel already connected elsewhere WITHOUT revoking (revoking
+  could cut the other connection). Jobs carry `channel` in .source.json:
+  `_queue_clips` skips them, so they never post to the main channel.
+  `my_channels.loop_forever` (own task in the lifespan) makes one generated
+  job at a time (channel furthest behind), only for connected channels,
+  uploads into each channel's times, pauses 3 h at the upload limit, and
+  every 6 h reads views: best/worst titles go into the next ideas, quiz
+  formats and song styles are picked by median views (30% explore).
+- **Testing-mode tokens die after 7 days**: the owner's token carried
+  `refresh_token_expires_in: 604799` (14-oct-2026), Google's sign for an
+  OAuth consent screen in "Testing". `youtube_account.refresh_expiry` dates
+  it; the Channels tab tells the owner to press "Publish app" and reconnect.
+- **Cricket channel**: player photos only from Wikipedia's lead image on
+  Commons with a free licence (`player_photo.py`; Google Images is agency
+  photos = copyright strikes), credited in the description. commons.wikimedia.org
+  reset the connection from this laptop, en.wikipedia.org's API serves the
+  file data; Wikimedia 429s bursts, so lookups are cached 30 days and retried.
+  Fact cards swipe in with a flash; `channel_ideas` plans a day (grounded).
+- **Quiz** (`quiz_shorts.py`, genre `quiz`): QUIZ_MODEL (3.7-flash) writes
+  spares, a second call checks every answer (Google Search for GK) and drops
+  what it does not confirm. Tell the model how many questions the Short
+  uses: asked for 5 (2 spares), it wrote "5/5" into a 3-question title.
+- **AI songs** (`music_shorts.py`, genre `music`): Lyria 3.5 via
+  `client.interactions.create` ($0.08/song, ~1 min; `lyria-3-clip-preview`
+  is a fixed 30 s, $0.04, used for the music beds in `music_beds.py`).
+  Whisper over a song drops whole 30 s windows as "no speech" and mishears:
+  pass our lyrics as `initial_prompt`, `no_speech_threshold=None`, then
+  `align` (split double lines by word times, bonus for the lyric due next,
+  never show an unmatched line). Uploads carry containsSyntheticMedia.
+- `short_kit.render(images=, bg_image=)`: RGBA pictures with a zoom via
+  `scale=eval=frame` (overlay copes with the size change) and a cover
+  background panned by a moving crop (cheaper than zoompan).
+- Bash heredocs in this shell turn `\n` inside a Python string into a real
+  newline even with a quoted delimiter: write patch scripts with the Write tool. Tests run with `.venv/Scripts/python` (the system
   Python has no httpx) and `--continue-on-collection-errors`.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file

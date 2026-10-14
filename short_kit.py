@@ -1,4 +1,4 @@
-"""Shared pieces of the generated Shorts: songs, movie dubs and cricket.
+"""Shared pieces of the generated Shorts: songs, movie dubs, cricket, quiz, AI music.
 
 Comedy cuts and frames someone's footage (main.py, framed_layout.py). These
 three video types make most or all of the picture themselves, so they share
@@ -169,8 +169,17 @@ def music_tracks():
         return []
 
 
-def music_track():
-    """A random track from the music folder, or None when it is empty."""
+def music_track(kind=None):
+    """A random track from music/<kind>/ (the beds music_beds.py makes for a
+    channel kind), else from the music folder, or None when both are empty."""
+    if kind:
+        sub = os.path.join(MUSIC_DIR, kind)
+        try:
+            own = sorted(f for f in os.listdir(sub) if f.lower().endswith(MUSIC_EXT))
+        except OSError:
+            own = []
+        if own:
+            return os.path.join(sub, random.choice(own))
     tracks = music_tracks()
     return os.path.join(MUSIC_DIR, random.choice(tracks)) if tracks else None
 
@@ -201,9 +210,10 @@ def bg_source(colors, seconds):
 
 
 def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=(),
-           music=None, visualizer=False, silent=False, fades=None, music_seconds=None, bed=None):
-    """Make a 1080x1920 short: gradient, an optional wave line from ``music``,
-    then the text layer.
+           music=None, visualizer=False, silent=False, fades=None, music_seconds=None, bed=None,
+           images=(), bg_image=None):
+    """Make a 1080x1920 short: gradient (or ``bg_image``), an optional wave
+    line from ``music``, pictures, then the text layer.
 
     voices: [(wav, at)]  sfx: [(aevalsrc expr, seconds, at)]
     music: (path, start in file, volume)  silent: no sound at all (a song
@@ -212,14 +222,29 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     music_seconds: how long the music (and its wave) run; the end card after
     it is quiet.
     bed: (track, seconds) background music under the voices, looped, faded.
+    images: [{"path", "t0", "t1", "x", "y", "zoom"}] RGBA pictures centred at (x, y)
+    between t0 and t1, fading in and out and growing by ``zoom`` (0.05 = 5%).
+    bg_image: a picture for the whole background instead of the gradient,
+    panning slowly (the AI songs' cover art).
     """
     ass_path = os.path.join(os.path.dirname(os.path.abspath(out_path)),
                             f"gen_{os.getpid()}_{int(time.time() * 1000) % 10**8}.ass")
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write("\n".join(ass_header(extra_styles) + list(events)) + "\n")
-    cmd = ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", bg_source(colors, seconds),
-           "-f", "lavfi", "-t", f"{seconds:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
+    if bg_image:
+        cmd = ["ffmpeg", "-y", "-v", "error", "-loop", "1", "-framerate", str(FPS),
+               "-t", f"{seconds:.3f}", "-i", bg_image]
+    else:
+        cmd = ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", bg_source(colors, seconds)]
+    cmd += ["-f", "lavfi", "-t", f"{seconds:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
     graph, v, mix, idx = [], "[0:v]", ["[1:a]"], 2
+    if bg_image:
+        # 10% larger than the canvas, then a slow drift of the crop window:
+        # movement for the price of a crop (zoompan per frame is far slower).
+        graph.append(f"[0:v]scale={round(OUT_W * 1.1)}:{round(OUT_H * 1.1)}:force_original_aspect_ratio=increase,"
+                     f"crop={OUT_W}:{OUT_H}:x='(iw-ow)/2+(iw-ow)/2*sin(t/9)':y='(ih-oh)/2+(ih-oh)/2*sin(t/13)',"
+                     f"setsar=1,eq=brightness=-0.05:saturation=1.08,fps={FPS}[bgv]")
+        v = "[bgv]"
     if music:
         path, start, vol = music
         cmd += ["-ss", f"{start:.3f}", "-t", f"{music_seconds or seconds:.3f}", "-i", path]
@@ -247,6 +272,19 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
                      f"afade=t=in:d=1,afade=t=out:st={max(0.0, length - 1.5):.3f}:d=1.5,"
                      f"aresample=48000,aformat=channel_layouts=stereo[bed]")
         mix.append("[bed]")
+        idx += 1
+    for k, im in enumerate(images):
+        t0, t1 = float(im["t0"]), float(im["t1"])
+        d, z = max(0.5, t1 - t0), float(im.get("zoom", 0.05))
+        cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{d:.3f}", "-i", im["path"]]
+        graph.append(f"[{idx}:v]format=rgba,setpts=PTS-STARTPTS+{t0:.3f}/TB,"
+                     f"scale=w='trunc(iw*(1+{z:g}*(t-{t0:.3f})/{d:.3f})/2)*2':h=-2:eval=frame,"
+                     f"fade=t=in:st={t0:.3f}:d=0.3:alpha=1,fade=t=out:st={max(t0, t1 - 0.3):.3f}:d=0.3:alpha=1"
+                     f"[im{k}]")
+        graph.append(f"{v}[im{k}]overlay=x='{float(im.get('x', OUT_W / 2)):.0f}-w/2':"
+                     f"y='{float(im.get('y', OUT_H / 2)):.0f}-h/2':"
+                     f"eof_action=pass:enable='between(t,{t0:.3f},{t1:.3f})'[v_im{k}]")
+        v = f"[v_im{k}]"
         idx += 1
     for k, (wav, at) in enumerate(voices):
         cmd += ["-i", wav]

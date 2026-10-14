@@ -42,3 +42,8 @@ def _private_channel_files(tmp_path, monkeypatch):
     monkeypatch.setattr(telegram_notify, "STATE_FILE", str(tmp_path / "telegram.json"))
     import learning
     monkeypatch.setattr(learning, "STATE_FILE", str(tmp_path / "learning.json"))
+    import my_channels
+    import player_photo
+    monkeypatch.setattr(my_channels, "STATE_FILE", str(tmp_path / "my_channels.json"))
+    monkeypatch.setattr(my_channels, "CHANNELS_DIR", str(tmp_path / "channels"))
+    monkeypatch.setattr(player_photo, "CACHE_FILE", str(tmp_path / "player_photos.json"))

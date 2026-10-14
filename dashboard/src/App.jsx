@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle, Film, Eye } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle, Film, Eye, Layers } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
@@ -29,6 +29,7 @@ import LocalLibrary from './components/LocalLibrary';
 import FinderTab from './components/FinderTab';
 import AutopilotLocal from './components/AutopilotLocal';
 import ChannelTab from './components/ChannelTab';
+import ChannelsTab from './components/ChannelsTab';
 import PostPlan from './components/PostPlan';
 import CommentsTab from './components/CommentsTab';
 import ReadyBanner from './components/ReadyBanner';
@@ -947,9 +948,10 @@ function App() {
   // dropped so a reload does not keep forcing the tab.
   const [autopilotConnected, setAutopilotConnected] = useState(false);
   const [channelNotice, setChannelNotice] = useState(null);
+  const [channelsNotice, setChannelsNotice] = useState(null);
   useEffect(() => {
     const DEEP_LINK_TABS = ['autopilot', 'history', 'gallery', 'settings', 'thumbnails', 'dashboard',
-      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments', 'long-video', 'rivals'];
+      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments', 'long-video', 'rivals', 'channels'];
     const apply = () => {
       const hash = window.location.hash || '';
       if (!hash.startsWith('#app?')) return;
@@ -960,6 +962,7 @@ function App() {
       if (tab === 'autopilot' && params.get('connected') === '1') setAutopilotConnected(true);
       // Back from Google (youtube_account.py): tell the My channel tab how it went.
       if (tab === 'channel') setChannelNotice({ connected: params.get('connected') === '1', error: params.get('yt_error') || '' });
+      if (tab === 'channels') setChannelsNotice({ connected: params.get('connected') === '1', error: params.get('yt_error') || '' });
       try { window.history.replaceState(null, '', '#app'); } catch (_) { /* ignore */ }
     };
     apply();
@@ -1272,8 +1275,9 @@ function App() {
       { id: 'long-video', ord: '09', icon: Film, label: 'Long video', short: 'long' },
       { id: 'rivals', ord: '10', icon: Eye, label: 'Similar channels', short: 'rivals' },
       { id: 'channel', ord: '11', icon: BarChart3, label: 'My channel', short: 'channel' },
+      { id: 'channels', ord: '12', icon: Layers, label: 'Channels', short: 'channels' },
     ]),
-    { id: 'settings', ord: billingEnabled ? '05' : '12', icon: Settings, label: 'Settings', short: 'settings' },
+    { id: 'settings', ord: billingEnabled ? '05' : '13', icon: Settings, label: 'Settings', short: 'settings' },
   ];
   const activeNav = navItems.find((n) => n.id === activeTab);
 
@@ -2032,6 +2036,9 @@ function App() {
           )}
           {activeTab === 'channel' && !billingEnabled && (
             <ChannelTab notice={channelNotice} />
+          )}
+          {activeTab === 'channels' && !billingEnabled && (
+            <ChannelsTab notice={channelsNotice} onOpenAutopilot={() => setActiveTab('local-autopilot')} />
           )}
 
           {/* View: Gallery (local: every clip still on this machine) */}

@@ -14,6 +14,7 @@ video that videos.insert receives from an unaudited project created after
 needs no audit. ``upload`` reports ``locked_private`` when YouTube kept a
 video private that was asked to be public or scheduled.
 """
+import contextvars
 import json
 import os
 import re
@@ -21,6 +22,7 @@ import secrets
 import threading
 import time
 import urllib.parse
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -43,10 +45,35 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 API = "https://www.googleapis.com/youtube/v3"
 UPLOAD_API = "https://www.googleapis.com/upload/youtube/v3/videos"
 ANALYTICS_API = "https://youtubeanalytics.googleapis.com/v2/reports"
-CATEGORY = {"comedy": "23", "cricket": "17", "movies": "1", "songs": "10"}   # Comedy, Sports, Film, Music
+# Comedy, Sports, Film, Music, Education, Music
+CATEGORY = {"comedy": "23", "cricket": "17", "movies": "1", "songs": "10", "quiz": "27", "music": "10"}
 TITLE_MAX, DESCRIPTION_MAX, TAGS_MAX = 100, 4900, 480
-_states = {}          # OAuth state -> (time, dashboard origin): a callback we did not start is refused
+_states = {}          # OAuth state -> (time, dashboard origin, account): a callback we did not start is refused
 _lock = threading.Lock()
+# Which channel the calls act on. None is the main channel (TOKEN_FILE and
+# UPLOADS_FILE); my_channels.py runs its channels inside use(), each with its
+# own token and uploads log, so every function below works on any of them.
+_account = contextvars.ContextVar("youtube_account", default=None)
+
+
+@contextmanager
+def use(account):
+    """Calls inside act on ``account`` ({"id", "token", "uploads"}); None = main."""
+    tok = _account.set(account)
+    try:
+        yield
+    finally:
+        _account.reset(tok)
+
+
+def token_file():
+    a = _account.get()
+    return a["token"] if a else TOKEN_FILE
+
+
+def uploads_file():
+    a = _account.get()
+    return a["uploads"] if a else UPLOADS_FILE
 
 
 def configured():
@@ -71,27 +98,31 @@ def _write(path, data):
 
 # ------------------------------------------------------------------ connect
 
-def back_url(origin, query):
+def back_url(origin, query, tab="channel"):
     """Where the browser returns after Google: the dashboard it came from when
     that is a local address, else DASHBOARD_URL."""
     base = origin if _LOOPBACK.match(origin or "") else DASHBOARD_URL
-    return f"{base}/#app?tab=channel&{query}"
+    return f"{base}/#app?tab={tab}&{query}"
 
 
-def auth_url(origin=""):
+def auth_url(origin="", account=None):
+    """Google's sign-in page; ``account`` is the channel the token is for
+    (None = main). The state remembers it, so one callback URL serves all."""
     if not configured():
         raise RuntimeError("Add YT_CLIENT_ID and YT_CLIENT_SECRET to .env first.")
     state = secrets.token_urlsafe(24)
     now = time.time()
     with _lock:
-        for k in [k for k, (t, _o) in _states.items() if now - t > 900]:
+        for k in [k for k, v in _states.items() if now - v[0] > 900]:
             _states.pop(k, None)
-        _states[state] = (now, origin if _LOOPBACK.match(origin or "") else "")
+        _states[state] = (now, origin if _LOOPBACK.match(origin or "") else "", account)
     return AUTH_URL + "?" + urllib.parse.urlencode({
         "client_id": os.environ["YT_CLIENT_ID"], "redirect_uri": REDIRECT_URI,
         "response_type": "code", "scope": " ".join(SCOPES), "state": state,
-        # offline + consent: Google sends a refresh token, so the connection lasts.
-        "access_type": "offline", "prompt": "consent", "include_granted_scopes": "true"})
+        # offline + consent: Google sends a refresh token, so the connection
+        # lasts. select_account: the picker shows every time, so a second
+        # channel (a Brand Account) can be chosen instead of the last one.
+        "access_type": "offline", "prompt": "select_account consent", "include_granted_scopes": "true"})
 
 
 def origin_for(state):
@@ -100,11 +131,26 @@ def origin_for(state):
     return got[1] if got else ""
 
 
-def finish_connect(code, state):
+def account_for(state):
+    """The channel a sign-in was started for (None = main)."""
+    with _lock:
+        got = _states.get(state or "")
+    return got[2] if got else None
+
+
+def finish_connect(code, state, refuse=None):
+    """Swap the code for a token and save it for the channel the sign-in was
+    started for. ``refuse(me, account)`` may return a reason to drop it (the
+    same YouTube channel already connected elsewhere)."""
     with _lock:
         started = _states.pop(state or "", None)
     if not started or time.time() - started[0] > 900:
         raise RuntimeError("This sign-in link expired. Press Connect again.")
+    with use(started[2]):
+        return _finish_connect(code, started[2], refuse)
+
+
+def _finish_connect(code, account, refuse):
     r = httpx.post(TOKEN_URL, data={
         "code": code, "client_id": os.environ["YT_CLIENT_ID"],
         "client_secret": os.environ["YT_CLIENT_SECRET"], "redirect_uri": REDIRECT_URI,
@@ -116,28 +162,51 @@ def finish_connect(code, state):
         raise RuntimeError("Google sent no refresh token. Remove the app's access in your Google "
                            "account (Security > Third-party access) and connect again.")
     tok["expires_at"] = time.time() + int(tok.get("expires_in", 3600)) - 60
-    _write(TOKEN_FILE, tok)
-    me = channel()
+    tok["granted_at"] = int(time.time())
+    path = token_file()
+    old = _read(path, None)
+    _write(path, tok)
+    try:
+        me = channel()
+        why = refuse(me, account) if refuse else None
+    except Exception:
+        _restore(path, old)
+        raise
+    if why:
+        _restore(path, old)
+        raise RuntimeError(why)
     tok["channel"] = me
-    _write(TOKEN_FILE, tok)
+    _write(path, tok)
     return me
 
 
-def disconnect():
-    tok = _read(TOKEN_FILE, None)
-    if tok and tok.get("refresh_token"):
+def _restore(path, old):
+    """Put back the token a refused sign-in replaced. No revoke: when the same
+    Google identity is connected elsewhere, revoking would cut that one too."""
+    if old:
+        _write(path, old)
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def disconnect(revoke=True):
+    tok = _read(token_file(), None)
+    if revoke and tok and tok.get("refresh_token"):
         try:
             httpx.post("https://oauth2.googleapis.com/revoke", data={"token": tok["refresh_token"]}, timeout=15)
         except httpx.HTTPError:
             pass
     try:
-        os.remove(TOKEN_FILE)
+        os.remove(token_file())
     except OSError:
         pass
 
 
 def _token():
-    tok = _read(TOKEN_FILE, None)
+    tok = _read(token_file(), None)
     if not tok:
         raise RuntimeError("YouTube is not connected.")
     if time.time() < tok.get("expires_at", 0):
@@ -151,7 +220,7 @@ def _token():
     fresh = r.json()
     tok["access_token"] = fresh["access_token"]
     tok["expires_at"] = time.time() + int(fresh.get("expires_in", 3600)) - 60
-    _write(TOKEN_FILE, tok)
+    _write(token_file(), tok)
     return tok["access_token"]
 
 
@@ -198,9 +267,23 @@ def channel():
 
 
 def status():
-    tok = _read(TOKEN_FILE, None)
+    tok = _read(token_file(), None)
     return {"configured": configured(), "connected": bool(tok and tok.get("refresh_token")),
-            "channel": (tok or {}).get("channel"), "redirect_uri": REDIRECT_URI}
+            "channel": (tok or {}).get("channel"), "redirect_uri": REDIRECT_URI,
+            "expires": refresh_expiry(tok)}
+
+
+def refresh_expiry(tok):
+    """When the connection stops working, or None when it lasts. Google sends
+    refresh_token_expires_in only while the OAuth consent screen is in
+    "Testing", where the token dies 7 days after the sign-in (the owner's
+    token carried 604799 s on 14-oct-2026). A token from before granted_at
+    was saved dates from its channel's first upload at the latest."""
+    if not tok or not tok.get("refresh_token_expires_in"):
+        return None
+    granted = tok.get("granted_at") or min((r.get("created", 0) for r in uploads() if r.get("created")),
+                                           default=0)
+    return int(granted + int(tok["refresh_token_expires_in"])) if granted else 0
 
 
 # ------------------------------------------------------------------ upload
@@ -221,14 +304,14 @@ def _tags(tags):
 
 
 def uploads():
-    return _read(UPLOADS_FILE, [])
+    return _read(uploads_file(), [])
 
 
 def _save_upload(row):
     with _lock:
         rows = uploads()
         rows = [r for r in rows if r["id"] != row["id"]] + [row]
-        _write(UPLOADS_FILE, rows[-500:])
+        _write(uploads_file(), rows[-500:])
 
 
 def upload(path, title, description, tags=(), genre="comedy", publish_at=None,

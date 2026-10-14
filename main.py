@@ -2358,11 +2358,17 @@ if __name__ == '__main__':
             os.makedirs(path, exist_ok=True)
         return path
     
-    # Generated shorts with no source video (cricket_shorts.py).
+    # Generated shorts with no source video (cricket, quiz and music_shorts.py).
     if args.generate:
-        import cricket_shorts
-        cricket_shorts.run(os.environ.get("CRICKET_MATCH", ""), _ensure_dir(args.output or "."),
-                           sys.modules[__name__])
+        _kind = (os.environ.get("CONTENT_GENRE") or "cricket").lower()
+        if _kind in ("quiz", "music"):
+            import importlib
+            importlib.import_module(f"{_kind}_shorts").run(_ensure_dir(args.output or "."),
+                                                           sys.modules[__name__])
+        else:
+            import cricket_shorts
+            cricket_shorts.run(os.environ.get("CRICKET_MATCH", ""), _ensure_dir(args.output or "."),
+                               sys.modules[__name__])
         print(f"\n⏱️  Total execution time: {time.time() - script_start_time:.2f}s")
         sys.exit(0)
 
