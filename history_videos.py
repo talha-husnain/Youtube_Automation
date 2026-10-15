@@ -964,6 +964,33 @@ def plan(script, said, handle, lang, captions=True):
     return segs, voices, whooshes, marks, sections, at()
 
 
+WATCH_NEXT = {"urdu": "Aur kahaniyan:", "english": "More stories:"}
+WATCH_NEXT_ROOM = 350
+
+
+def watch_next(description, uploads, lang="urdu", n=2, now=None):
+    """The description with links to the channel's best earlier long videos
+    that are already public (a scheduled one is still private): a viewer who
+    finishes one story finds the next. Goes before the hashtag line."""
+    import credits
+    from datetime import datetime, timezone
+    now = now or datetime.now(timezone.utc)
+
+    def public(r):
+        try:
+            return not r.get("publish_at") or datetime.fromisoformat(r["publish_at"]) <= now
+        except ValueError:
+            return False
+    longs = [r for r in uploads if r.get("genre") == "history" and r.get("status") == "done"
+             and r.get("video_id") and public(r)]
+    if not longs:
+        return description
+    longs.sort(key=lambda r: (r.get("views") or 0, r.get("created", 0)), reverse=True)
+    lines = [f"- {_esc(r.get('title') or '')[:90]}: https://youtu.be/{r['video_id']}" for r in longs[:n]]
+    block = WATCH_NEXT.get(lang, WATCH_NEXT["urdu"]) + "\n" + "\n".join(lines)
+    return credits.insert(description, block[:WATCH_NEXT_ROOM - 4])
+
+
 def describe(script, marks, sources, credits, handle, lang, ai_used, stock_line=""):
     """The YouTube description: summary, chapters, question, sources, picture credits, follow line."""
     import youtube_account
@@ -980,7 +1007,8 @@ def describe(script, marks, sources, credits, handle, lang, ai_used, stock_line=
         ["", "Pictures: AI illustrations."] if ai_used else [])
     if stock_line:
         pics = (pics or [""]) + [stock_line]
-    budget = youtube_account.DESCRIPTION_MAX - len("\n".join(head + pics + tail)) - 60
+    # Room left for watch_next's links, added at upload time.
+    budget = youtube_account.DESCRIPTION_MAX - len("\n".join(head + pics + tail)) - 60 - WATCH_NEXT_ROOM
     lines, left = [], len(credits)
     for c in credits:
         line = f"- {c}"

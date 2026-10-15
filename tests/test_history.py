@@ -659,3 +659,20 @@ def test_a_short_credits_the_long_videos_pictures_within_its_room():
     assert "more, credited in the full video's description (https://youtu.be/AbCdEfGhIjK)" in text
     assert text.endswith("Pexels (Ann).") and len(text) < 1500
     assert hv._reused_credits({}, "") == ""
+
+
+def test_a_long_video_links_the_best_earlier_ones_that_are_public():
+    from datetime import datetime, timedelta, timezone
+    now = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
+    rows = [{"genre": "history", "status": "done", "video_id": "AAAAAAAAAAA", "title": "Rome", "views": 50,
+             "publish_at": (now - timedelta(days=2)).isoformat()},
+            {"genre": "history", "status": "done", "video_id": "BBBBBBBBBBB", "title": "Karbala", "views": 900,
+             "publish_at": (now - timedelta(days=1)).isoformat()},
+            {"genre": "history", "status": "done", "video_id": "CCCCCCCCCCC", "title": "Not out yet", "views": 0,
+             "publish_at": (now + timedelta(hours=3)).isoformat()},
+            {"genre": "history_teaser", "status": "done", "video_id": "DDDDDDDDDDD", "title": "A Short", "views": 5000},
+            {"genre": "history", "status": "done", "video_id": "EEEEEEEEEEE", "title": "Old", "views": 10}]
+    desc = hv.watch_next("Summary\n\nFollow @h\n\n#history #urdu", rows, "urdu", now=now)
+    assert desc == ("Summary\n\nFollow @h\n\nAur kahaniyan:\n- Karbala: https://youtu.be/BBBBBBBBBBB\n"
+                    "- Rome: https://youtu.be/AAAAAAAAAAA\n\n#history #urdu")
+    assert hv.watch_next("D", [], "urdu") == "D"

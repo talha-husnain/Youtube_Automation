@@ -861,8 +861,12 @@ def upload_waiting(ch, job_clips, log=print):
                 slot = max(after, soon)
             else:
                 slot = youtube_account.next_slots(ch["post_times"], 1)[0]
+            desc = promote(clip["description"], ch["id"])
+            if KINDS[ch["kind"]].get("long") and j.get("format") != "teaser":
+                import history_videos
+                desc = history_videos.watch_next(desc, youtube_account.uploads(), ch.get("lang", "urdu"))
             row = youtube_account.upload(
-                clip["path"], clip["title"], promote(clip["description"], ch["id"]), clip["tags"],
+                clip["path"], clip["title"], desc, clip["tags"],
                 "history_teaser" if j.get("format") == "teaser" else KINDS[ch["kind"]]["genre"],
                 publish_at=slot, ai_made=clip.get("ai_made", False),
                 meta={"job_id": j["job_id"], "clip_index": clip["index"], "channel": ch["id"],
