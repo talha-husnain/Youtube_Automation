@@ -1573,12 +1573,13 @@ def run(output_dir, pipeline):
         raise RuntimeError(f"The AI voice failed for {missing} paragraphs; try again later.")
     segs, voices, whooshes, marks, sections, total = plan(script, said, handle, lang, captions)
     srt = write_srt(os.path.join(output_dir, "captions.srt"), texts, said, voices, lang)
-    en_srt = None
+    # The English track is translated while the shots render (~40 s of calls
+    # on the Rome script, which used to come before the render).
+    en_later = None
     if srt and lang != "english" and os.environ.get("HISTORY_EN_CAPTIONS", "1").strip() != "0":
-        try:
-            en_srt = translate_srt(client, srt, os.path.join(output_dir, "captions.en.srt"))
-        except Exception as e:  # noqa: BLE001 — the Urdu track is enough on its own
-            print(f"⚠️ English subtitles skipped: {type(e).__name__}: {e}")
+        en_pool = ThreadPoolExecutor(max_workers=1)
+        en_later = en_pool.submit(translate_srt, client, srt, os.path.join(output_dir, "captions.en.srt"))
+        en_pool.shutdown(wait=False)
     print(f"🎬 Rendering {len(segs)} shots ({clock(total)})...")
     video = render(output_dir, segs, pics, title_pic, ".hv_video.mp4")
     narration(os.path.join(output_dir, ".hv_voice.wav"), voices, total)
@@ -1587,6 +1588,12 @@ def run(output_dir, pipeline):
     mix(output_dir, video, ".hv_voice.wav", os.path.basename(final), total, whooshes, sections, tracks)
     # A big wide picture of the video (pictures() chooses) under the thumbnail text.
     thumb = _thumbnail(client, script, output_dir, first_pic)
+    en_srt = None
+    if en_later:
+        try:
+            en_srt = en_later.result(timeout=600)
+        except Exception as e:  # noqa: BLE001 — the Urdu track is enough on its own
+            print(f"⚠️ English subtitles skipped: {type(e).__name__}: {e}")
     real = [(name, _real_url(url)) for name, url in rank_sources(sources)[:8]]
     import stock_media
     desc = describe(script, marks, real, credits, handle, lang, ai_used > 0, stock_media.credit_line(stock))
