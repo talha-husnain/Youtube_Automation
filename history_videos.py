@@ -1720,6 +1720,10 @@ def run_teaser(output_dir, pipeline):
         print(f"🎬 Moment Short {part} for \"{script.title}\": {len(plan_)} lines of chapter {m.chapter}.")
     else:
         print(f"🎬 Teaser Short for \"{script.title}\": {len(plan_)} opening lines.")
+    # The new lines in the voice that read the long video (the free voice
+    # leaves word timings next to its wavs), not today's setting: two
+    # voices in one Short sound like two channels.
+    os.environ["VOICE_ENGINE"] = "edge" if os.path.isfile(plan_[0][2] + ".words.json") else "gemini"
     voice = {"voice": os.environ.get("HISTORY_VOICE") or "Charon", "style": VOICE_STYLE[lang],
              "language": LANG_NAME[lang]}
     said = kit.voice_lines(client, ([{"text": setup, **voice}] if setup else [])
