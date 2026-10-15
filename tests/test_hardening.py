@@ -361,3 +361,18 @@ def test_the_review_message_has_a_skip_button_that_works_from_the_phone(monkeypa
     assert mc.telegram_press(f"skip:{ch['id']}:j1") == "Already skipped."
     assert mc.telegram_press("skip:nope:j1") == "That video is no longer in Shortkaar."
     assert mc.telegram_press("other") == ""
+
+
+def test_a_birthday_idea_needs_wikipedias_date_to_be_today():
+    import datetime as _dt
+    import cricket_shorts as cs
+    day = _dt.date(2026, 10, 15)
+    assert cs.birthday_ok("Babar Azam's 32nd Birthday: his records", day, lambda n: (15, 10, 1994))
+    assert not cs.birthday_ok("Babar Azam's birthday today", day, lambda n: (14, 4, 1984))
+    assert not cs.birthday_ok("Some One’s Birthday: a look back", day, lambda n: None)      # unchecked: dropped
+    asked = []
+    assert cs.birthday_ok("Babar Azam's century record", day, lambda n: asked.append(n))  # not a birthday
+    assert asked == []
+    import player_photo as pp
+    assert pp.BORN.search("Babar Azam (born 15 October 1994) is").groups()[:2] == ("15", "October")
+    assert pp.BORN.search("Virat Kohli (born November 5, 1988) is").group(3) == "November"

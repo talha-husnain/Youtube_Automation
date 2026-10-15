@@ -144,6 +144,31 @@ def _lookup(name, kind="cricket"):
             "page": f"https://commons.wikimedia.org/wiki/File:{file.replace(' ', '_')}"}
 
 
+MONTHS = {m: k for k, m in enumerate(["january", "february", "march", "april", "may", "june", "july", "august",
+                                      "september", "october", "november", "december"], 1)}
+# "(born 15 October 1994)" or "(born October 15, 1994)" in the article's first lines.
+BORN = re.compile(r"\bborn\s+(?:(\d{1,2})\s+([A-Za-z]+)|([A-Za-z]+)\s+(\d{1,2}),?)\s+(\d{4})")
+
+
+def born(name, kind="cricket"):
+    """(day, month, year) the player's Wikipedia article gives, or None."""
+    res = _api({"action": "query", "list": "search", "srlimit": 1,
+                "srsearch": f"{name} cricketer" if kind == "cricket" else name})
+    hits = ((res or {}).get("query") or {}).get("search") or []
+    if not hits:
+        return None
+    res = _api({"action": "query", "titles": hits[0]["title"], "prop": "extracts", "exintro": 1,
+                "explaintext": 1, "redirects": 1})
+    pages = ((res or {}).get("query") or {}).get("pages") or {}
+    text = (next(iter(pages.values()), {}) if pages else {}).get("extract") or ""
+    m = BORN.search(text[:600])
+    if not m:
+        return None
+    day, month = (m.group(1), m.group(2)) if m.group(1) else (m.group(4), m.group(3))
+    month = MONTHS.get(month.lower())
+    return (int(day), month, int(m.group(5))) if month else None
+
+
 def credit_line(photo):
     return (f"Photo of {photo['player']}: {photo['artist']}, {photo['licence']}, "
             f"via Wikimedia Commons ({photo['page']})")

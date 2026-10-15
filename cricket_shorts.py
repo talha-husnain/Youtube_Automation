@@ -329,6 +329,9 @@ ODI", "Shaheen Afridi vs Jasprit Bumrah T20I"); the rest are catchy facts that p
 a surprise: one star player's stats or records (name the player), a crazy record, a
 "did you know", a rule people argue about, history on this date.
 Most fact ideas should be about ONE named player people love or argue about.
+If a famous Pakistani or Indian cricketer (current or legend) was born on today's day and month, make
+one idea about them, written like "Shoaib Akhtar's birthday today: his fastest records" (check the date
+with Google Search; no birthday idea when nobody well known was born today).
 {learn}Never repeat any of these, already made:
 {avoid}
 One per line, each starting with "match: ", "versus: " or "topic: ". Nothing else."""
@@ -349,7 +352,29 @@ def channel_ideas(client, count=8, avoid=(), best=(), worst=(), requests=()):
         today=time.strftime("%d %B %Y"), count=count, learn=learn,
         avoid="\n".join(list(avoid)[-80:]) or "(nothing yet)"))
     seen = {a.lower() for a in avoid}
-    return [i for i in _idea_lines(text) if i["text"].lower() not in seen][:count + 2]
+    ideas = [i for i in _idea_lines(text) if i["text"].lower() not in seen]
+    return [i for i in ideas if birthday_ok(i["text"])][:count + 2]
+
+
+BIRTHDAY = re.compile(r"^(.+?)['\u2019]s\s+(?:\d+\w*\s+)?birthday", re.I)
+
+
+def birthday_ok(text, now=None, born_fn=None):
+    """A "<player>'s birthday" idea only when Wikipedia says they were born
+    on today's day and month. On its first real run (15-oct-2026) both of
+    its birthdays were right (Babar Azam, Umar Gul), but a wrong date would
+    be a whole Short about the wrong day, and nothing else checks it."""
+    m = BIRTHDAY.search(text)
+    if not m:
+        return True
+    import datetime as _dt
+    import player_photo
+    d = now or _dt.date.today()
+    try:
+        got = (born_fn or player_photo.born)(m.group(1).strip())
+    except Exception:  # noqa: BLE001 — unchecked is dropped, never posted
+        got = None
+    return bool(got) and (got[0], got[1]) == (d.day, d.month)
 
 
 # ---------------------------------------------------------------- drawing
