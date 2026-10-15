@@ -287,3 +287,39 @@ def test_a_short_over_footage_renders_through_with_a_card_a_bed_and_voices(tmp_p
     assert "codec_type=video" in probe and "codec_type=audio" in probe
     assert abs(float(probe.split("duration=")[1].split()[0]) - 6.0) < 0.1
     assert not list(tmp_path.glob("gen_*"))            # its temporary files are gone
+
+
+def test_wikipedia_lead_pictures_keep_free_licences_and_leave_people_out(monkeypatch, tmp_path):
+    monkeypatch.setattr(sm, "WIKI_FILE", str(tmp_path / "wiki.json"))
+    asked = []
+
+    def get(url, headers=None, timeout=None):
+        asked.append((url, headers))
+        if "generator=search" in url:
+            return _R({"query": {"pages": {
+                "1": {"index": 1, "title": "Gaddafi Stadium", "description": "Cricket ground in Lahore",
+                      "pageimage": "Gaddafi_Stadium.jpg"},
+                "2": {"index": 2, "title": "Babar Azam", "description": "Pakistani cricketer (born 1994)",
+                      "pageimage": "Babar.jpg"},
+                "3": {"index": 3, "title": "PCB", "description": "Cricket board", "pageimage": "PCB_logo.svg"},
+                "4": {"index": 4, "title": "Old ground", "description": "A ground", "pageimage": "Old.jpg"}}}})
+        return _R({"query": {"pages": {
+            "a": {"title": "File:Gaddafi Stadium.jpg", "imageinfo": [{
+                "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Gaddafi_Stadium.jpg/2000px-x.jpg",
+                "thumbwidth": 3000, "thumbheight": 2000, "width": 6000, "height": 4000,
+                "descriptionurl": "https://commons.wikimedia.org/wiki/File:Gaddafi_Stadium.jpg",
+                "extmetadata": {"LicenseShortName": {"value": "CC BY-SA 4.0"}, "Artist": {"value": "<a>Ali</a>"}}}]},
+            "b": {"title": "File:Old.jpg", "imageinfo": [{
+                "thumburl": "https://upload.wikimedia.org/wikipedia/en/b/bc/Old.jpg", "width": 3000, "height": 2000,
+                "extmetadata": {"LicenseShortName": {"value": "Fair use"}}}]}}}})
+    monkeypatch.setattr(sm, "_get", get)
+    got = sm._wikipedia_photos("cricket ground lahore", True)
+    assert [g["alt"] for g in got] == ["Gaddafi Stadium.jpg"]            # no player, no logo, no fair use
+    assert "Babar.jpg" not in asked[1][0] and "PCB_logo" not in asked[1][0]
+    assert got[0]["thumb"] == ("https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Gaddafi_Stadium.jpg/"
+                               "500px-Gaddafi_Stadium.jpg")              # a small one for the picker
+    assert "Shortkaar" in asked[0][1]["User-Agent"] and "Mozilla" not in asked[0][1]["User-Agent"]
+    line = sm.credit_line(got)
+    assert line.startswith("Stock footage and photos (free licence): Wikimedia Commons (Ali).")
+    assert "- Gaddafi Stadium.jpg: Ali, CC BY-SA 4.0 (https://commons.wikimedia.org/wiki/File:Gaddafi_Stadium.jpg)" in line
+    assert sm._agent("https://upload.wikimedia.org/x.jpg") != sm.UA and sm._agent("https://pexels.com/x") == sm.UA

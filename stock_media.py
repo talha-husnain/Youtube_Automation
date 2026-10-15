@@ -50,7 +50,8 @@ def keys():
     """Each library's key; Openverse needs none ("anon"), OPENVERSE=0 turns it off."""
     return {"pexels": (os.environ.get("PEXELS_API_KEY") or "").strip(),
             "pixabay": (os.environ.get("PIXABAY_API_KEY") or "").strip(),
-            "openverse": "" if os.environ.get("OPENVERSE", "1") == "0" else "anon"}
+            "openverse": "" if os.environ.get("OPENVERSE", "1") == "0" else "anon",
+            "wikipedia": "" if os.environ.get("WIKIPEDIA_PHOTOS", "1") == "0" else "anon"}
 
 
 def available():
@@ -204,6 +205,7 @@ def _pixabay_photos(term, portrait, key):
 
 OPENVERSE_DAY_CAP = 180     # anonymous Openverse: 20 a minute, 200 a day (its rate-limit headers, 15-oct-2026)
 OPENVERSE_FILE = os.path.join(ROOT, "output", ".openverse_calls.json")
+WIKI_FILE = os.path.join(ROOT, "output", ".wikipedia_calls.json")
 
 
 def _openverse_photos(term, portrait, key=None):
@@ -234,9 +236,67 @@ def _openverse_photos(term, portrait, key=None):
     return out
 
 
+WIKI_API = "https://en.wikipedia.org/w/api.php"
+WIKI_DAY_CAP = 300          # searches a day (2 API calls each); Wikimedia asks for gentle use
+WIKI_JUNK = re.compile(r"\.svg$|logo|icon|flag_of|coat_of_arms|emblem|seal_of|signature|wordmark|map_of|"
+                       r"locator|blank|portrait_placeholder", re.I)
+WIKI_PERSON = re.compile(r"\b(born|died|cricketer|footballer|player|athlete|actor|actress|singer|musician|rapper|"
+                         r"politician|businessman|businesswoman|journalist|writer|author|poet|president|minister|"
+                         r"coach|umpire|captain|model|youtuber|personality|presenter|king|queen|emperor|sultan|"
+                         r"general|commander|scholar|saint|imam|caliph|prophet)\b|\(\d{4}", re.I)
+
+
+def _wikipedia_photos(term, portrait, key=None):
+    """Lead pictures of the Wikipedia articles a search for ``term`` finds,
+    free licences only (Wikimedia Commons, credited by name and licence).
+    Keyless and reachable from this laptop when Openverse's search was down
+    for hours (15-oct-2026); the vision pick still decides whether one fits."""
+    from player_photo import FREE, UA as WIKI_UA, _strip
+    day = time.strftime("%Y-%m-%d")
+    with _lock:
+        calls = _read(WIKI_FILE, {})
+        if calls.get(day, 0) >= WIKI_DAY_CAP:
+            return []
+        _write(WIKI_FILE, {day: calls.get(day, 0) + 1})
+    head = {"User-Agent": WIKI_UA}
+    r = _get(WIKI_API + "?" + urlencode({"action": "query", "format": "json", "generator": "search",
+                                         "gsrsearch": term[:100], "gsrnamespace": 0, "gsrlimit": 12,
+                                         "prop": "pageimages|description", "piprop": "name"}), headers=head, timeout=15)
+    pages = ((r.json() if r.status_code == 200 else {}).get("query") or {}).get("pages") or {}
+    # An article about a person leads with their portrait: "Babar Azam's
+    # century" got a photo of Cameron Green (15-oct-2026). Named people get
+    # their own photo elsewhere (player_photo); stock shows no one by name.
+    files = [p["pageimage"] for p in sorted(pages.values(), key=lambda p: p.get("index", 99))
+             if p.get("pageimage") and not WIKI_JUNK.search(p["pageimage"])
+             and not WIKI_PERSON.search(p.get("description") or "") and not WIKI_PERSON.search(p.get("title") or "")][:10]
+    if not files:
+        return []
+    size = {"iiurlheight": 2000} if portrait else {"iiurlwidth": 1920}
+    r = _get(WIKI_API + "?" + urlencode({"action": "query", "format": "json", "prop": "imageinfo",
+                                         "titles": "|".join("File:" + f for f in files),
+                                         "iiprop": "url|size|extmetadata", **size}), headers=head, timeout=15)
+    out = []
+    for p in ((r.json() if r.status_code == 200 else {}).get("query") or {}).get("pages", {}).values():
+        info = (p.get("imageinfo") or [{}])[0]
+        meta = info.get("extmetadata") or {}
+        licence = _strip((meta.get("LicenseShortName") or {}).get("value"))
+        w, h = int(info.get("width") or 0), int(info.get("height") or 0)
+        if not info.get("thumburl") or not FREE.match(licence or ""):
+            continue
+        if h < 1400 if portrait else min(w, h) < 1000:
+            continue
+        name = p.get("title", "").removeprefix("File:")
+        out.append({"id": f"wikipedia:{name}", "provider": "Wikimedia Commons", "kind": "photo",
+                    "url": info["thumburl"], "w": int(info.get("thumbwidth") or w), "h": int(info.get("thumbheight") or h),
+                    "seconds": 0.0, "thumb": _commons_thumb(info["thumburl"]), "page": info.get("descriptionurl") or "",
+                    "author": _strip((meta.get("Artist") or {}).get("value"))[:60], "alt": name[:120],
+                    "licence": licence[:40]})
+    return out
+
+
 SEARCHERS = {("pexels", "video"): _pexels_videos, ("pixabay", "video"): _pixabay_videos,
              ("pexels", "photo"): _pexels_photos, ("pixabay", "photo"): _pixabay_photos,
-             ("openverse", "photo"): _openverse_photos}
+             ("openverse", "photo"): _openverse_photos, ("wikipedia", "photo"): _wikipedia_photos}
 
 
 def search(term, portrait=True, kind="video"):
@@ -322,14 +382,32 @@ say how well it fits: fit 0-10, where 8+ shows the line's subject, 6-7 its setti
 related or generic (a texture, an unrelated object). Prefer moving footage (video) when it fits as well. The
 mood must match: never celebration (fireworks, parties) under a serious or sad line. Never choose one that shows
 something unrelated, a logo, a watermark, readable text, a famous building or person that the scene is not
-about, or anything sexual, violent or religious that the scene does not ask for. {rule}Use each clip at most
+about, or anything sexual, violent or religious that the scene does not ask for. Never a portrait or close
+photo of a recognisable real person (a named player, a painted noble) unless the line names exactly that
+person: a viewer takes them for the person spoken about. Crowds and far-off players are fine. {rule}Use each clip at most
 once. Use clip -1 when nothing fits. Return one pick per scene."""
+
+
+def _agent(url):
+    """upload.wikimedia.org answers 429 to a browser-like agent and 200 to one
+    that says who is calling, as its policy asks (checked 15-oct-2026)."""
+    if "wikimedia.org" in (url or ""):
+        from player_photo import UA as wiki_ua
+        return wiki_ua
+    return UA
+
+
+def _commons_thumb(url):
+    """A 500 px Commons thumbnail of ``url`` (500 is one of the sizes
+    Wikimedia serves; 400 was refused with a 400), or the URL itself."""
+    m = re.match(r"(https://upload\.wikimedia\.org/wikipedia/commons)/(?:thumb/)?([0-9a-f]/[0-9a-f]{2}/([^/?]+))", url or "")
+    return f"{m.group(1)}/thumb/{m.group(2)}/500px-{m.group(3)}" if m else url
 
 
 def _thumb_part(url):
     from google.genai import types
     from PIL import Image
-    r = httpx.get(url, headers={"User-Agent": UA}, timeout=20, follow_redirects=True)
+    r = httpx.get(url, headers={"User-Agent": _agent(url)}, timeout=20, follow_redirects=True)
     if r.status_code != 200 or len(r.content) < 500:
         return None
     im = Image.open(io.BytesIO(r.content)).convert("RGB")
@@ -420,9 +498,10 @@ def download(item):
         os.utime(path)
         return path
     part = path + ".part"
+    agent = _agent(item["url"])
     for attempt in range(3):
         try:
-            with httpx.stream("GET", item["url"], headers={"User-Agent": UA}, timeout=60,
+            with httpx.stream("GET", item["url"], headers={"User-Agent": agent}, timeout=60,
                               follow_redirects=True) as r:
                 if r.status_code != 200:
                     raise httpx.HTTPError(f"status {r.status_code}")
@@ -492,5 +571,14 @@ def credit_line(items):
         return ""
     parts = [f"{p} ({', '.join(n[:6])}{' and others' if len(n) > 6 else ''})" if n else p
              for p, n in sorted(by.items())]
-    return "Stock footage and photos (free licence): " + "; ".join(parts) + "."
+    line = "Stock footage and photos (free licence): " + "; ".join(parts) + "."
+    # CC BY / BY-SA pictures from Commons ask for the work, its author, the
+    # licence and a link: one line each (public domain and CC0 need none).
+    seen, files = set(), []
+    for c in items:
+        if (c and c.get("provider") == "Wikimedia Commons" and c.get("page") and c["page"] not in seen
+                and not re.match(r"\s*(cc0|public domain|pd)", c.get("licence") or "", re.I)):
+            seen.add(c["page"])
+            files.append(f"- {c.get('alt') or 'picture'}: {c.get('author') or 'unknown'}, {c.get('licence')} ({c['page']})")
+    return "\n".join([line] + files[:8])
 

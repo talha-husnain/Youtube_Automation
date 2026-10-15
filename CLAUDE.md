@@ -613,6 +613,15 @@ never finished:
   retries on 3 passes before failing the job; owner ideas go after urgent
   match results and a real result replaces an owner's typed match;
   blocked videos are never linked; `_no_roman` only touches Roman Urdu.
+- **Wikipedia as a fourth free library** (`stock_media._wikipedia_photos`,
+  `WIKIPEDIA_PHOTOS=0` off, 300 searches a day): article search -> lead
+  pictures -> free licences only, ~2 s. Articles about a person are skipped
+  (description words like cricketer/born/king) and the pick prompt forbids a
+  recognisable person the line does not name: "Babar Azam's century" got a
+  photo of Cameron Green first. upload.wikimedia.org answers 429 to the
+  browser-like agent and 200 to player_photo.UA (`_agent`); picker
+  thumbnails are 500 px (`_commons_thumb`; 400 px is refused). CC BY/BY-SA
+  files get their own credit line (file, author, licence, link).
 - A stock library that times out twice rests 15 min (`stock_media._missed`):
   Openverse timed out on every search for hours on 15-oct-2026 and held
   each Short 70-100 s. Its search timeout is 12 s (it answers in 1-2 s).
