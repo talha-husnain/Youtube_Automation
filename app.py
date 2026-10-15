@@ -3135,12 +3135,13 @@ def _main_channel_row():
 
 # One line per step: the box wraps them itself (hard breaks wrapped badly on a phone).
 PUBLISH_STEPS = "\n".join([
-    '1. Make the new channels: open youtube.com/channel_switcher, press "Create a channel" and give it a name. Once for each new channel.',
+    '1. Make the new channels: open youtube.com/channel_switcher, press "Create a channel" and give it a name (Shortkaar suggests three on each channel card, under "Channel kit"). Once for each new channel.',
     "2. Open console.cloud.google.com and pick your Shortkaar project.",
     '3. Go to APIs & Services > OAuth consent screen (or Google Auth Platform > Audience), press "Publish app" and confirm.',
     '4. In Shortkaar open Channels. On your main channel press "reconnect".',
     '5. On each new channel press "connect youtube channel" and pick it on Google\'s screen. If Google says "Google hasn\'t verified this app": Advanced > Go to ... (it is your app).',
     "6. For the history channel (long videos): switch to it on YouTube, open youtube.com/verify and verify with your phone. Without this YouTube refuses videos over 15 minutes and custom thumbnails.",
+    '7. On each connected channel card open "Channel kit" and press "put About text, keywords and banner on YouTube". Then upload its profile picture yourself in YouTube Studio > Customization > Branding (download it from the same place).',
 ])
 STOCK_STEPS = "\n".join([
     '1. Open pexels.com/api, sign up (Google sign-in is fine), press "Your API Key", fill the short form (purpose: "my own YouTube video maker") and copy the key.',

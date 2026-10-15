@@ -48,7 +48,7 @@ Return:
 - names: 3 channel names, short (max 22 characters), catchy, easy to say and to search, not already a famous
   brand, no emoji.
 - handles: 3 handle ideas matching the names (letters and digits only, max 20 characters, no @).
-- tagline: max 34 characters, what the viewer gets ("Roz ek nayi tareekhi kahani").
+- tagline: max 34 characters, in {lang_rule}, what the viewer gets.
 - description: the channel's About text, 600-900 characters, in {lang_rule}: what the channel is, what the
   viewer gets, how often new videos come, a line asking to subscribe. Main search words early. Honest: no fake
   promises, no claim the videos are made by a person on camera.
