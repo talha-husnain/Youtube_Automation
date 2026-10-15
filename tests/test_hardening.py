@@ -240,3 +240,65 @@ def test_a_damaged_state_file_comes_back_from_its_backup(tmp_path, monkeypatch):
     with open(mc.STATE_FILE + ".bak", "w", encoding="utf-8") as f:
         f.write('{"channels": [{"id": "%s", "kind": "quiz", "name": "Q"}]}' % ch["id"])
     assert [c["id"] for c in mc.channels()] == [ch["id"]]
+
+
+def test_a_refused_thumbnail_is_kept_and_set_once_the_channel_is_verified(tmp_path, monkeypatch):
+    import os
+    thumb = tmp_path / "thumbnail.jpg"
+    thumb.write_bytes(b"jpg")
+    srt = _echo_srt(tmp_path)
+    ch = mc.add("history")
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "L", "status": "done", "format": "history", "at": 1}],
+                                            long_uploads={"status": "eligible"}))
+    monkeypatch.setattr(ya, "status", lambda: {"connected": True})
+    monkeypatch.setattr(ya, "upload", lambda path, title, *a, **k: ya._save_upload(
+        {"id": "row1", "status": "done", "video_id": "LoNg0000001", "title": title, "created": time.time()}) or
+        {"id": "row1", "status": "done", "video_id": "LoNg0000001", "title": title, "created": time.time()})
+    outcome = {"thumbnail": "failed", "captions": "skipped"}
+
+    def thumb_up(row, path):
+        row.update(thumbnail=outcome["thumbnail"])
+        ya._save_upload(row)
+        return row
+
+    def caps_up(row, path, language="ur", key="captions"):
+        row.update({key: outcome["captions"]})
+        ya._save_upload(row)
+        return row
+    monkeypatch.setattr(ya, "add_thumbnail", thumb_up)
+    monkeypatch.setattr(ya, "add_captions", caps_up)
+    clip = {"index": 0, "path": "p.mp4", "title": "T", "description": "D", "tags": [],
+            "thumbnail": str(thumb), "captions": str(srt), "captions_language": "ur"}
+    mc.upload_waiting(mc.get(ch["id"]), lambda job: ("completed", [clip]), log=lambda *a: None)
+    with ya.use(mc.account(ch["id"])):
+        row = ya.uploads()[-1]
+    kept = row["retry"]["thumbnail"]["file"]
+    assert os.path.isfile(kept) and set(row["retry"]) == {"thumbnail", "captions"}
+    thumb.unlink()                                                    # the job folder is swept
+    outcome.update(thumbnail="set", captions="set")
+    assert mc.retry_extras(mc.get(ch["id"]), log=lambda *a: None) == 1  # captions; the thumbnail waits
+    with ya.use(mc.account(ch["id"])):
+        row = ya.uploads()[-1]
+    assert set(row["retry"]) == {"thumbnail"} and row["retry"]["thumbnail"]["tries"] == 0
+    mc._change(ch["id"], lambda c: c.update(long_uploads={"status": "allowed"}))     # the owner verified
+    assert mc.retry_extras(mc.get(ch["id"]), log=lambda *a: None) == 1
+    with ya.use(mc.account(ch["id"])):
+        row = ya.uploads()[-1]
+    assert "retry" not in row and row["thumbnail"] == "set" and not os.path.exists(kept)
+
+
+def test_a_step_that_keeps_failing_is_given_up_and_its_copy_removed(tmp_path, monkeypatch):
+    import os
+    ch = mc.add("history")
+    keep = tmp_path / "x.srt"
+    keep.write_text("1", encoding="utf-8")
+    with ya.use(mc.account(ch["id"])):
+        ya._save_upload({"id": "r", "status": "done", "video_id": "V" * 11, "created": time.time(),
+                         "retry": {"captions": {"file": str(keep), "lang": "ur", "tries": 0}}})
+    monkeypatch.setattr(ya, "add_captions", lambda row, *a, key="captions", **k: row.update({key: "failed"}) or row)
+    for _ in range(mc.RETRY_TRIES):
+        assert mc.retry_extras(mc.get(ch["id"]), log=lambda *a: None) == 0
+    assert keep.exists()
+    mc.retry_extras(mc.get(ch["id"]), log=lambda *a: None)
+    with ya.use(mc.account(ch["id"])):
+        assert "retry" not in ya.uploads()[-1] and not os.path.exists(keep)

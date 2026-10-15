@@ -1095,10 +1095,14 @@ def upload_waiting(ch, job_clips, log=print):
                 done += 1
                 if clip.get("thumbnail"):
                     youtube_account.add_thumbnail(row, clip["thumbnail"])
+                    _keep_for_retry(ch, row, "thumbnail", clip["thumbnail"])
                 if clip.get("captions"):
-                    youtube_account.add_captions(row, clip["captions"], clip.get("captions_language") or "ur")
+                    lang = clip.get("captions_language") or "ur"
+                    youtube_account.add_captions(row, clip["captions"], lang)
+                    _keep_for_retry(ch, row, "captions", clip["captions"], lang)
                     for path, lang in clip.get("captions_extra") or []:
                         youtube_account.add_captions(row, path, lang, key=f"captions_{lang}")
+                        _keep_for_retry(ch, row, f"captions_{lang}", path, lang)
                 if j.get("series") and (j.get("series_part") or 1) > 1:
                     _link_previous_part(row, j, ch, log)
                 _set_job(ch["id"], j["job_id"], status="uploaded", video_id=row.get("video_id"),
@@ -1115,6 +1119,71 @@ def upload_waiting(ch, job_clips, log=print):
         _change(ch["id"], lambda c: c.update(upload_paused_until=int(time.time()) + UPLOAD_PAUSE_SECONDS))
         log(f"⏸️ {ch['name']}: YouTube's daily upload limit after {done}; trying again in 3 hours.")
     return {"done": done, "limit": limit}
+
+
+# A thumbnail refused before the owner phone-verifies the channel, or a
+# caption track skipped for the day's quota, is tried again: the job folder
+# is gone by then, so the file is kept in the channel's folder until it
+# works (RETRY_DAYS at most, RETRY_TRIES passes, one every LEARN_EVERY).
+RETRY_DAYS = 7
+RETRY_TRIES = 4
+
+
+def _keep_for_retry(ch, row, key, path, lang=None):
+    import shutil
+    import youtube_account
+    if row.get(key) not in ("failed", "skipped") or not os.path.isfile(path):
+        return
+    keep = os.path.join(folder(ch["id"]), "retry")
+    os.makedirs(keep, exist_ok=True)
+    dst = os.path.join(keep, f"{row['id']}.{key}{os.path.splitext(path)[1]}")
+    try:
+        shutil.copyfile(path, dst)
+    except OSError:
+        return
+    row.setdefault("retry", {})[key] = {"file": dst, "lang": lang, "tries": 0}
+    youtube_account._save_upload(row)
+
+
+def retry_extras(ch, log=print, now=None):
+    """Try failed thumbnails and caption tracks of the last week again.
+    Returns how many went up this time."""
+    import youtube_account
+    now = now or time.time()
+    fixed = 0
+    # Custom thumbnails need a phone-verified channel; long_minutes() keeps
+    # YouTube's answer (eligible = not verified yet).
+    unverified = (ch.get("long_uploads") or {}).get("status") in ("eligible", "disallowed")
+    with youtube_account.use(account(ch["id"])):
+        for row in youtube_account.uploads():
+            if not row.get("retry"):
+                continue
+            for key, r in list(row["retry"].items()):
+                usable = (now - row.get("created", now) <= RETRY_DAYS * 86400 and r["tries"] < RETRY_TRIES
+                          and os.path.isfile(r["file"]))
+                if usable and key == "thumbnail" and unverified:
+                    continue                  # refused until the phone check; no try used
+                if usable:
+                    r["tries"] += 1
+                    if key == "thumbnail":
+                        youtube_account.add_thumbnail(row, r["file"])
+                    else:
+                        youtube_account.add_captions(row, r["file"], r.get("lang") or "ur", key=key)
+                    if row.get(key) != "set":
+                        youtube_account._save_upload(row)
+                        continue
+                    fixed += 1
+                    log(f"🔁 {ch['name']}: {key.replace('_', ' ')} added to '{(row.get('title') or '')[:50]}'.")
+                try:                          # done, or given up: the copy goes
+                    os.remove(r["file"])
+                except OSError:
+                    pass
+                row["retry"].pop(key)
+                youtube_account._save_upload(row)
+            if row.get("retry") is not None and not row["retry"]:
+                row.pop("retry")
+                youtube_account._save_upload(row)
+    return fixed
 
 
 def skip(cid, job_id):
@@ -1258,6 +1327,7 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
             await loop.run_in_executor(None, claim_check, ch, log)
         if t - ch.get("last_learn", 0) >= LEARN_EVERY:
             await loop.run_in_executor(None, learn, ch, log)
+            await loop.run_in_executor(None, retry_extras, ch, log)
         if ch.get("kind") == "cricket":
             await loop.run_in_executor(None, match_watch, ch, client_fn, log, t)
     # Engagement on every connected channel, the main one included.
