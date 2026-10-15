@@ -358,14 +358,18 @@ def _tags(tags):
 
 
 def uploads():
-    return _read(uploads_file(), [])
+    # The upload log is what stops a Short going up twice: a damaged file
+    # falls back to its hourly backup (safe_json). Tokens get no backup copy.
+    import safe_json
+    return safe_json.read(uploads_file(), [])
 
 
 def _save_upload(row):
     with _lock:
         rows = uploads()
         rows = [r for r in rows if r["id"] != row["id"]] + [row]
-        _write(uploads_file(), rows[-500:])
+        import safe_json
+        safe_json.write(uploads_file(), rows[-500:])
 
 
 # A dropped connection mid-upload resumes where YouTube stopped receiving

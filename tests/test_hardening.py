@@ -214,3 +214,29 @@ def test_an_upload_that_stays_offline_fails_after_the_waits(tmp_path, monkeypatc
     monkeypatch.setattr(ya.time, "sleep", waits.append)
     row = ya.upload(str(video), "T", "D")
     assert row["status"] == "failed" and "offline" in row["error"] and waits == list(ya.RESUME_WAITS)
+
+
+def test_a_damaged_state_file_comes_back_from_its_backup(tmp_path, monkeypatch):
+    import os
+    import safe_json
+    path = str(tmp_path / "state.json")
+    safe_json.write(path, {"channels": [1]})
+    assert not os.path.exists(path + ".bak")                  # nothing to back up yet
+    safe_json.write(path, {"channels": [1, 2]})
+    assert safe_json.read(path + ".bak", {}) == {"channels": [1]}
+    safe_json.write(path, {"channels": [1, 2, 3]})
+    assert safe_json.read(path + ".bak", {}) == {"channels": [1]}      # at most once an hour
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('{"channels": [1, 2, 3')                            # a write cut short
+    assert safe_json.read(path, {}) == {"channels": [1]}
+    os.utime(path + ".bak", (1, 1))                                  # an hour later...
+    safe_json.write(path, {"channels": [9]})
+    assert safe_json.read(path + ".bak", {}) == {"channels": [1]}      # ...the damaged file is not backed up
+    os.remove(path)
+    assert safe_json.read(path, {}) == {}                             # missing is a fresh start, not damage
+    ch = mc.add("quiz")
+    with open(mc.STATE_FILE, "w", encoding="utf-8") as f:
+        f.write("{")
+    with open(mc.STATE_FILE + ".bak", "w", encoding="utf-8") as f:
+        f.write('{"channels": [{"id": "%s", "kind": "quiz", "name": "Q"}]}' % ch["id"])
+    assert [c["id"] for c in mc.channels()] == [ch["id"]]

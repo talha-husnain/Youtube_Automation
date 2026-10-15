@@ -119,20 +119,15 @@ failure_reason = None     # app.py sets it: job id -> the one-line reason the jo
 # ------------------------------------------------------------------ store
 
 def _read(path, default):
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, type(default)) else default
-    except (OSError, ValueError):
-        return default
+    # A damaged file falls back to its hourly backup (safe_json): read as
+    # empty, it lost every channel and the next write made that permanent.
+    import safe_json
+    return safe_json.read(path, default)
 
 
 def _write(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, path)
+    import safe_json
+    safe_json.write(path, data)
 
 
 def channels():
