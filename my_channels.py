@@ -67,7 +67,18 @@ KINDS = {
               "times": ["01:00", "04:00", "07:00", "10:00", "13:00", "16:00", "19:00", "22:00"],
               "about": "Original songs under a minute: AI lyrics, sung by Google Lyria, with a cover "
                        "picture and the lyrics on screen. About $0.15 of Gemini per song."},
+    # Long 16:9 videos (history_videos.py): 1-3 a day, a job takes 15-60 min on the laptop.
+    "history": {"label": "History and stories (long videos)", "genre": "history", "color": "#1F1408",
+                "times": ["18:00", "21:00"], "per_day": 2, "max_per_day": 3, "long": True, "timeout": 3 * 3600,
+                "notes": "Rome, Karbala, the Caliphs, the US government, the US economy",
+                "about": "2 to 30 minute documentaries about empires, countries and famous events: researched "
+                         "with sources, a narrator, free Wikipedia pictures and AI pictures, chapters and a "
+                         "thumbnail. About $1 of Gemini per 10-minute video."},
 }
+# The planner module of each kind that works from a queue of researched ideas.
+PLANNERS = {"cricket": "cricket_shorts", "controversy": "controversy_shorts", "history": "history_videos"}
+MINUTES_RANGE, DEFAULT_MINUTES = (2, 30), 10
+LANGS = ("urdu", "english")
 FORMATS = {"quiz": ["mcq", "riddle", "math", "flags"]}
 # Fast results on the cricket channel: a match Pakistan or India just
 # finished is the most searched cricket topic of the day, worth more than
@@ -170,12 +181,19 @@ def add(kind, name=""):
         cid, n = f"{kind}{n}", n + 1
     k = KINDS[kind]
     ch = {"id": cid, "kind": kind, "name": " ".join(str(name or k["label"]).split())[:60],
-          "enabled": True, "auto_upload": True, "per_day": 8, "post_times": list(k["times"]),
-          "handle": "", "color": k["color"], "notes": "", "created": int(time.time()), **ENGAGE_DEFAULTS,
+          "enabled": True, "auto_upload": True, "per_day": k.get("per_day", 8), "post_times": list(k["times"]),
+          "handle": "", "color": k["color"], "notes": k.get("notes", ""), "created": int(time.time()),
+          **ENGAGE_DEFAULTS, **({"minutes": DEFAULT_MINUTES, "lang": "urdu"} if k.get("long") else {}),
           "last_upload": 0, "upload_paused_until": 0, "last_claim_check": 0, "last_learn": 0,
           "jobs": [], "ideas": [], "used": [], "stats": {}}
     _save_channel(ch)
     return ch
+
+
+def cap(ch):
+    """Most videos a day for the channel's kind: Shorts up to YouTube's upload
+    limit, long videos 3."""
+    return KINDS.get(ch.get("kind"), {}).get("max_per_day", MAX_PER_DAY)
 
 
 def main_settings():
@@ -206,12 +224,12 @@ def update(cid, patch):
                 ch[key] = bool(patch[key])
         if "per_day" in patch:
             try:
-                ch["per_day"] = max(1, min(MAX_PER_DAY, int(patch["per_day"])))
+                ch["per_day"] = max(1, min(cap(ch), int(patch["per_day"])))
             except (TypeError, ValueError):
                 pass
         if "post_times" in patch and isinstance(patch["post_times"], list):
             times = sorted({_clock(t) for t in patch["post_times"]} - {""})
-            ch["post_times"] = times[:MAX_PER_DAY] or ch["post_times"]
+            ch["post_times"] = times[:cap(ch)] or ch["post_times"]
         if "name" in patch:
             ch["name"] = " ".join(str(patch["name"] or "").split())[:60] or ch["name"]
         if "handle" in patch:
@@ -221,6 +239,14 @@ def update(cid, patch):
             ch["color"] = patch["color"].upper()
         if "notes" in patch:
             ch["notes"] = " ".join(str(patch["notes"] or "").split())[:300]
+        if KINDS.get(ch["kind"], {}).get("long"):
+            if "minutes" in patch:
+                try:
+                    ch["minutes"] = max(MINUTES_RANGE[0], min(MINUTES_RANGE[1], int(patch["minutes"])))
+                except (TypeError, ValueError):
+                    pass
+            if patch.get("lang") in LANGS:
+                ch["lang"] = patch["lang"]
     return _change(cid, fn)
 
 
@@ -275,7 +301,11 @@ def summary(ch):
         rows = sorted(youtube_account.uploads(), key=lambda r: r.get("created", 0), reverse=True)
     day = today()
     out = {k: v for k, v in ch.items() if k not in ("jobs", "ideas", "used")}
+    long = bool(KINDS.get(ch["kind"], {}).get("long"))
+    if long:
+        out.update(minutes=ch.get("minutes", DEFAULT_MINUTES), lang=ch.get("lang", "urdu"))
     out.update({
+        "max_per_day": cap(ch), "long": long,
         **engage_settings(ch), "match_watch": bool(ch.get("match_watch", True)),
         "kind_label": KINDS.get(ch["kind"], {}).get("label", ch["kind"]),
         "youtube": yt, "made_today": len(_jobs_on(ch, day)),
@@ -384,18 +414,21 @@ def next_payload(ch, client_fn, log=print):
     kind = ch["kind"]
     look = _look(ch)
     stats = ch.get("stats") or {}
-    if kind in ("cricket", "controversy"):
+    if kind in PLANNERS:
         if not ch.get("ideas"):
             if time.time() - _ideas_failed.get(ch["id"], 0) < IDEAS_RETRY:
                 return None, None
             import importlib
-            planner = importlib.import_module("cricket_shorts" if kind == "cricket" else "controversy_shorts")
+            planner = importlib.import_module(PLANNERS[kind])
+            # The history channel also hears the owner's topic wishes, its language and length.
+            extra = ({"notes": ch.get("notes") or "", "lang": ch.get("lang", "urdu"),
+                      "minutes": ch.get("minutes", DEFAULT_MINUTES)} if kind == "history" else {})
             try:
                 got = planner.channel_ideas(client_fn(), ch["per_day"], avoid=ch.get("used") or [],
-                                            best=stats.get("best") or [], worst=stats.get("worst") or [])
+                                            best=stats.get("best") or [], worst=stats.get("worst") or [], **extra)
             except Exception as e:  # noqa: BLE001
                 _ideas_failed[ch["id"]] = time.time()
-                log(f"⚠️ {ch['name']}: could not plan cricket ideas ({type(e).__name__}).")
+                log(f"⚠️ {ch['name']}: could not plan ideas ({type(e).__name__}).")
                 return None, None
             if not got:
                 _ideas_failed[ch["id"]] = time.time()
@@ -407,6 +440,11 @@ def next_payload(ch, client_fn, log=print):
         if kind == "controversy":
             return ({**look, "genre": "controversy", "controversy_topic": idea["text"], "bg_music": True},
                     {"label": idea["text"], "format": "controversy", "topic": idea["text"]})
+        if kind == "history":
+            return ({**look, "genre": "history", "history_topic": idea["text"], "bg_music": True,
+                     "history_minutes": ch.get("minutes", DEFAULT_MINUTES), "history_lang": ch.get("lang", "urdu"),
+                     "frame_outro": False},
+                    {"label": idea["text"], "format": "history", "topic": idea["text"]})
         return ({**look, "genre": "cricket", "cricket_mode": idea["kind"], "cricket_match": idea["text"],
                  "bg_music": True},
                 {"label": idea["text"], "format": idea["kind"], "topic": idea["text"],
@@ -529,7 +567,7 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
             changed.append((j["job_id"], "done", None, _used_items(os.path.join(output_dir, j["job_id"]))))
         elif state in ("failed", "error", "cancelled") or (state == "completed" and not clips):
             changed.append((j["job_id"], "failed", "the job failed", []))
-        elif now - j.get("at", now) > JOB_TIMEOUT:
+        elif now - j.get("at", now) > KINDS.get(ch["kind"], {}).get("timeout", JOB_TIMEOUT):
             changed.append((j["job_id"], "failed", "took too long", []))
     if not changed:
         return ch
@@ -543,7 +581,7 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
                         j["error"] = err
             topic = next((j.get("topic") for j in c["jobs"] if j.get("job_id") == job_id), None)
             if status == "done":
-                adds = used or ([topic] if c["kind"] in ("cricket", "controversy") and topic else [])
+                adds = used or ([topic] if c["kind"] in PLANNERS and topic else [])
                 c["used"] = ((c.get("used") or []) + [str(u)[:140] for u in adds if u])[-300:]
     return _change(ch["id"], fn)
 
@@ -583,6 +621,8 @@ def upload_waiting(ch, job_clips, log=print):
                       "question": clip.get("question") or "", "answers": clip.get("answers") or []})
             if row.get("status") == "done":
                 done += 1
+                if clip.get("thumbnail"):
+                    youtube_account.add_thumbnail(row, clip["thumbnail"])
                 _set_job(ch["id"], j["job_id"], status="uploaded", video_id=row.get("video_id"),
                          slot=slot.isoformat())
                 log(f"⬆️ {ch['name']}: uploaded '{row['title'][:60]}' for {slot:%d %b %H:%M}.")

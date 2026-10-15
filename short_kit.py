@@ -106,7 +106,7 @@ def speed_up(path, factor):
 
 
 def voice_lines(client, items, job_dir, prefix):
-    """items: [{"text", "voice", "style"}] -> [(wav path, seconds) | (None, 0.0)].
+    """items: [{"text", "voice", "style", "language"?}] -> [(wav path, seconds) | (None, 0.0)].
 
     Three at a time; 8 calls back to back met no rate limit (8-oct-2026)."""
     import ai_take
@@ -115,7 +115,7 @@ def voice_lines(client, items, job_dir, prefix):
         it = items[k]
         path = os.path.join(job_dir, f".{prefix}_{k + 1}.wav")
         secs = ai_take.speak(client, it["text"], path, it.get("voice") or ai_take.DEFAULT_VOICE,
-                             it.get("style"))
+                             it.get("style"), **({"language": it["language"]} if it.get("language") else {}))
         return (path, secs) if secs else (None, 0.0)
 
     with ThreadPoolExecutor(max_workers=3) as pool:

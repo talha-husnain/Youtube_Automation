@@ -963,9 +963,9 @@ def _recover_jobs_from_disk():
 _RESUME_FILE = ".resume.json"
 # Video types (CONTENT_GENRE): comedy is the main pipeline; the others are
 # song_shorts.py, movie_dub.py and cricket_shorts.py.
-CONTENT_GENRES = ("comedy", "songs", "movies", "cricket", "quiz", "music", "controversy")
+CONTENT_GENRES = ("comedy", "songs", "movies", "cricket", "quiz", "music", "controversy", "history")
 # Made from nothing but a prompt (main.py --generate): no link, no upload.
-GENERATED_GENRES = ("cricket", "quiz", "music", "controversy")
+GENERATED_GENRES = ("cricket", "quiz", "music", "controversy", "history")
 MAX_RESUME_ATTEMPTS = 2
 
 # --- Deploy handover (two instances, one disk) -------------------------------
@@ -2809,7 +2809,11 @@ def _job_clips(job_id):
                     "answers": (c.get("quiz") or {}).get("answers") or [],
                     # Dubbed actors say lines they never said, and an AI song's
                     # voice is a realistic voice nobody sang: YouTube asks for the label.
-                    "ai_made": genre in ("movies", "music")})
+                    # A history video says so itself when it used AI pictures.
+                    "ai_made": genre in ("movies", "music") or bool(c.get("ai_made")),
+                    "thumbnail": (os.path.join(job_path, c["thumbnail_file"])
+                                  if c.get("thumbnail_file")
+                                  and os.path.isfile(os.path.join(job_path, c["thumbnail_file"])) else None)})
     return state, out
 
 
@@ -3125,6 +3129,7 @@ PUBLISH_STEPS = "\n".join([
     '3. Go to APIs & Services > OAuth consent screen (or Google Auth Platform > Audience), press "Publish app" and confirm.',
     '4. In Shortkaar open Channels. On your main channel press "reconnect".',
     '5. On each new channel press "connect youtube channel" and pick it on Google\'s screen. If Google says "Google hasn\'t verified this app": Advanced > Go to ... (it is your app).',
+    "6. For the history channel (long videos): switch to it on YouTube, open youtube.com/verify and verify with your phone. Without this YouTube refuses videos over 15 minutes and custom thumbnails.",
 ])
 _fresh = {}
 
@@ -4380,6 +4385,9 @@ async def process_endpoint(
     music_theme: Optional[str] = Form(None),
     music_avoid: Optional[str] = Form(None),
     controversy_topic: Optional[str] = Form(None),
+    history_topic: Optional[str] = Form(None),
+    history_minutes: Optional[str] = Form(None),
+    history_lang: Optional[str] = Form(None),
     channel: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
@@ -4444,6 +4452,9 @@ async def process_endpoint(
         music_theme = body.get("music_theme")
         music_avoid = body.get("music_avoid")
         controversy_topic = body.get("controversy_topic")
+        history_topic = body.get("history_topic")
+        history_minutes = body.get("history_minutes")
+        history_lang = body.get("history_lang")
         channel = body.get("channel")
 
     # Two or more links: one short made of their best moments (compilation.py),
@@ -4679,10 +4690,18 @@ async def process_endpoint(
     if genre_val == "cricket":
         env["CRICKET_MATCH"] = cricket_match
         env["CRICKET_MODE"] = cricket_mode
-    if genre_val in ("cricket", "quiz", "controversy") and str(bg_music).lower() in ("1", "true", "yes"):
+    if genre_val in ("cricket", "quiz", "controversy", "history") and str(bg_music).lower() in ("1", "true", "yes"):
         env["BG_MUSIC"] = "1"
     if genre_val == "controversy":
         env["CONTROVERSY_TOPIC"] = re.sub(r"\s+", " ", str(controversy_topic or ""))[:200]
+    if genre_val == "history":
+        # A long 16:9 documentary (history_videos.py): 2-30 minutes, Urdu or English.
+        env["HISTORY_TOPIC"] = re.sub(r"\s+", " ", str(history_topic or ""))[:200]
+        try:
+            env["HISTORY_MINUTES"] = str(max(2, min(30, int(float(history_minutes or 10)))))
+        except (TypeError, ValueError):
+            env["HISTORY_MINUTES"] = "10"
+        env["HISTORY_LANG"] = "english" if str(history_lang or "").lower() == "english" else "urdu"
     # The channel kinds of my_channels.py; avoid lists keep a channel from
     # asking a question or making a song title twice.
     if genre_val == "quiz":

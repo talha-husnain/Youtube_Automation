@@ -141,11 +141,12 @@ def _wav_seconds(path):
 DEFAULT_STYLE = "like a fun Pakistani YouTuber, natural Urdu accent"
 
 
-def speak(client, text, path, voice=DEFAULT_VOICE, style=None):
+def speak(client, text, path, voice=DEFAULT_VOICE, style=None, language="Roman Urdu"):
     """Write ``text`` as a 24 kHz mono wav. Returns its length, or None.
 
     ``style`` says how to read it (song_shorts / movie_dub / cricket_shorts
-    pass their own); the line itself is always Roman Urdu."""
+    pass their own); the line is Roman Urdu unless ``language`` says
+    otherwise (the history channel's English videos)."""
     from google.genai import types
     models = [m for m in (os.environ.get("TAKE_TTS_MODEL") or "").split(",") if m.strip()]
     for model in models + [m for m in TTS_MODELS if m not in models]:
@@ -153,7 +154,7 @@ def speak(client, text, path, voice=DEFAULT_VOICE, style=None):
             try:
                 r = client.models.generate_content(
                     model=model.strip(),
-                    contents=f"Read this Roman Urdu line aloud {style or DEFAULT_STYLE}: {text}",
+                    contents=f"Read this {language} line aloud {style or DEFAULT_STYLE}: {text}",
                     config=types.GenerateContentConfig(
                         response_modalities=["AUDIO"],
                         speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(

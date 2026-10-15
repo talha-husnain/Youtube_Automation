@@ -28,6 +28,13 @@ PROMPTS = {
         "Moody true-story background: atmospheric pads, subtle glitch percussion, serious and steady",
         "Tense reveal music: muted cinematic drums, rising strings, restrained and dramatic",
     ],
+    # Under long documentaries (history_videos.py), a different one per chapter.
+    "history": [
+        "Epic cinematic documentary underscore: soft strings, low choir pads, slow distant drums, majestic",
+        "Middle Eastern ambient documentary bed: oud, soft frame drum, warm pads, reflective and calm",
+        "Mysterious ancient history ambience: duduk melody, low drones, gentle percussion, timeless",
+        "Gentle orchestral storytelling music: piano and strings, hopeful and reflective, steady",
+    ],
     "quiz": [
         "Playful game show background loop: ticking clock percussion, light plucked strings, curious mood",
         "Suspenseful quiz countdown music: soft pulsing synth, ticking hi-hats, thinking mood, steady",

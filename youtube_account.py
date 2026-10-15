@@ -47,7 +47,9 @@ UPLOAD_API = "https://www.googleapis.com/upload/youtube/v3/videos"
 ANALYTICS_API = "https://youtubeanalytics.googleapis.com/v2/reports"
 # Comedy, Sports, Film, Music, Education, Music
 CATEGORY = {"comedy": "23", "cricket": "17", "movies": "1", "songs": "10", "quiz": "27", "music": "10",
-            "controversy": "24"}
+            "controversy": "24", "history": "27"}
+LONG_GENRES = ("history",)    # 16:9 videos, not Shorts
+THUMB_API = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
 TITLE_MAX, DESCRIPTION_MAX, TAGS_MAX = 100, 4900, 480
 _states = {}          # OAuth state -> (time, dashboard origin, account): a callback we did not start is refused
 _lock = threading.Lock()
@@ -372,17 +374,51 @@ def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
         if start.status_code != 200 or "location" not in start.headers:
             raise RuntimeError(_google_error(start))
         with open(path, "rb") as f:
-            done = httpx.put(start.headers["location"], content=f.read(),
-                             headers={"Content-Type": "video/mp4"}, timeout=1800)
+            # Streamed in 8 MB pieces: a long video is hundreds of MB. The
+            # explicit Content-Length keeps httpx from switching to chunked.
+            def pieces():
+                while True:
+                    block = f.read(8 << 20)
+                    if not block:
+                        return
+                    yield block
+            done = httpx.put(start.headers["location"], content=pieces(),
+                             headers={"Content-Type": "video/mp4", "Content-Length": str(size)}, timeout=1800)
         if done.status_code not in (200, 201):
             raise RuntimeError(_google_error(done))
         video = done.json()
         got = (video.get("status") or {}).get("privacyStatus")
         row.update(status="done", video_id=video["id"], privacy=got,
-                   url=f"https://youtube.com/shorts/{video['id']}",
+                   url=(f"https://youtube.com/watch?v={video['id']}" if genre in LONG_GENRES
+                        else f"https://youtube.com/shorts/{video['id']}"),
                    locked_private=(got == "private" and not publish_at and privacy != "private"))
     except Exception as e:  # noqa: BLE001 — the row says what went wrong
         row.update(status="failed", error=str(e)[:300])
+    _save_upload(row)
+    return row
+
+
+def set_thumbnail(video_id, path):
+    """Our own thumbnail on a video (50 units). YouTube allows custom
+    thumbnails only on a phone-verified channel (youtube.com/verify)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    spend(50)
+    r = httpx.post(THUMB_API, params={"videoId": video_id, "uploadType": "media"},
+                   headers={"Authorization": f"Bearer {_token()}", "Content-Type": "image/jpeg"},
+                   content=data, timeout=120)
+    if r.status_code != 200:
+        raise RuntimeError(_google_error(r))
+    return True
+
+
+def add_thumbnail(row, path):
+    """set_thumbnail for an uploads.json row, which records how it went."""
+    try:
+        set_thumbnail(row["video_id"], path)
+        row.update(thumbnail="set")
+    except Exception as e:  # noqa: BLE001 — the video is up either way
+        row.update(thumbnail="failed", thumbnail_error=str(e)[:200])
     _save_upload(row)
     return row
 

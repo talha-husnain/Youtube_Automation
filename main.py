@@ -2361,10 +2361,10 @@ if __name__ == '__main__':
     # Generated shorts with no source video (cricket, quiz and music_shorts.py).
     if args.generate:
         _kind = (os.environ.get("CONTENT_GENRE") or "cricket").lower()
-        if _kind in ("quiz", "music", "controversy"):
+        if _kind in ("quiz", "music", "controversy", "history"):
             import importlib
-            importlib.import_module(f"{_kind}_shorts").run(_ensure_dir(args.output or "."),
-                                                           sys.modules[__name__])
+            module = "history_videos" if _kind == "history" else f"{_kind}_shorts"
+            importlib.import_module(module).run(_ensure_dir(args.output or "."), sys.modules[__name__])
         else:
             import cricket_shorts
             cricket_shorts.run(os.environ.get("CRICKET_MATCH", ""), _ensure_dir(args.output or "."),

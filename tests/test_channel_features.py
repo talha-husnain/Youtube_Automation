@@ -277,7 +277,7 @@ def test_upload_sends_a_scheduled_private_video_and_records_it(tmp_path, monkeyp
         return R(200, headers={"location": "https://upload.example/session"})
 
     def put(url, content=None, headers=None, timeout=None):
-        sent["put"] = (url, len(content))
+        sent["put"] = (url, len(content if isinstance(content, bytes) else b"".join(content)))
         return R(200, {"id": "VID123", "status": {"privacyStatus": "private"}})
     monkeypatch.setattr(ya.httpx, "post", post)
     monkeypatch.setattr(ya.httpx, "put", put)

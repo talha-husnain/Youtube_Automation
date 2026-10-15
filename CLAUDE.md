@@ -455,6 +455,41 @@ never finished:
   `_bed(kind)`, `_finish(genre, after_seo)`, `fact_events(count=False)` so a
   year is not counted up from 0). Tests run with `.venv/Scripts/python` (the system
   Python has no httpx) and `--continue-on-collection-errors`.
+- **History and stories** (`history_videos.py`, genre/channel kind `history`,
+  15-oct-2026): the one LONG channel, 2-30 min 16:9 documentaries, 1-3 a day
+  (`KINDS[...]["long"]`, `max_per_day` 3, job timeout 3 h; per channel
+  `minutes` and `lang` urdu/english, `notes` = the owner's topic wishes).
+  Research (2 grounded calls, 3+ sources), script of chapters/scenes, fact
+  check with one rewrite. Pictures: free-licence images of each scene's
+  Wikipedia article (`prop=images` + `imageinfo`, request width 1920, a
+  standard Wikimedia thumbnail size), matched to scenes by one text call;
+  AI pictures (1K, ~$0.067) only for the rest, max `HISTORY_AI_IMAGES` (10).
+  A "sacred" story (prophets, Ahl al-Bayt, companions, imams) shows no
+  people and has no music; a picture naming a revered figure is dropped on
+  every video unless it is a place ("shrine of Imam Hussain" stays). Render:
+  one ffmpeg per shot (the still is decoded once and repeated with the
+  `loop` filter, `-loop 1` would decode it every frame; the pan is a crop on
+  a 2x canvas scaled down, half-pixel steps) joined by the concat demuxer,
+  then one audio pass copies the video: ~4x faster than real time with 3
+  workers. Libass finds Noto Serif only as "Noto Serif Bold" (plain "Noto
+  Serif" fell back to a sans). Uploads stream in 8 MB pieces with an explicit
+  Content-Length (httpx would go chunked otherwise); `youtube_account.add_thumbnail`
+  sets the thumbnail (50 units). YouTube refuses videos over 15 minutes and
+  custom thumbnails until the channel is phone-verified (youtube.com/verify).
+  Found on the first real Karbala runs: the script said a bare "Husayn" and
+  "Prophet Muhammad" (`HONOUR` now asks for Hazrat / sallallahu alaihi
+  wasallam / (SAW)), quoted the viral, unsourced Dickens and Gandhi lines on
+  Husayn (research and check now refuse quotes without a documented
+  original), and the voice read "Yazid I" as "Yazid one" (no Roman numerals
+  in spoken lines). Names cannot catch Ottoman/Persian manuscript paintings
+  ("Maktel-i Al-i Resul"), so a sacred story sends its chosen free pictures
+  to one vision call (`artwork_with_people`) and drops artwork with people.
+  The fact check rejected a whole Rome script for naming Ravenna: it must
+  only flag claims that contradict the research or look invented. The
+  picture match asked for pictures that "clearly fit": 5 of 27 Rome scenes
+  out of 151 free pictures; "best fit, a real picture beats none" matched 19
+  on the same script. Description sources go through `rank_sources`: in
+  Google's order the Rome video listed wikihow and medium first.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file
   got CLAUDE.md committed as CRLF once). The scratch `patchlib.patch`

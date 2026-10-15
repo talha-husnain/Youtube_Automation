@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     Loader2, CheckCircle2, Circle, Copy, Check, AlertTriangle, Rocket, Trophy, HelpCircle, Music, Layers,
-    Bell, CalendarClock, Eye, Users, Upload, Clapperboard, ExternalLink, Flame,
+    Bell, CalendarClock, Eye, Users, Upload, Clapperboard, ExternalLink, Flame, Landmark,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
@@ -9,7 +9,7 @@ import { apiJson } from '../lib/api';
 // glance, what the owner still has to do, the next posts, and the switches
 // for the Windows reminders and the evening summary (reminders.py).
 
-const KIND_ICON = { comedy: Rocket, cricket: Trophy, quiz: HelpCircle, music: Music, controversy: Flame };
+const KIND_ICON = { comedy: Rocket, cricket: Trophy, quiz: HelpCircle, music: Music, controversy: Flame, history: Landmark };
 const at = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '');
 const day = (ts) => new Date(ts * 1000).toLocaleString(undefined, { weekday: 'long', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 

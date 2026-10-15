@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     Loader2, Youtube, Plus, Play, Trash2, LogOut, Layers, X, Copy, Check, ExternalLink, Rocket, AlertTriangle,
-    Trophy, Brain, Music, HelpCircle, Flame,
+    Trophy, Brain, Music, HelpCircle, Flame, Landmark,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
@@ -10,7 +10,9 @@ import { getApiUrl } from '../config';
 // the main one (comedy, set up in Autopilot) and the others, each with its
 // own Google connection, kind of Short, number a day and posting times.
 
-const KIND_ICON = { comedy: Rocket, cricket: Trophy, quiz: HelpCircle, music: Music, controversy: Flame };
+const KIND_ICON = { comedy: Rocket, cricket: Trophy, quiz: HelpCircle, music: Music, controversy: Flame, history: Landmark };
+// Long videos (history_videos.py): minutes per video. Over 15 needs a phone-verified channel.
+const MINUTES = [2, 3, 5, 8, 10, 12, 15, 20, 25, 30];
 const STATUS = { running: 'making', done: 'waiting to upload', uploaded: 'uploaded', failed: 'failed', skipped: 'skipped' };
 const PUBLISH_STEPS = `1. Open console.cloud.google.com and pick your Shortkaar project.
 2. Go to: APIs & Services > OAuth consent screen (Google Auth Platform > Audience).
@@ -176,12 +178,31 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                 <>
                     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-ink2">
                         <label className="flex items-center gap-2">
-                            Shorts a day
+                            {ch.long ? 'Videos a day' : 'Shorts a day'}
                             <select value={ch.per_day} onChange={(e) => save({ per_day: Number(e.target.value) })}
-                                className="input-field !w-auto text-xs py-1" aria-label="shorts a day">
-                                {Array.from({ length: maxPerDay }, (_, k) => k + 1).map((n) => <option key={n} value={n}>{n}</option>)}
+                                className="input-field !w-auto text-xs py-1" aria-label={ch.long ? 'videos a day' : 'shorts a day'}>
+                                {Array.from({ length: ch.max_per_day || maxPerDay }, (_, k) => k + 1).map((n) => <option key={n} value={n}>{n}</option>)}
                             </select>
                         </label>
+                        {ch.long && (
+                            <>
+                                <label className="flex items-center gap-2">
+                                    minutes each
+                                    <select value={ch.minutes} onChange={(e) => save({ minutes: Number(e.target.value) })}
+                                        className="input-field !w-auto text-xs py-1" aria-label="minutes each">
+                                        {MINUTES.map((n) => <option key={n} value={n}>{n}</option>)}
+                                    </select>
+                                </label>
+                                <label className="flex items-center gap-2">
+                                    language
+                                    <select value={ch.lang} onChange={(e) => save({ lang: e.target.value })}
+                                        className="input-field !w-auto text-xs py-1" aria-label="language">
+                                        <option value="urdu">Urdu (Roman)</option>
+                                        <option value="english">English</option>
+                                    </select>
+                                </label>
+                            </>
+                        )}
                         <label className="flex items-center gap-2">
                             <input type="checkbox" checked={ch.auto_upload} onChange={() => save({ auto_upload: !ch.auto_upload })} aria-label="upload by itself" />
                             upload by itself
@@ -208,9 +229,21 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                             placeholder="Favourite quiz topics, optional (e.g. Pakistan history, science)"
                             className="input-field text-xs py-1.5" aria-label="quiz topics" maxLength={300} />
                     )}
+                    {ch.kind === 'history' && (
+                        <>
+                            <input defaultValue={ch.notes} onBlur={(e) => e.target.value !== ch.notes && save({ notes: e.target.value })}
+                                placeholder="Topics you want (e.g. Rome, Karbala, the Caliphs, the US economy)"
+                                className="input-field text-xs py-1.5" aria-label="history topics" maxLength={300} />
+                            {ch.minutes > 15 && (
+                                <p className="text-xs text-warn">
+                                    Videos over 15 minutes need a verified channel: switch to this channel on YouTube, open youtube.com/verify and verify with your phone. The same unlocks custom thumbnails.
+                                </p>
+                            )}
+                        </>
+                    )}
                     <div>
                         <p className="text-xs text-muted mb-2">Posting times (every day, this computer&apos;s time)</p>
-                        <Times times={ch.post_times} max={maxPerDay} onChange={(t) => save({ post_times: t })} />
+                        <Times times={ch.post_times} max={ch.max_per_day || maxPerDay} onChange={(t) => save({ post_times: t })} />
                     </div>
                     <EngageSwitches ch={ch} save={save} />
 
@@ -230,7 +263,7 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
 
                     {ch.jobs?.length > 0 && (
                         <div className="space-y-1.5">
-                            <p className="text-xs text-ink">Latest Shorts</p>
+                            <p className="text-xs text-ink">{ch.long ? 'Latest videos' : 'Latest Shorts'}</p>
                             {ch.jobs.slice(0, 8).map((j) => (
                                 <div key={j.job_id || j.at} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
                                     <span className={`readout ${j.status === 'failed' ? 'text-danger' : j.status === 'uploaded' ? 'text-ok' : 'text-muted'}`}>
