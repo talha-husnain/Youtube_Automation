@@ -423,12 +423,41 @@ def learn(ch, log=print):
              "best": [f"{r['title'][:80]} ({r['views']} views)" for r in ranked[:5]],
              "worst": [f"{r['title'][:80]} ({r['views']} views)" for r in ranked[-5:][::-1]]
              if len(ranked) >= 8 else []}
+    # The end card A/B test (ab_choice): median views with and without it.
+    arms = {}
+    for r in mature:
+        if r.get("outro") is not None and r.get("format") != "teaser":
+            arms.setdefault(str(bool(r["outro"])).lower(), []).append(r["views"])
+    stats["ab"] = {"outro": {k: {"shorts": len(v), "median": _median(v)} for k, v in arms.items()}}
 
     def fn(c):
         c["stats"] = stats
         c["last_learn"] = int(time.time())
     log(f"📈 {ch['name']}: {stats['counted']} Shorts counted, median {stats['median']} views.")
     return _change(ch["id"], fn)
+
+
+AB_MIN = 6            # Shorts counted per side before a side can win
+AB_LEAD = 1.2         # the winner's median must beat the other's by this much
+AB_EXPLORE = 0.2
+
+
+def ab_choice(ch, rnd=random):
+    """With or without the FOLLOW end card for the next Short: the end card
+    asks for a follow but stops a Short from looping, and replays count as
+    views, so each channel tests it on its own Shorts. Alternate until both
+    sides have AB_MIN counted, then the clear winner (AB_LEAD) most of the
+    time; no clear winner keeps alternating."""
+    seen = ((ch.get("stats") or {}).get("ab") or {}).get("outro") or {}
+    on, off = seen.get("true") or {}, seen.get("false") or {}
+    if on.get("shorts", 0) >= AB_MIN and off.get("shorts", 0) >= AB_MIN and rnd.random() >= AB_EXPLORE:
+        if on["median"] >= off["median"] * AB_LEAD:
+            return True
+        if off["median"] >= on["median"] * AB_LEAD:
+            return False
+    made = [j.get("outro") for j in ch.get("jobs") or [] if j.get("outro") is not None
+            and j.get("status") in ("running", "done", "uploaded")]
+    return made.count(True) <= made.count(False)
 
 
 def pick_format(ch, options, rnd=random):
@@ -459,8 +488,19 @@ def _look(ch):
             "frame_outro": True, "acknowledged": True, "channel": ch["id"]}
 
 
+AB_KINDS = ("cricket", "controversy", "quiz")     # songs and long videos have no end card
+
+
 def next_payload(ch, client_fn, log=print):
-    """(payload, meta) for the channel's next Short, or (None, None)."""
+    """(payload, meta) for the channel's next Short, or (None, None); the
+    Shorts channels also get the end card A/B side (ab_choice)."""
+    payload, meta = _next_payload(ch, client_fn, log)
+    if payload and ch["kind"] in AB_KINDS and meta.get("format") != "teaser":
+        payload["frame_outro"] = meta["outro"] = ab_choice(ch)
+    return payload, meta
+
+
+def _next_payload(ch, client_fn, log=print):
     kind = ch["kind"]
     look = _look(ch)
     stats = ch.get("stats") or {}
@@ -690,7 +730,8 @@ def upload_waiting(ch, job_clips, log=print):
                 publish_at=slot, ai_made=clip.get("ai_made", False),
                 meta={"job_id": j["job_id"], "clip_index": clip["index"], "channel": ch["id"],
                       "format": j.get("format"), "topic": j.get("topic"), "seconds": clip.get("seconds"),
-                      "question": clip.get("question") or "", "answers": clip.get("answers") or []})
+                      "question": clip.get("question") or "", "answers": clip.get("answers") or [],
+                      **({"outro": j["outro"]} if j.get("outro") is not None else {})})
             if row.get("status") == "done":
                 done += 1
                 if clip.get("thumbnail"):

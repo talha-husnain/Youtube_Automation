@@ -343,3 +343,22 @@ def test_main_channel_row_reads_the_autopilot_settings(monkeypatch):
     app_module = pytest.importorskip("app")
     row = app_module._main_channel_row()
     assert row["id"] == "main" and row["main"] is True and "post_times" in row
+
+
+def test_each_shorts_channel_tests_its_end_card_and_keeps_the_winner():
+    import random as _r
+    ch = mc.add("cricket")
+    picks = []
+    for _ in range(4):
+        side = mc.ab_choice(mc.get(ch["id"]))
+        picks.append(side)
+        mc._change(ch["id"], lambda c, side=side: c["jobs"].append({"status": "done", "outro": side}))
+    assert picks == [True, False, True, False]                       # alternates while learning
+    win = {"ab": {"outro": {"true": {"shorts": 8, "median": 100}, "false": {"shorts": 8, "median": 300}}}}
+    mc._change(ch["id"], lambda c: c.update(stats=win))
+    rnd = _r.Random(1)
+    sides = [mc.ab_choice(mc.get(ch["id"]), rnd) for _ in range(50)]
+    assert sides.count(False) >= 35                                   # mostly the winner, sometimes the other
+    close = {"ab": {"outro": {"true": {"shorts": 8, "median": 100}, "false": {"shorts": 8, "median": 110}}}}
+    mc._change(ch["id"], lambda c: c.update(stats=close))
+    assert mc.ab_choice(mc.get(ch["id"]), _r.Random(5)) in (True, False)

@@ -318,7 +318,7 @@ def run(output_dir, pipeline):
     else:
         raise RuntimeError(f"Lyria refused {SING_TRIES} songs in a row; the next Short tries another style.")
     seconds = media_seconds(song)
-    print(f"   ✅ {seconds:.0f}s of song. Painting the cover...")
+    print(f"   ✅ {seconds:.0f}s of song.")
     print("👂 Timing the lyrics...")
     lyrics = [*p.verse, *p.pre_chorus, *p.chorus]
     lines = align(lyrics, hear(song, lyrics))
