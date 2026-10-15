@@ -368,7 +368,7 @@ def wav_seconds(path):
 def speed_up(path, factor):
     """atempo a wav in place; returns its new length."""
     tmp = path + ".fast.wav"
-    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", path, "-af", f"atempo={factor:.3f}",
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", path, "-af", f"atempo={factor:.3f}",
                     "-ar", "24000", "-ac", "1", tmp], check=True, timeout=60)
     os.replace(tmp, path)
     return wav_seconds(path)
@@ -379,27 +379,34 @@ def voice_lines(client, items, job_dir, prefix):
 
     The free Microsoft voices (free_voice.py) read every line they can unless
     VOICE_ENGINE=gemini; a line they fail, or one in a language they do not
-    take, is read by Gemini. Three at a time; 8 Gemini calls back to back met
-    no rate limit (8-oct-2026)."""
+    take, is read by Gemini. The free voice goes one line at a time with a
+    pause (Microsoft refuses bursts); Gemini three at a time, 8 calls back to
+    back met no rate limit (8-oct-2026)."""
     import ai_take
     import free_voice
-    free = free_voice.voice_items(client, items) if free_voice.engine() == "edge" else [None] * len(items)
-
-    def one(k):
-        it = items[k]
-        path = os.path.join(job_dir, f".{prefix}_{k + 1}.wav")
-        secs = None
+    use_free = free_voice.engine() == "edge" and not free_voice.resting()
+    free = free_voice.voice_items(client, items) if use_free else [None] * len(items)
+    path_of = [os.path.join(job_dir, f".{prefix}_{k + 1}.wav") for k in range(len(items))]
+    out = [None] * len(items)
+    for k in range(len(items)):
         if free[k]:
-            secs = free_voice.speak(free[k][0], path, free[k][1], free[k][2])
-        if not secs:
-            if os.path.exists(path + ".words.json"):
-                os.remove(path + ".words.json")
-            secs = ai_take.speak(client, it["text"], path, it.get("voice") or ai_take.DEFAULT_VOICE,
-                                 it.get("style"), **({"language": it["language"]} if it.get("language") else {}))
-        return (path, secs) if secs else (None, 0.0)
+            secs = free_voice.speak(free[k][0], path_of[k], free[k][1], free[k][2])
+            if secs:
+                out[k] = (path_of[k], secs)
+            time.sleep(free_voice.PAUSE)
 
+    def gemini_line(k):
+        it = items[k]
+        if os.path.exists(path_of[k] + ".words.json"):
+            os.remove(path_of[k] + ".words.json")
+        secs = ai_take.speak(client, it["text"], path_of[k], it.get("voice") or ai_take.DEFAULT_VOICE,
+                             it.get("style"), **({"language": it["language"]} if it.get("language") else {}))
+        return (path_of[k], secs) if secs else (None, 0.0)
+    rest = [k for k in range(len(items)) if out[k] is None]
     with ThreadPoolExecutor(max_workers=3) as pool:
-        return list(pool.map(one, range(len(items))))
+        for k, got in zip(rest, pool.map(gemini_line, rest)):
+            out[k] = got
+    return out
 
 
 def ass_header(extra_styles=()):
@@ -514,13 +521,13 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write("\n".join(ass_header(extra_styles) + list(events)) + "\n")
     if bg_video:
-        cmd = ["ffmpeg", "-y", "-v", "error", "-i", bg_video]
+        cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", bg_video]
         bg_image = None
     elif bg_image:
-        cmd = ["ffmpeg", "-y", "-v", "error", "-loop", "1", "-framerate", str(FPS),
+        cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-loop", "1", "-framerate", str(FPS),
                "-t", f"{seconds:.3f}", "-i", bg_image]
     else:
-        cmd = ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", bg_source(colors, seconds)]
+        cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", bg_source(colors, seconds)]
     cmd += ["-f", "lavfi", "-t", f"{seconds:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
     graph, v, mix, idx = [], "[0:v]", ["[1:a]"], 2
     if bg_video:
@@ -598,8 +605,10 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
                                   "-t", f"{seconds:.3f}", "-r", str(FPS),
                                   *(FAST_PASS if fast else video_encode_args(QUALITY)), "-c:a", "aac", "-b:a", "192k",
                                   *METADATA_SCRUB, "-movflags", "+faststart", out_path],
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                           errors="replace", timeout=1800)
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                           # A render that stalls (one did, 15-oct-2026: 41 s of CPU in 15 min)
+                           # fails in minutes, not after half an hour.
+                           errors="replace", timeout=max(600, seconds * 12))
         if r.returncode != 0:
             raise RuntimeError(f"render failed: {r.stderr.strip()[-400:]}")
     finally:

@@ -98,6 +98,7 @@ MAIN_ENGAGE_DEFAULTS = {k: False for k in ENGAGE_DEFAULTS}
 ENGAGE_EVERY = 900
 _lock = threading.Lock()
 _ideas_failed = {}
+failure_reason = None     # app.py sets it: job id -> the one-line reason the job failed
 
 
 # ------------------------------------------------------------------ store
@@ -668,7 +669,8 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
         if state == "completed" and clips:
             changed.append((j["job_id"], "done", None, _used_items(os.path.join(output_dir, j["job_id"]))))
         elif state in ("failed", "error", "cancelled") or (state == "completed" and not clips):
-            changed.append((j["job_id"], "failed", "the job failed", []))
+            reason = failure_reason(j["job_id"]) if failure_reason else None
+            changed.append((j["job_id"], "failed", reason or "the job failed", []))
         elif now - j.get("at", now) > KINDS.get(ch["kind"], {}).get("timeout", JOB_TIMEOUT):
             changed.append((j["job_id"], "failed", "took too long", []))
     if not changed:

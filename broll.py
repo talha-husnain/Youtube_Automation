@@ -106,7 +106,7 @@ def _shot(job_dir, k, frames, item, offset, close, w, h):
         vf = (f"scale={W2}:{H2}:force_original_aspect_ratio=increase,crop={W2}:{H2},"
               f"loop=loop={frames - 1}:size=1:start=0,setpts=N/{FPS}/TB,"
               f"crop={cw * 2}:{ch * 2}:x='{x}':y='{y}',scale={w}:{h}:flags=bicubic,setsar=1,{DIM},format=yuv420p")
-    r = subprocess.run(["ffmpeg", "-y", "-v", "error", *src, "-vf", vf, "-frames:v", str(frames), "-r", str(FPS),
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", *src, "-vf", vf, "-frames:v", str(frames), "-r", str(FPS),
                         "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
                         "-video_track_timescale", "30000", out],
                        cwd=job_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace",
@@ -148,7 +148,7 @@ def build(job_dir, shots, out_name=".broll.mp4", size=(kit.OUT_W, kit.OUT_H), wo
         names = list(ex.map(lambda a: _shot(job_dir, a[0], *a[1], w, h), enumerate(shots)))
     with open(os.path.join(job_dir, ".broll_parts.txt"), "w", encoding="utf-8", newline="\n") as f:
         f.write("".join(f"file '{n}'\n" for n in names))
-    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", ".broll_parts.txt",
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", ".broll_parts.txt",
                         "-c", "copy", out_name], cwd=job_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        text=True, errors="replace", timeout=600)
     if r.returncode != 0:

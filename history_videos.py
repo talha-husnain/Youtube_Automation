@@ -804,7 +804,7 @@ def segment(job_dir, picture, out, frames, motion, events):
     vf = (f"loop=loop={frames - 1}:size=1:start=0,setpts=N/{FPS}/TB,crop={cw}:{chh}:x='{x}':y='{y}',"
           f"scale={W}:{H}:flags=bicubic,setsar=1,format=yuv420p,"
           f"ass=filename='{escape_filter_value(ass)}':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'")
-    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", picture, "-vf", vf, "-frames:v", str(frames),
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", picture, "-vf", vf, "-frames:v", str(frames),
                         "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
                         "-pix_fmt", "yuv420p", "-video_track_timescale", "30000", "-an", out],
                        cwd=job_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -824,7 +824,7 @@ def segment_video(job_dir, video, out, frames, offset, close, events):
     vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}scale={W}:{H},fps={FPS},"
           f"setsar=1,format=yuv420p,"
           f"ass=filename='{escape_filter_value(ass)}':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'")
-    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{offset:.2f}", "-stream_loop", "-1", "-i", video,
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{offset:.2f}", "-stream_loop", "-1", "-i", video,
                         "-vf", vf, "-frames:v", str(frames), "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",
                         "-crf", "21", "-pix_fmt", "yuv420p", "-video_track_timescale", "30000", "-an", out],
                        cwd=job_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -1007,7 +1007,7 @@ def _bed_tracks(sacred):
 def mix(job_dir, video, narration_wav, out, total, whooshes, sections, tracks):
     """The final file: the joined video (copied), the narration, a whoosh per
     card and a music bed per chapter (looped, faded)."""
-    cmd = ["ffmpeg", "-y", "-v", "error", "-i", video, "-i", narration_wav]
+    cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", video, "-i", narration_wav]
     graph = [f"[1:a]{LOUDNORM_FILTER},aresample=48000,aformat=channel_layouts=stereo[vo]"]
     mixin = ["[vo]"]
     idx = 2
@@ -1069,7 +1069,7 @@ def render(job_dir, segs, pics, title_pic, out_name, workers=3, log=print):
                 log(f"   🎞️ {done}/{len(segs)} shots rendered")
     with open(os.path.join(job_dir, ".hv_parts.txt"), "w", encoding="utf-8", newline="\n") as f:
         f.write("".join(f"file '{n}'\n" for n in names))
-    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", ".hv_parts.txt",
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", ".hv_parts.txt",
                         "-c", "copy", out_name], cwd=job_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        text=True, errors="replace", timeout=900)
     if r.returncode != 0:
@@ -1211,7 +1211,7 @@ def pictures(client, script, topic, job_dir, log=print):
 
 
 def frame_of(video, out, at=1.0):
-    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", video, "-frames:v", "1", "-q:v", "2",
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", video, "-frames:v", "1", "-q:v", "2",
                         out], capture_output=True, text=True, timeout=120)
     return out if r.returncode == 0 and os.path.isfile(out) else None
 

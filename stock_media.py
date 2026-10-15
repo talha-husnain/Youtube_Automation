@@ -75,6 +75,34 @@ def _write(path, data):
 
 # ------------------------------------------------------------------ search
 
+LIMITS_FILE = os.path.join(ROOT, "output", ".stock_limits.json")
+REST_SECONDS = 3600     # a library that says "too many requests" rests an hour
+
+
+class RateLimited(Exception):
+    pass
+
+
+def _get(url, headers=None, timeout=30):
+    """httpx.get that turns a 429 into RateLimited (Pexels: 200 an hour and
+    20,000 a month, docs 15-oct-2026; abuse ends the key)."""
+    r = httpx.get(url, headers=headers, timeout=timeout)
+    if r.status_code == 429:
+        raise RateLimited(url.split("?")[0])
+    return r
+
+
+def _resting(provider):
+    return _read(LIMITS_FILE, {}).get(provider, 0) > time.time()
+
+
+def _rest(provider):
+    with _lock:
+        data = _read(LIMITS_FILE, {})
+        data[provider] = int(time.time()) + REST_SECONDS
+        _write(LIMITS_FILE, data)
+    print(f"   ⏸️ {provider} says too many requests: resting it for an hour.")
+
 def _rendition(files, portrait):
     """The smallest file whose short side is at least 1080, else the largest
     of at least MIN_SHORT_SIDE: [(w, h, url)] -> (w, h, url) or None."""
@@ -86,7 +114,7 @@ def _rendition(files, portrait):
 
 
 def _pexels_videos(term, portrait, key):
-    r = httpx.get("https://api.pexels.com/v1/videos/search?" + urlencode(
+    r = _get("https://api.pexels.com/v1/videos/search?" + urlencode(
         {"query": term, "per_page": 20, "orientation": "portrait" if portrait else "landscape"}),
         headers={"Authorization": key, "User-Agent": UA}, timeout=30)
     out = []
@@ -103,7 +131,7 @@ def _pexels_videos(term, portrait, key):
 
 
 def _pixabay_videos(term, portrait, key):
-    r = httpx.get("https://pixabay.com/api/videos/?" + urlencode(
+    r = _get("https://pixabay.com/api/videos/?" + urlencode(
         {"key": key, "q": term[:100], "per_page": 50, "safesearch": "true"}), headers={"User-Agent": UA}, timeout=30)
     out = []
     for v in (r.json() or {}).get("hits") or [] if r.status_code == 200 else []:
@@ -121,7 +149,7 @@ def _pixabay_videos(term, portrait, key):
 
 
 def _pexels_photos(term, portrait, key):
-    r = httpx.get("https://api.pexels.com/v1/search?" + urlencode(
+    r = _get("https://api.pexels.com/v1/search?" + urlencode(
         {"query": term, "per_page": 20, "orientation": "portrait" if portrait else "landscape"}),
         headers={"Authorization": key, "User-Agent": UA}, timeout=30)
     out = []
@@ -138,7 +166,7 @@ def _pexels_photos(term, portrait, key):
 
 
 def _pixabay_photos(term, portrait, key):
-    r = httpx.get("https://pixabay.com/api/?" + urlencode(
+    r = _get("https://pixabay.com/api/?" + urlencode(
         {"key": key, "q": term[:100], "image_type": "photo", "per_page": 30, "safesearch": "true",
          "orientation": "vertical" if portrait else "horizontal"}), headers={"User-Agent": UA}, timeout=30)
     out = []
@@ -170,7 +198,7 @@ def _openverse_photos(term, portrait, key=None):
     query = {"q": term[:100], "license": "cc0,pdm", "size": "large", "mature": "false", "page_size": 20}
     if not portrait:
         query["aspect_ratio"] = "wide"
-    r = httpx.get("https://api.openverse.org/v1/images/?" + urlencode(query), headers={"User-Agent": UA}, timeout=30)
+    r = _get("https://api.openverse.org/v1/images/?" + urlencode(query), headers={"User-Agent": UA}, timeout=30)
     out = []
     for p in (r.json() or {}).get("results") or [] if r.status_code == 200 else []:
         w, h = int(p.get("width") or 0), int(p.get("height") or 0)
@@ -196,7 +224,7 @@ def search(term, portrait=True, kind="video"):
         return []
     out = []
     for provider, key in keys().items():
-        if not key or (provider, kind) not in SEARCHERS:
+        if not key or (provider, kind) not in SEARCHERS or _resting(provider):
             continue
         cache_key = f"{provider}|{kind}|{'p' if portrait else 'l'}|{term.lower()}"
         with _lock:
@@ -206,6 +234,9 @@ def search(term, portrait=True, kind="video"):
             continue
         try:
             items = SEARCHERS[(provider, kind)](term, portrait, key)
+        except RateLimited:
+            _rest(provider)
+            continue
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
             print(f"   ℹ️ {provider} search failed for '{term}' ({type(e).__name__}).")
             continue
@@ -334,7 +365,7 @@ def _valid(path, kind):
         except Exception:  # noqa: BLE001
             return False
     # Decode the first two seconds: a truncated file fails here, not mid-render.
-    r = subprocess.run(["ffmpeg", "-v", "error", "-t", "2", "-i", path, "-f", "null", "-"],
+    r = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-t", "2", "-i", path, "-f", "null", "-"],
                        capture_output=True, text=True, timeout=120)
     return r.returncode == 0 and not r.stderr.strip()
 
@@ -424,6 +455,17 @@ def for_scenes(client, topic, scenes, terms, portrait=True, photos=True, log=pri
 
 
 def credit_line(items):
-    """'Footage: Pexels, Pixabay' for the description, or ''."""
-    names = sorted({c["provider"] for c in items if c})
-    return f"Stock footage and photos: {', '.join(names)} (free licence)." if names else ""
+    """The footage credit for the description: each library with the people
+    who filmed or photographed it (Pexels asks for the name when possible), or ''."""
+    by = {}
+    for c in items:
+        if c:
+            names = by.setdefault(c["provider"], [])
+            if c.get("author") and c["author"] not in names:
+                names.append(c["author"])
+    if not by:
+        return ""
+    parts = [f"{p} ({', '.join(n[:6])}{' and others' if len(n) > 6 else ''})" if n else p
+             for p, n in sorted(by.items())]
+    return "Stock footage and photos (free licence): " + "; ".join(parts) + "."
+

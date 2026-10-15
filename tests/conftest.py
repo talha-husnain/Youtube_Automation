@@ -65,3 +65,7 @@ def _private_channel_files(tmp_path, monkeypatch):
     monkeypatch.setattr(stock_media, "USED_FILE", str(tmp_path / "stock_used.json"))
     monkeypatch.setattr(stock_media, "CACHE_DIR", str(tmp_path / "stock_cache"))
     monkeypatch.setattr(stock_media, "OPENVERSE_FILE", str(tmp_path / "openverse_calls.json"))
+    monkeypatch.setattr(stock_media, "LIMITS_FILE", str(tmp_path / "stock_limits.json"))
+    import free_voice
+    monkeypatch.setattr(free_voice, "STATE_FILE", str(tmp_path / "free_voice.json"))
+    monkeypatch.setattr(free_voice, "PAUSE", 0)

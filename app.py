@@ -2002,6 +2002,16 @@ _ERROR_MARKERS = ("❌", "ERROR:", "Error:", "Traceback", "FATAL", "Exception",
                   "Reframe v2 failed")
 
 
+def _job_reason(job_id):
+    """The one-line reason a job failed ("Not enough reliable sources..."), from
+    its log, for the Channels and Today pages; None when there is none."""
+    for ln in reversed((jobs.get(job_id) or {}).get("logs") or []):
+        m = re.search(r"\b(?:RuntimeError|ValueError|HTTPException|Exception): (.+)", ln)
+        if m:
+            return m.group(1).strip()[:160]
+    return None
+
+
 def _job_error_text(logs) -> str:
     """The lines that explain WHY a job failed, for the alert's classifier.
 
@@ -2335,6 +2345,7 @@ async def lifespan(app: FastAPI):
         # main channel's Autopilot above runs exactly as before.
         import my_channels
         import short_kit
+        my_channels.failure_reason = _job_reason
         asyncio.create_task(my_channels.loop_forever(
             _autopilot_submit, _job_clips, OUTPUT_DIR, short_kit.gemini, is_active=lambda: not _draining,
             today_fn=_today))
@@ -3219,9 +3230,11 @@ def _today():
             p.append("switched off")
         if ch.get("upload_paused_until", 0) > now:
             p.append("daily upload limit reached, uploads start again later")
-        failed = len(my_channels._jobs_on(ch, day, ("failed",)))
-        if failed:
-            p.append(f"{failed} Short(s) failed today")
+        failed_jobs = my_channels._jobs_on(ch, day, ("failed",))
+        if failed_jobs:
+            # The latest reason, so the owner knows whether it needs them or fixes itself.
+            why = (sorted(failed_jobs, key=lambda j: j.get("at", 0))[-1].get("error") or "").strip()
+            p.append(f"{len(failed_jobs)} failed today" + (f" (latest: {why[:90]})" if why else ""))
         with youtube_account.use(my_channels.account(ch["id"])):
             rows.append(_today_row(ch["id"], ch["name"], ch["kind"], ch["per_day"],
                                    len(my_channels._jobs_on(ch, day)), (ch.get("stats") or {}).get("views"),

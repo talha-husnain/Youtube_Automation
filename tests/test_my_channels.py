@@ -362,3 +362,16 @@ def test_each_shorts_channel_tests_its_end_card_and_keeps_the_winner():
     close = {"ab": {"outro": {"true": {"shorts": 8, "median": 100}, "false": {"shorts": 8, "median": 110}}}}
     mc._change(ch["id"], lambda c: c.update(stats=close))
     assert mc.ab_choice(mc.get(ch["id"]), _r.Random(5)) in (True, False)
+
+
+def test_a_failed_job_keeps_the_reason_from_its_log(monkeypatch):
+    app_module = pytest.importorskip("app")
+    monkeypatch.setitem(app_module.jobs, "jx", {"logs": ["Job started by worker.", "Traceback (most recent call last):",
+                                                         "RuntimeError: Not enough reliable sources for this topic (2).",
+                                                         "Process failed with exit code 1"]})
+    assert app_module._job_reason("jx") == "Not enough reliable sources for this topic (2)."
+    monkeypatch.setattr(mc, "failure_reason", app_module._job_reason)
+    ch = mc.add("controversy")
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "jx", "status": "running", "at": 1, "day": "d"}]))
+    ch = mc.refresh_jobs(mc.get(ch["id"]), lambda j: ("failed", []), "out", now=2)
+    assert ch["jobs"][0]["error"] == "Not enough reliable sources for this topic (2)."

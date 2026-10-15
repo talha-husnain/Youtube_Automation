@@ -29,10 +29,34 @@ URDU = {"male": "ur-PK-AsadNeural", "female": "ur-PK-UzmaNeural"}
 ENGLISH = {"male": "en-US-GuyNeural", "female": "en-US-JennyNeural"}
 TIMEOUT = 60
 TRIES = 3
+# Microsoft answers 403 to an address that sends many requests in a short time
+# (pyvideotrans' edge-tts notes, 15-oct-2026): lines go one at a time with a
+# pause, and a refusal rests the free voice for COOLDOWN (Gemini meanwhile).
+PAUSE = 1.2
+COOLDOWN = 30 * 60
+ROOT = os.path.dirname(os.path.abspath(__file__))
+STATE_FILE = os.path.join(ROOT, "output", ".free_voice.json")
 
 
 def engine():
     return (os.environ.get("VOICE_ENGINE") or "edge").lower()
+
+
+def resting():
+    """True while the free voice rests after a refusal (shared by every job)."""
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            return float(json.load(f).get("rest_until", 0)) > __import__("time").time()
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def _rest(reason):
+    import time
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"rest_until": time.time() + COOLDOWN, "reason": reason[:200]}, f)
+    print(f"   ⏸️ Free voice refused ({reason[:80]}); Gemini voices the next {COOLDOWN // 60} minutes.")
 
 
 def gender(voice):
@@ -87,13 +111,18 @@ async def _say(text, voice, rate, mp3):
 def speak(text, path, voice, rate="+0%"):
     """``text`` read by an edge voice into a 24 kHz mono wav at ``path``, the
     word times saved beside it. Returns the length, or None."""
+    import time
+    if resting():
+        return None
     mp3 = path + ".mp3"
-    for _attempt in range(TRIES):
+    for attempt in range(TRIES):
+        if attempt:
+            time.sleep(3 * attempt)
         try:
             words = asyncio.run(asyncio.wait_for(_say(text, voice, rate, mp3), TIMEOUT))
             if not os.path.isfile(mp3) or os.path.getsize(mp3) < 2000:
                 raise ValueError("no audio")
-            subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", mp3, "-ar", "24000", "-ac", "1",
+            subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", mp3, "-ar", "24000", "-ac", "1",
                             "-sample_fmt", "s16", path], check=True, timeout=120)
             tokens = text.split()
             if len(tokens) == len(words):
@@ -105,6 +134,9 @@ def speak(text, path, voice, rate="+0%"):
             return kit.wav_seconds(path)
         except Exception as e:  # noqa: BLE001 — retried, then Gemini takes the line
             last = e
+            if "403" in str(e) or "429" in str(e):
+                _rest(str(e))
+                break
         finally:
             if os.path.exists(mp3):
                 os.remove(mp3)

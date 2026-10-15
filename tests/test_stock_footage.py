@@ -103,7 +103,7 @@ def test_each_scene_gets_its_pick_and_used_clips_rest(keys, monkeypatch):
     assert seen["pools"] == [["pexels:v2"], ["pixabay:v9"]] and seen["rule"] == "no handcuffs"
     assert got[0]["path"] == "/cache/pexels:v2.mp4" and got[1] is None
     assert "pexels:v2" in sm.recently_used()
-    assert sm.credit_line(got) == "Stock footage and photos: Pexels (free licence)."
+    assert sm.credit_line(got) == "Stock footage and photos (free licence): Pexels."
 
 
 def test_the_picker_sees_each_clip_once_and_never_reuses_one(monkeypatch):
@@ -204,3 +204,33 @@ def test_planners_hear_what_gets_views_this_week(monkeypatch, tmp_path):
     n = len(calls)
     assert trends.hint("cricket") == h and len(calls) == n          # cached
     assert trends.hint("music") == ""                              # no queries for that niche
+
+
+def test_footage_credits_name_the_people_and_a_busy_library_rests(keys, monkeypatch):
+    line = sm.credit_line([{"provider": "Pexels", "author": "Ann"}, {"provider": "Pexels", "author": "Bo"},
+                           {"provider": "Pixabay", "author": ""}, None])
+    assert line == "Stock footage and photos (free licence): Pexels (Ann, Bo); Pixabay."
+    calls = []
+
+    def get(url, headers=None, timeout=None):
+        calls.append(url)
+        return _R({}, 429) if "pexels" in url else _R(PIXABAY)
+    monkeypatch.setattr(sm.httpx, "get", get)
+    got = sm.search("rain at night")
+    assert [g["provider"] for g in got] == ["Pixabay"]
+    calls.clear()
+    sm.search("another term")
+    assert not any("pexels" in c for c in calls)        # Pexels rests for an hour
+
+
+def test_the_free_voice_rests_after_microsoft_refuses(monkeypatch, tmp_path):
+    import free_voice as fv
+
+    async def refused(text, voice, rate, mp3):
+        raise RuntimeError("WSServerHandshakeError: 403, message='Invalid response status'")
+    monkeypatch.setattr(fv, "_say", refused)
+    assert fv.speak("lafz", str(tmp_path / "a.wav"), "ur-PK-AsadNeural") is None
+    assert fv.resting()
+    called = []
+    monkeypatch.setattr(fv, "_say", lambda *a: called.append(1))
+    assert fv.speak("lafz", str(tmp_path / "b.wav"), "ur-PK-AsadNeural") is None and called == []
