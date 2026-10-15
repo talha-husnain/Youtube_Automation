@@ -263,7 +263,10 @@ happened in 680 AD", "How the US government really works", "Why America owes so 
 Never: {rules}.
 {learn}Never repeat any of these, already made:
 {avoid}
-One per line, each starting with "topic: ", at most 90 characters, no translation in brackets. Nothing else."""
+One per line, each starting with "topic: ", at most 90 characters, no translation in brackets.
+When one big story is too much for a single video (an empire's whole history), you may plan it ONCE as a series
+of 2 to 4 parts on one line instead: "series: <series name> | <part 1 topic> | <part 2 topic> | <part 3 topic>",
+each part its own clear story in time order. At most one series line. Nothing else."""
 
 TREND_QUERIES = {
     "urdu": ["history in urdu", "tareekh documentary urdu", "islamic history urdu", "rise and fall empire urdu",
@@ -327,7 +330,24 @@ def channel_ideas(client, count=2, avoid=(), best=(), worst=(), notes="", lang="
         owner=owner, trending=hint, rules=RULES, learn=learn,
         avoid="\n".join(list(avoid)[-80:]) or "(nothing yet)"))
     seen = {a.lower() for a in avoid}
-    return [i for i in cs._idea_lines(text) if i["kind"] == "topic" and i["text"].lower() not in seen][:count * 3 + 2]
+    ideas = [i for i in cs._idea_lines(text) if i["kind"] == "topic" and i["text"].lower() not in seen]
+    return (series_ideas(text, seen) + ideas)[:count * 3 + 2]
+
+
+def series_ideas(text, seen=()):
+    """The planner's "series: name | part 1 | part 2 ..." line as one idea per
+    part, in order (one series per plan; the first one wins)."""
+    for line in (text or "").splitlines():
+        m = re.match(r"\W*series\s*:\s*(.+)", line.strip(), re.I)
+        if not m:
+            continue
+        bits = [re.sub(r"\s+", " ", b).strip(" *\"'")[:120] for b in m.group(1).split("|")]
+        name, parts = bits[0], [b for b in bits[1:] if b][:SERIES_MAX]
+        if not name or len(parts) < 2 or any(p.lower() in seen for p in parts):
+            continue
+        return [{"kind": "topic", "text": p, "series": name, "part": k, "parts": len(parts), "before": parts[:k - 1]}
+                for k, p in enumerate(parts, 1)]
+    return []
 
 
 # ------------------------------------------------------------------ writing
@@ -411,8 +431,63 @@ def _narration_text(script):
     return "\n".join(out + [script.outro, script.question])
 
 
-def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_fn=None):
-    """(Script, facts, sources) that passed the fact check, or raises."""
+# ------------------------------------------------------------------ series
+# A topic too big for one video (the Ottomans, the Mughals) is planned as 2-4
+# parts; each part knows the series, opens with where the last part ended and
+# ends on what the next one tells, so a viewer watches on.
+
+SERIES_MAX = 4
+
+
+def series_env():
+    """{"name", "part", "parts", "before": [earlier part topics]} from the job's env, or None."""
+    name = re.sub(r"\s+", " ", os.environ.get("HISTORY_SERIES") or "").strip()[:120]
+    try:
+        part, parts = int(os.environ.get("HISTORY_PART") or 0), int(os.environ.get("HISTORY_PARTS") or 0)
+    except ValueError:
+        return None
+    if not name or not 1 <= part <= parts <= SERIES_MAX:
+        return None
+    try:
+        before = [str(b)[:120] for b in json.loads(os.environ.get("HISTORY_BEFORE") or "[]")][:SERIES_MAX]
+    except ValueError:
+        before = []
+    return {"name": name, "part": part, "parts": parts, "before": before}
+
+
+def series_topic(topic, series):
+    """What research searches for: the part, named with its series."""
+    if not series or series["name"].lower() in topic.lower():
+        return topic
+    return f"{series['name']}: {topic}"
+
+
+def series_note(series, lang="urdu"):
+    if not series:
+        return ""
+    k, n = series["part"], series["parts"]
+    note = [f"This video is PART {k} of {n} of our series \"{series['name']}\". Tell only this part's story."]
+    if series["before"]:
+        note.append("Earlier parts told: " + "; ".join(series["before"]) + ". Do not retell them.")
+    if k > 1:
+        note.append(f"Open the hook with one line that tells a new viewer where part {k - 1} ended.")
+    if k < n:
+        note.append(f"In the outro, say in one line what part {k + 1} will tell, and ask viewers to watch it next.")
+    else:
+        note.append("This is the last part: the outro closes the whole series.")
+    return " ".join(note)
+
+
+def part_title(title, part):
+    """The title with its part number, which viewers look for in a series."""
+    if re.search(r"\b(part|hissa|qist)\s*\d", title, re.I):
+        return title
+    return f"{title.strip()[:88]} | Part {part}"
+
+
+def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_fn=None, series_note=""):
+    """(Script, facts, sources) that passed the fact check, or raises.
+    ``series_note``: where this part sits in a series (series_note())."""
     from quiz_shorts import quiz_model
     facts, extra, sources = (research_fn or research)(client, topic, minutes)
     if not facts or "NOT FOUND" in facts[:200].upper() or len(sources) < MIN_SOURCES:
@@ -421,7 +496,8 @@ def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_
     fixes = ""
     for attempt in range(2):
         script = kit.ask_json(client, Script, SCRIPT_PROMPT.format(
-            minutes=minutes, handle=handle, topic=topic, lang_rule=LANG_RULE.get(lang, LANG_RULE["urdu"]),
+            minutes=minutes, handle=handle, topic=topic + (f"\n{series_note}" if series_note else ""),
+            lang_rule=LANG_RULE.get(lang, LANG_RULE["urdu"]),
             fixes=fixes, facts=facts, extra=extra or "(none)", words=words, rules=RULES, sacred=SACRED,
             chapters=chapters, scenes=scenes, no_people=NO_PEOPLE,
             honour=HONOUR.get(lang, HONOUR["urdu"])), model=quiz_model())
@@ -982,13 +1058,44 @@ def watch_next(description, uploads, lang="urdu", n=2, now=None):
         except ValueError:
             return False
     longs = [r for r in uploads if r.get("genre") == "history" and r.get("status") == "done"
-             and r.get("video_id") and public(r)]
+             and r.get("video_id") and public(r) and not r.get("blocked")     # Content ID blocked: nobody can watch it
+             and r["video_id"] not in description]                           # a series part is linked already
     if not longs:
         return description
     longs.sort(key=lambda r: (r.get("views") or 0, r.get("created", 0)), reverse=True)
     lines = [f"- {_esc(r.get('title') or '')[:90]}: https://youtu.be/{r['video_id']}" for r in longs[:n]]
     block = WATCH_NEXT.get(lang, WATCH_NEXT["urdu"]) + "\n" + "\n".join(lines)
     return credits.insert(description, block[:WATCH_NEXT_ROOM - 4])
+
+
+PART_WORD = {"urdu": ("Pichla hissa", "Agla hissa"), "english": ("Previous part", "Next part")}
+
+
+def series_rows(uploads, series):
+    """{part: upload row} of this series' long videos already uploaded."""
+    out = {}
+    for r in uploads:
+        if (r.get("genre") == "history" and r.get("status") == "done" and r.get("video_id")
+                and r.get("series") == series and r.get("series_part") and not r.get("blocked")):
+            out[int(r["series_part"])] = r
+    return out
+
+
+def series_links(description, uploads, series, part, lang="urdu"):
+    """A series part's description with links to its earlier parts. They were
+    scheduled before it, so they are public by the time it is."""
+    import credits
+    rows = series_rows(uploads, series)
+    before = [k for k in sorted(rows) if k < part]
+    if not before:
+        return description
+    word = PART_WORD.get(lang, PART_WORD["urdu"])[0]
+    lines = [f"{word} (Part {k}): https://youtu.be/{rows[k]['video_id']}" for k in before]
+    return credits.insert(description, "\n".join(lines))
+
+
+def next_part_line(video_id, part, lang="urdu"):
+    return f"{PART_WORD.get(lang, PART_WORD['urdu'])[1]} (Part {part}): https://youtu.be/{video_id}"
 
 
 def describe(script, marks, sources, credits, handle, lang, ai_used, stock_line=""):
@@ -1001,7 +1108,9 @@ def describe(script, marks, sources, credits, handle, lang, ai_used, stock_line=
             script.question.strip()]
     if sources:
         head += ["", "Sources:"] + [f"- {n}: {u}" if n else f"- {u}" for n, u in sources[:8]]
-    tail = ["", f"{word['follow']}{(' ' + handle) if handle else ''}", " ".join(tags)]
+    # A blank line before the hashtags: credits.insert puts later lines
+    # (watch_next, series links) above them only then.
+    tail = ["", f"{word['follow']}{(' ' + handle) if handle else ''}", "", " ".join(tags)]
     pics = ["", "Pictures: free-licence pictures from Wikimedia Commons"
             + ("; the other pictures are AI illustrations." if ai_used else ".")] if credits else (
         ["", "Pictures: AI illustrations."] if ai_used else [])
@@ -1303,7 +1412,13 @@ def run(output_dir, pipeline):
     client = kit.gemini()
     started = time.time()
     print(f"📜 History video ({minutes} min, {lang}): researching \"{topic}\"...")
-    script, facts, sources = write(client, topic, handle or "this channel", minutes, lang)
+    series = series_env()
+    if series:
+        print(f"   📚 Part {series['part']} of {series['parts']} of the series \"{series['name']}\".")
+    script, facts, sources = write(client, series_topic(topic, series), handle or "this channel", minutes, lang,
+                                   series_note=series_note(series, lang))
+    if series:
+        script.title = part_title(script.title, series["part"])
     sc = scenes_of(script)
     print(f"   ✅ \"{script.title}\": {len(script.chapters)} chapters, {len(sc)} scenes, {word_count(script)} words, "
           f"{len(sources)} sources{', sacred: no people shown, no music' if script.sacred else ''}.")
@@ -1345,7 +1460,7 @@ def run(output_dir, pipeline):
             "chapters": [{"title": t, "at": round(a, 2)} for t, a in marks],
             "source_links": real, "photo_credit": "\n".join(credits),
             "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in stock],
-            "history": {"topic": topic, "minutes": minutes, "lang": lang, "sacred": script.sacred,
+            "history": {"topic": topic, "minutes": minutes, "lang": lang, "sacred": script.sacred, "series": series,
                         "pictures": {"free": len(credits), "stock": len(stock), "ai": ai_used},
                         "background_music": bool(tracks),
                         # The teaser Short (run_teaser) reuses the opening's voice and pictures.
@@ -1457,7 +1572,7 @@ def moments_for(client, script, src, lang, teaser_end, n=2):
         start = moment_start(script, m)
         if start is None or start < teaser_end or m.chapter in chapters or not m.hook.strip():
             continue
-        m.hook = _no_roman(m.hook.strip())
+        m.hook = _no_roman(m.hook.strip(), lang)
         m.title = m.title.strip()[:90] or script.title
         chapters.add(m.chapter)
         keep.append(m)
@@ -1467,8 +1582,11 @@ def moments_for(client, script, src, lang, teaser_end, n=2):
     return keep
 
 
-def _no_roman(text):
-    """'Yazid I' was read as 'Yazid one'; a set-up line has no regnal numbers."""
+def _no_roman(text, lang="urdu"):
+    """'Yazid I' was read as 'Yazid one'; a Roman Urdu set-up line has no
+    regnal numbers. English is left alone: there "I" is the pronoun."""
+    if lang != "urdu":
+        return text
     return re.sub(r"\b([A-Z][a-z]+) (?:I{1,3}|IV|V|VI{0,3})\b", r"\1", text)
 
 

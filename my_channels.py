@@ -359,9 +359,10 @@ def keeps(job_id, cid, age_seconds):
     ch = get(cid)
     return bool(ch) and any(j.get("job_id") == job_id and (
         j.get("status") in ("running", "done")
-        # An uploaded long video stays until its Shorts are made from it.
+        # An uploaded long video stays until its Shorts are made from it, and
+        # no longer than teaser_due would still offer it (its folder is GBs).
         or (j.get("status") == "uploaded" and KINDS.get(ch.get("kind"), {}).get("long")
-            and _parts(j) < shorts_per_long(ch)))
+            and _parts(j) < shorts_per_long(ch) and time.time() - j.get("at", 0) < TEASER_WINDOW))
         for j in ch.get("jobs") or [])
 
 
@@ -393,6 +394,8 @@ def summary(ch):
         "uploads": rows[:12], "ideas_left": len(ch.get("ideas") or []),
         "plans_ideas": ch["kind"] in PLANNERS,
         "up_next": [i.get("text", "") for i in (ch.get("ideas") or [])[:UP_NEXT_SHOWN]],
+        "up_next_series": [f"{i['series']}, part {i['part']} of {i['parts']}" if i.get("series") else ""
+                           for i in (ch.get("ideas") or [])[:UP_NEXT_SHOWN]],
     })
     return out
 
@@ -419,8 +422,13 @@ def add_idea(cid, text):
     if not text:
         raise ValueError("Write a topic first.")
     idea = _owner_idea(ch["kind"], text)
-    return _change(cid, lambda c: c.update(
-        ideas=[idea] + [i for i in c.get("ideas") or [] if i.get("text", "").lower() != text.lower()]))
+
+    def fn(c):
+        rest = [i for i in c.get("ideas") or [] if i.get("text", "").lower() != text.lower()]
+        # A just-finished match (urgent) still goes first: it is news for a few hours only.
+        urgent = [i for i in rest if i.get("urgent")]
+        c["ideas"] = urgent + [idea] + [i for i in rest if not i.get("urgent")]
+    return _change(cid, fn)
 
 
 def drop_idea(cid, text):
@@ -429,8 +437,12 @@ def drop_idea(cid, text):
     text = str(text or "")
 
     def fn(c):
-        c["ideas"] = [i for i in c.get("ideas") or [] if i.get("text") != text]
-        c["used"] = ((c.get("used") or []) + [text[:140]])[-300:]
+        ideas = c.get("ideas") or []
+        # A series without one of its parts no longer tells one story: the rest goes too.
+        series = next((i.get("series") for i in ideas if i.get("text") == text and i.get("series")), None)
+        gone = [i.get("text", "") for i in ideas if i.get("text") == text or (series and i.get("series") == series)]
+        c["ideas"] = [i for i in ideas if i.get("text", "") not in gone]
+        c["used"] = ((c.get("used") or []) + [t[:140] for t in gone or [text]])[-300:]
     return _change(cid, fn)
 
 
@@ -665,10 +677,15 @@ def _next_payload(ch, client_fn, log=print):
             return ({**look, "genre": "controversy", "controversy_topic": idea["text"], "bg_music": True},
                     {"label": idea["text"], "format": "controversy", "topic": idea["text"]})
         if kind == "history":
+            series = ({"history_series": idea["series"], "history_part": idea["part"],
+                       "history_parts": idea["parts"], "history_before": idea.get("before") or []}
+                      if idea.get("series") else {})
             return ({**look, "genre": "history", "history_topic": idea["text"], "bg_music": True,
                      "history_minutes": ch.get("minutes", DEFAULT_MINUTES), "history_lang": ch.get("lang", "urdu"),
-                     "frame_outro": False},
-                    {"label": idea["text"], "format": "history", "topic": idea["text"]})
+                     "frame_outro": False, **series},
+                    {"label": (f"Part {idea['part']}: " if series else "") + idea["text"], "format": "history",
+                     "topic": idea["text"],
+                     **({"series": idea["series"], "series_part": idea["part"]} if series else {})})
         return ({**look, "genre": "cricket", "cricket_mode": idea["kind"], "cricket_match": idea["text"],
                  "bg_music": True},
                 {"label": idea["text"], "format": idea["kind"], "topic": idea["text"],
@@ -733,7 +750,8 @@ def match_watch(ch, client_fn, log=print, now=None):
     recent = [_teams(j.get("topic") or "") for j in ch.get("jobs") or []
               if j.get("format") == "match" and j.get("status") in ("running", "done", "uploaded")
               and now - j.get("at", 0) < 20 * 3600]
-    recent += [_teams(i["text"]) for i in ch.get("ideas") or [] if i.get("kind") == "match"]
+    # An owner's typed "A vs B" may be any match: the real result replaces it.
+    recent += [_teams(i["text"]) for i in ch.get("ideas") or [] if i.get("kind") == "match" and not i.get("owner")]
     new = []
     for line in found:
         teams = _teams(line)
@@ -742,7 +760,10 @@ def match_watch(ch, client_fn, log=print, now=None):
         recent.append(teams)
         new.append({"kind": "match", "text": line, "urgent": True})
     if new:
-        _change(ch["id"], lambda c: c.update(ideas=new + (c.get("ideas") or [])))
+        done = {_teams(x["text"]) for x in new}
+        _change(ch["id"], lambda c: c.update(ideas=new + [
+            i for i in c.get("ideas") or [] if not (i.get("owner") and i.get("kind") == "match"
+                                                    and _teams(i["text"]) in done)]))
         log(f"⚡ {ch['name']}: just finished: {', '.join(x['text'][:60] for x in new)}. Making it next.")
     return new
 
@@ -816,6 +837,45 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
 
 # ------------------------------------------------------------------ uploading
 
+SLOT_GAP = timedelta(minutes=40)
+QA_TRIES = 3
+
+
+def _clear_of(slot, uploads):
+    """``slot``, moved on by SLOT_GAP until no scheduled upload of the channel is that close."""
+    busy = []
+    for r in uploads:
+        try:
+            if r.get("status") == "done" and r.get("publish_at"):
+                busy.append(datetime.fromisoformat(r["publish_at"]))
+        except ValueError:
+            pass
+    for _ in range(24):
+        if all(abs(slot - b) >= SLOT_GAP for b in busy):
+            break
+        slot += SLOT_GAP
+    return slot
+
+
+def _link_previous_part(row, j, ch, log=print):
+    """The series' previous part gets a "next part" link to the one just
+    uploaded (inside youtube_account.use for this channel). Never fails the upload."""
+    import history_videos
+    import youtube_account
+    part = int(j.get("series_part") or 1)
+    prev = history_videos.series_rows(youtube_account.uploads(), j["series"]).get(part - 1)
+    if not prev or prev.get("next_linked"):
+        return
+    try:
+        youtube_account.add_to_description(prev["video_id"], history_videos.next_part_line(
+            row["video_id"], part, ch.get("lang", "urdu")))
+        prev["next_linked"] = row["video_id"]
+    except Exception as e:  # noqa: BLE001 — the new part is up either way
+        prev["next_link_error"] = str(e)[:200]
+        log(f"   ℹ️ {ch['name']}: could not link part {part - 1} to part {part} ({str(e)[:100]}).")
+    youtube_account._save_upload(prev)
+
+
 def upload_due(ch, now=None):
     now = now or time.time()
     return (ch.get("enabled") and ch.get("auto_upload") and waiting(ch)
@@ -841,7 +901,16 @@ def upload_waiting(ch, job_clips, log=print):
                 # Nobody watches these go up: a silent, black or frozen render stops here.
                 import video_qa
                 long = bool(KINDS.get(ch["kind"], {}).get("long")) and j.get("format") != "teaser"
-                problems = video_qa.check(clip["path"], long=long)
+                try:
+                    problems = video_qa.check(clip["path"], long=long)
+                except video_qa.Unchecked as e:
+                    # The checker, not the video: try again on the next pass, three times.
+                    tries = j.get("qa_tries", 0) + 1
+                    _set_job(ch["id"], j["job_id"], qa_tries=tries)
+                    if tries < QA_TRIES:
+                        log(f"   ℹ️ {ch['name']}: could not check '{clip['title'][:50]}' yet ({e}); next pass.")
+                        continue
+                    problems = [f"the check could not run {QA_TRIES} times ({e})"]
                 if problems:
                     _set_job(ch["id"], j["job_id"], status="failed", error="quality check: " + "; ".join(problems))
                     log(f"🚫 {ch['name']}: not uploading '{clip['title'][:60]}': {'; '.join(problems)}.")
@@ -858,13 +927,19 @@ def upload_waiting(ch, job_clips, log=print):
                              + timedelta(minutes=15, days=int(j.get("part") or 0)))
                 except ValueError:
                     after = soon
-                slot = max(after, soon)
+                # Today's teaser and the moments of earlier long videos would all
+                # land 15 minutes after the same posting time: one per gap.
+                slot = _clear_of(max(after, soon), youtube_account.uploads())
             else:
                 slot = youtube_account.next_slots(ch["post_times"], 1)[0]
             desc = promote(clip["description"], ch["id"])
             if KINDS[ch["kind"]].get("long") and j.get("format") != "teaser":
                 import history_videos
-                desc = history_videos.watch_next(desc, youtube_account.uploads(), ch.get("lang", "urdu"))
+                ups = youtube_account.uploads()
+                if j.get("series"):
+                    desc = history_videos.series_links(desc, ups, j["series"], j.get("series_part") or 1,
+                                                       ch.get("lang", "urdu"))
+                desc = history_videos.watch_next(desc, ups, ch.get("lang", "urdu"))
             row = youtube_account.upload(
                 clip["path"], clip["title"], desc, clip["tags"],
                 "history_teaser" if j.get("format") == "teaser" else KINDS[ch["kind"]]["genre"],
@@ -872,6 +947,7 @@ def upload_waiting(ch, job_clips, log=print):
                 meta={"job_id": j["job_id"], "clip_index": clip["index"], "channel": ch["id"],
                       "format": j.get("format"), "topic": j.get("topic"), "seconds": clip.get("seconds"),
                       "question": clip.get("question") or "", "answers": clip.get("answers") or [],
+                      **({"series": j["series"], "series_part": j.get("series_part")} if j.get("series") else {}),
                       **({"outro": j["outro"]} if j.get("outro") is not None else {})})
             if row.get("status") == "done":
                 done += 1
@@ -879,6 +955,8 @@ def upload_waiting(ch, job_clips, log=print):
                     youtube_account.add_thumbnail(row, clip["thumbnail"])
                 if clip.get("captions"):
                     youtube_account.add_captions(row, clip["captions"], clip.get("captions_language") or "ur")
+                if j.get("series") and (j.get("series_part") or 1) > 1:
+                    _link_previous_part(row, j, ch, log)
                 _set_job(ch["id"], j["job_id"], status="uploaded", video_id=row.get("video_id"),
                          slot=slot.isoformat())
                 log(f"⬆️ {ch['name']}: uploaded '{row['title'][:60]}' for {slot:%d %b %H:%M}.")

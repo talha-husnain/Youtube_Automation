@@ -12,6 +12,8 @@ and 320 px (a few seconds even for a long video) checks the file for:
   slow zooms of our Shorts keep every frame moving; a stalled render does not).
 
 check() returns the problems in plain words; an empty list means it may go up.
+When the checker itself cannot run (a timeout on a busy laptop) it raises
+Unchecked: that says nothing about the video, so the upload waits and tries again.
 """
 
 import json
@@ -24,6 +26,10 @@ FREEZE_SECONDS = 15.0
 SHORT_MAX = 180.0
 SHORT_MIN = 8.0
 LONG_MIN = 60.0
+
+
+class Unchecked(Exception):
+    """ffprobe or ffmpeg did not run to the end; the video may be fine."""
 
 
 def _probe(path):
@@ -45,14 +51,16 @@ def _scan(path, has_audio):
         cmd += [graph, "-map", "[v]"]
     r = subprocess.run(cmd + ["-f", "null", "-"], capture_output=True, text=True, timeout=1800,
                        stdin=subprocess.DEVNULL)
-    return r.stderr or ""
+    return r.stderr or "", r.returncode
 
 
 def check(path, long=False, silent_ok=False):
     """Plain-words problems with the finished video at ``path`` ([] = fine)."""
     try:
         info = _probe(path)
-    except (OSError, subprocess.SubprocessError, ValueError):
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Unchecked(f"ffprobe did not finish ({type(e).__name__})")
+    except ValueError:
         info = None
     if not info:
         return ["the file cannot be read"]
@@ -80,9 +88,11 @@ def check(path, long=False, silent_ok=False):
         if seconds < SHORT_MIN:
             problems.append(f"it is only {seconds:.1f} s long")
     try:
-        log = _scan(path, audio)
-    except (OSError, subprocess.SubprocessError):
-        return problems + ["the picture could not be checked"]
+        log, code = _scan(path, audio)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Unchecked(f"ffmpeg did not finish ({type(e).__name__})")
+    if code:
+        problems.append("it does not play to the end")
     vol = re.search(r"mean_volume:\s*(-?[\d.]+|-inf) dB", log)
     if audio and not silent_ok and vol and (vol.group(1) == "-inf" or float(vol.group(1)) < SILENT_DB):
         problems.append(f"it is silent (mean volume {vol.group(1)} dB)")

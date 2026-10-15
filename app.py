@@ -4516,6 +4516,10 @@ async def process_endpoint(
     history_teaser_of: Optional[str] = Form(None),
     history_video_id: Optional[str] = Form(None),
     history_teaser_part: Optional[str] = Form(None),
+    history_series: Optional[str] = Form(None),
+    history_part: Optional[str] = Form(None),
+    history_parts: Optional[str] = Form(None),
+    history_before: Optional[str] = Form(None),
     channel: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
@@ -4586,6 +4590,10 @@ async def process_endpoint(
         history_teaser_of = body.get("history_teaser_of")
         history_video_id = body.get("history_video_id")
         history_teaser_part = body.get("history_teaser_part")
+        history_series = body.get("history_series")
+        history_part = body.get("history_part")
+        history_parts = body.get("history_parts")
+        history_before = body.get("history_before")
         channel = body.get("channel")
 
     # Two or more links: one short made of their best moments (compilation.py),
@@ -4837,6 +4845,19 @@ async def process_endpoint(
         except (TypeError, ValueError):
             env["HISTORY_MINUTES"] = "10"
         env["HISTORY_LANG"] = "english" if str(history_lang or "").lower() == "english" else "urdu"
+        if history_series:
+            # One part of a series (history_videos.series_env checks the numbers).
+            env["HISTORY_SERIES"] = re.sub(r"\s+", " ", str(history_series)).strip()[:120]
+            env["HISTORY_PART"] = str(history_part or "")[:2]
+            env["HISTORY_PARTS"] = str(history_parts or "")[:2]
+            before = history_before
+            if isinstance(before, str):
+                try:
+                    before = json.loads(before)
+                except ValueError:
+                    before = []
+            env["HISTORY_BEFORE"] = json.dumps([str(b)[:120] for b in (before or [])][:4] if isinstance(
+                before, list) else [], ensure_ascii=False)
         if history_teaser_of:
             # The teaser Short of a finished long video: its job dir, and its YouTube id for the link.
             src = str(history_teaser_of)

@@ -33,7 +33,10 @@ export default function UpNext({ ch, onChanged }) {
             {next.map((t, k) => (
                 <div key={t} className="flex items-center gap-2 text-xs">
                     <span className="readout text-muted w-4 shrink-0">{k + 1}</span>
-                    <span className="flex-1 min-w-0 break-words text-ink2">{t}</span>
+                    <span className="flex-1 min-w-0 break-words text-ink2">
+                        {t}
+                        {ch.up_next_series?.[k] && <span className="block text-[11px] text-brass">{ch.up_next_series[k]}</span>}
+                    </span>
                     <button onClick={() => send({ drop: t }, t)} disabled={!!busy} aria-label={`drop ${t}`}
                         className="text-muted hover:text-warn p-1">
                         {busy === t ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}

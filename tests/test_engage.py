@@ -149,6 +149,17 @@ def test_playlists_are_made_once_per_kind_and_filled(fake):
     assert engage.add_to_playlists(None, "quiz", lambda *a: None) == 0
 
 
+def test_a_history_series_gets_its_own_playlist_in_part_order(fake):
+    ya._save_upload(_row("P1", genre="history", series="Fatah-e-Andalus", series_part=1))
+    ya._save_upload(_row("P2", genre="history", series="Fatah-e-Andalus", series_part=2))
+    ya._save_upload(_row("H", genre="history"))
+    assert engage.add_to_playlists(None, "history", lambda *a: None) == 3
+    made = {b["snippet"]["title"]: b["snippet"]["description"] for k, b in fake.posts if k == "playlists"}
+    assert made["Fatah-e-Andalus (series)"] == "Fatah-e-Andalus: every part, in order."
+    items = [b["snippet"]["resourceId"]["videoId"] for k, b in fake.posts if k == "playlistItems"]
+    assert items.index("P1") < items.index("P2")
+
+
 def test_promo_line_names_the_other_connected_channels():
     _connect(None, "UC_main", "@punchlinebazaar")
     q = mc.add("quiz")

@@ -423,6 +423,36 @@ def add_thumbnail(row, path):
     return row
 
 
+UPDATE_UNITS = 51          # videos.list (1) + videos.update (50)
+
+
+def add_to_description(video_id, line):
+    """Put ``line`` into an uploaded video's description, before its hashtag
+    line. videos.update replaces the whole snippet, so the title, category
+    and tags are sent back as they are. True when it was added."""
+    import credits
+    if quota_used() + UPDATE_UNITS > 9000:
+        raise RuntimeError("the day's API quota is nearly used")
+    items = _get(f"{API}/videos", {"part": "snippet", "id": video_id}).get("items") or []
+    if not items:
+        raise RuntimeError("that video is not on the channel any more")
+    sn = items[0]["snippet"]
+    old = sn.get("description") or ""
+    if line in old:
+        return False
+    new = credits.insert(old, line)
+    if len(new) > DESCRIPTION_MAX:
+        raise RuntimeError("the description has no room left")
+    snippet = {k: sn[k] for k in ("title", "categoryId", "tags", "defaultLanguage", "defaultAudioLanguage")
+               if sn.get(k)}
+    spend(UPDATE_UNITS)
+    r = httpx.put(f"{API}/videos", params={"part": "snippet"}, json={"id": video_id, "snippet": {
+        **snippet, "description": new}}, headers={"Authorization": f"Bearer {_token()}"}, timeout=60)
+    if r.status_code != 200:
+        raise RuntimeError(_google_error(r))
+    return True
+
+
 CAPTIONS_API = "https://www.googleapis.com/upload/youtube/v3/captions"
 CAPTION_UNITS = 400       # captions.insert (Google's quota calculator, 15-oct-2026)
 CAPTION_NAMES = {"ur": "Urdu", "en": "English"}

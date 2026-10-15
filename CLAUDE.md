@@ -581,6 +581,25 @@ never finished:
   planned ideas per channel; `{"add"}` puts the owner's topic first
   (cricket's kind guessed: "A vs B, final" match, "A vs B" versus),
   `{"drop"}` removes one and adds it to `used`, so it is not planned again.
+- **History series** (`series_ideas`, `HISTORY_SERIES/PART/PARTS/BEFORE`):
+  the planner may write one "series: name | part 1 | part 2 ..." line (2-4
+  parts; on the first real call it planned "Fatah-e-Andalus" in 3). Each part's
+  script is told its place (recap of the last part, the next part teased),
+  its title gets "| Part N", its description links the earlier parts
+  (`series_links`), and the previous part's description gets "Agla hissa"
+  through `youtube_account.add_to_description` (videos.update sends the whole
+  snippet back, 51 units). Each series gets its own playlist. Dropping one
+  part from Up next drops the rest of that series.
+- **Watchdog** (`autostart.bat watch`): autostart leaves one minimised copy
+  of itself that reruns the port checks every 5 minutes (a stopped server
+  came back in 4 minutes on 15-oct-2026). It is found by its command line
+  through Get-CimInstance: `tasklist /v` took 2 minutes on this laptop.
+- Review fixes (15-oct-2026): teaser and moment Shorts move 40 min at a time
+  off any scheduled upload (`_clear_of`); a long folder is kept only within
+  TEASER_WINDOW; a quality check that cannot run (`video_qa.Unchecked`)
+  retries on 3 passes before failing the job; owner ideas go after urgent
+  match results and a real result replaces an owner's typed match;
+  blocked videos are never linked; `_no_roman` only touches Roman Urdu.
 - A stock library that times out twice rests 15 min (`stock_media._missed`):
   Openverse timed out on every search for hours on 15-oct-2026 and held
   each Short 70-100 s. Its search timeout is 12 s (it answers in 1-2 s).

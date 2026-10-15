@@ -356,7 +356,10 @@ def add_to_playlists(acct, kind, log=print):
             and r["video_id"] not in done and r.get("created", 0) >= time.time() - COMMENT_DAYS * 86400]
     n = 0
     for r in todo:
-        title = playlist_title(kind, r.get("format"))
+        # A history series gets its own playlist, parts in upload order, so
+        # YouTube plays part 2 after part 1.
+        title = f"{r['series'][:120]} (series)" if r.get("series") else playlist_title(kind, r.get("format"))
+        about = f"{r['series'][:120]}: every part, in order." if r.get("series") else f"{title}: new Shorts every day."
         lists = load(acct).get("playlists") or {}
         if ya.quota_used() + 2 * PLAYLIST_UNITS > QUOTA_BUDGET:
             break
@@ -364,7 +367,7 @@ def add_to_playlists(acct, kind, log=print):
             pid = lists.get(title)
             if not pid:
                 got = _post(f"{ya.API}/playlists", {"part": "snippet,status"},
-                            {"snippet": {"title": title, "description": f"{title}: new Shorts every day."},
+                            {"snippet": {"title": title, "description": about},
                              "status": {"privacyStatus": "public"}})
                 pid = got["id"]
                 _update(acct, lambda s: s.setdefault("playlists", {}).update({title: pid}))
