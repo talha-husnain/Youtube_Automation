@@ -75,3 +75,15 @@ def test_pace_follows_the_style():
     assert fv.rate_for("like an excited Pakistani cricket commentator, fast and energetic") == "+12%"
     assert fv.rate_for("calm, captivating history documentary narrator") == "-4%"
     assert fv.rate_for(None) == "+4%"
+
+
+def test_an_unreachable_host_rests_the_free_voice_briefly(monkeypatch, tmp_path):
+    import time
+    async def unreachable(text, voice, rate, mp3):
+        raise OSError("ClientConnectorDNSError: Cannot connect to host speech.platform.bing.com:443")
+    monkeypatch.setattr(fv, "_say", unreachable)
+    t0 = time.time()
+    assert fv.speak("lafz", str(tmp_path / "a.wav"), "ur-PK-AsadNeural") is None
+    assert time.time() - t0 < 2                     # no 3 tries with pauses
+    state = json.load(open(fv.STATE_FILE, encoding="utf-8"))
+    assert fv.resting() and state["rest_until"] - time.time() <= fv.NETWORK_REST + 1

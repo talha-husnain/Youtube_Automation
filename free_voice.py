@@ -51,12 +51,16 @@ def resting():
         return False
 
 
-def _rest(reason):
+NETWORK_ERRORS = ("ClientConnector", "Cannot connect to host", "name resolution", "getaddrinfo", "TimeoutError")
+NETWORK_REST = 10 * 60
+
+
+def _rest(reason, seconds=COOLDOWN):
     import time
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump({"rest_until": time.time() + COOLDOWN, "reason": reason[:200]}, f)
-    print(f"   ⏸️ Free voice refused ({reason[:80]}); Gemini voices the next {COOLDOWN // 60} minutes.")
+        json.dump({"rest_until": time.time() + seconds, "reason": reason[:200]}, f)
+    print(f"   ⏸️ Free voice unavailable ({reason[:80]}); Gemini voices the next {seconds // 60} minutes.")
 
 
 def gender(voice):
@@ -136,6 +140,12 @@ def speak(text, path, voice, rate="+0%"):
             last = e
             if "403" in str(e) or "429" in str(e):
                 _rest(str(e))
+                break
+            if any(m in f"{type(e).__name__} {e}" for m in NETWORK_ERRORS):
+                # The host cannot be reached at all (its name stopped resolving on
+                # this network for minutes, 15-oct-2026): every line burned ~10 s of
+                # retries before Gemini took it. A short rest sends them straight there.
+                _rest(str(e), NETWORK_REST)
                 break
         finally:
             if os.path.exists(mp3):
