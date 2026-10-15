@@ -3261,7 +3261,8 @@ def _today():
     upcoming = sorted(({**u, "channel": r["name"]} for r in rows for u in r["upcoming"]), key=lambda u: u["at"])
     rem = reminders.load()
     return {"channels": rows, "setup": setup, "upcoming": upcoming[:8],
-            "look": {**my_channels.look(), "stock_keys": stock},
+            "look": {**my_channels.look(), "stock_keys": stock,
+                     "voice_rest": __import__("free_voice").rest_info()},
             "totals": {"made_today": sum(r["made_today"] for r in rows),
                        "uploaded_today": sum(r["uploaded_today"] for r in rows),
                        "scheduled": sum(r["scheduled"] for r in rows), "views": views,

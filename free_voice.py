@@ -42,6 +42,18 @@ def engine():
     return (os.environ.get("VOICE_ENGINE") or "edge").lower()
 
 
+def rest_info():
+    """{"until": epoch, "reason"} while the free voice rests, else None (for the Today page)."""
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if float(data.get("rest_until", 0)) > __import__("time").time():
+            return {"until": float(data["rest_until"]), "reason": str(data.get("reason") or "")[:120]}
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return None
+
+
 def resting():
     """True while the free voice rests after a refusal (shared by every job)."""
     try:

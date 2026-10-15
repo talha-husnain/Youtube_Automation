@@ -173,6 +173,11 @@ export default function TodayTab({ onOpenTab }) {
                         </select>
                         <span className="text-muted">samples: the &quot;Shortkaar voice samples&quot; folder on your Desktop</span>
                     </label>
+                    {data.look.voice === 'edge' && data.look.voice_rest && (
+                        <p className="text-[11px] text-warn">
+                            The free voice is unavailable right now, so Gemini voices the videos until {at(new Date(data.look.voice_rest.until * 1000).toISOString())} (reason: {data.look.voice_rest.reason}).
+                        </p>
+                    )}
                     <label className="flex items-center gap-2 text-xs text-ink2">
                         <input type="checkbox" checked={data.look.footage} onChange={() => setNotify({ footage: !data.look.footage })} aria-label="stock footage" />
                         free stock footage behind the text
