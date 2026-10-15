@@ -642,6 +642,49 @@ never finished:
 - A stock library that times out twice rests 15 min (`stock_media._missed`):
   Openverse timed out on every search for hours on 15-oct-2026 and held
   each Short 70-100 s. Its search timeout is 12 s (it answers in 1-2 s).
+- **Unattended running** (15-oct-2026, `tests/test_hardening.py`):
+  - A channel job the server no longer knows, with nothing on disk
+    (`_job_clips` says "missing"), fails after `LOST_AFTER` (10 min) as
+    transient without a pause; it used to hold the one-job loop until the
+    3 h timeout.
+  - Descriptions are cut at 5,000 BYTES (`_clean_description`; an emoji is
+    4), tags count +2 when they hold a space (YouTube quotes them).
+  - Under `MIN_FREE_GB` (5) free no new video starts; Today says so.
+  - `keep_awake.py`: SetThreadExecutionState(ES_SYSTEM_REQUIRED) while a
+    job runs or an upload is in `keep_awake.task()`, only on the charger,
+    called from the event loop's thread (`app._stay_awake_loop`: Windows
+    ties the request to the calling thread). `powercfg /requests` needs
+    admin, so it was only confirmed by the call's return value.
+  - Uploads resume after a dropped connection (`_send_resuming`: PUT
+    `Content-Range: bytes */size` -> 308 + Range, then the rest), waits
+    `RESUME_WAITS` (~8 min in all) before failing.
+  - `safe_json.py`: the channels file and each upload log keep an hourly
+    `.bak` and a damaged file reads from it (a damaged file used to read as
+    empty and the next write made that permanent). Tokens get no copy.
+  - A failed thumbnail or a skipped/failed caption track is copied to
+    `output/channels/<id>/retry/` and tried again with each learn pass
+    (`retry_extras`, 4 tries, 7 days); thumbnails wait while YouTube says
+    the channel is not verified (`long_uploads` "eligible"/"disallowed").
+  - Reminders, the evening summary and the Sunday week report
+    (`reminders.week_text`) also go to Telegram when it is connected
+    (`phone`, Today tab).
+- **English subtitles for Urdu long videos** (`history_videos.translate_srt`,
+  `HISTORY_EN_CAPTIONS=0` off): captions.srt joined back into SENTENCES,
+  translated 40 per call with their numbers, each timed from its first word
+  to its last (a piece's time shared by word length) and split into even
+  pieces of up to 84 characters. Translated piece by piece on the real Rome
+  script the English drifted a line late and once carried the model's own
+  note ("the line cuts off here"); asked for 60 lines at once the model
+  dropped 1-3, so missing numbers are asked again. Uploaded as a second
+  track (`captions_extra`, row key `captions_en`).
+- Read for real on Punchline Bazaar (15-oct-2026): channels.list
+  `longUploadsStatus` answered "eligible" (= not phone-verified yet) and
+  Analytics gave averageViewPercentage for 17 Shorts (43-55%).
+- **Length tip** (`my_channels.length_tip`, Today tab): with 4+ counted long
+  videos, under 30% watched suggests 0.7x the minutes (5 at least), over
+  50% suggests 3 more (14 at most until verified).
+- The Channels tab lists each channel's last uploads (`RecentUploads.jsx`):
+  when it goes public, views and % watched, thumbnail/caption steps.
 - **The local dashboard runs on port 5180** (`autostart.bat`, `--strictPort`):
   another of the owner's projects (D:\bd\tool) runs Vite on 5173, and the
   old "is 5173 listening?" check then skipped starting Shortkaar's dashboard
