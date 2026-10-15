@@ -302,3 +302,22 @@ def test_a_step_that_keeps_failing_is_given_up_and_its_copy_removed(tmp_path, mo
     mc.retry_extras(mc.get(ch["id"]), log=lambda *a: None)
     with ya.use(mc.account(ch["id"])):
         assert "retry" not in ya.uploads()[-1] and not os.path.exists(keep)
+
+
+def test_the_length_tip_follows_how_much_people_watch():
+    ch = mc.add("history")
+    mc.update(ch["id"], {"minutes": 12})
+    c = mc.get(ch["id"])
+    assert mc.length_tip(c) is None                                          # nothing counted yet
+    c["stats"] = {"formats": {"history": {"shorts": 5, "median": 40, "watched": 22.4}}}
+    tip = mc.length_tip(c)
+    assert tip["minutes"] == 8 and "22%" in tip["text"] and "8 minutes instead of 12" in tip["text"]
+    c["stats"]["formats"]["history"]["watched"] = 58
+    assert mc.length_tip(c)["minutes"] == 15
+    c["long_uploads"] = {"status": "eligible"}                               # not verified: 14 at most
+    assert mc.length_tip(c) is None
+    c["stats"]["formats"]["history"]["watched"] = 40
+    assert mc.length_tip(c) is None                                          # in the middle: no tip
+    c["stats"]["formats"]["history"].update(watched=10, shorts=2)
+    assert mc.length_tip(c) is None                                          # too few videos to say
+    assert mc.length_tip(mc.get(mc.add("quiz")["id"])) is None

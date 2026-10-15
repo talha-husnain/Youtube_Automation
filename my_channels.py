@@ -646,6 +646,40 @@ def time_tip(ch):
                      f"Move the {old} time to {new:02d}:00?")}
 
 
+# The long-video length tip: how much of each video people watch
+# (YouTube Analytics averageViewPercentage, median over the counted videos).
+LENGTH_MIN_VIDEOS = 4
+LENGTH_LOW, LENGTH_HIGH = 30, 50       # % watched
+LENGTH_SHORTEST = 5
+
+
+def length_tip(ch):
+    """A length suggestion for a long-video channel, or None: shorter when
+    people leave early, longer when they watch most of each video."""
+    if not KINDS.get(ch.get("kind"), {}).get("long"):
+        return None
+    f = ((ch.get("stats") or {}).get("formats") or {}).get(KINDS[ch["kind"]].get("format", "history")) or {}
+    watched = f.get("watched")
+    if watched is None or f.get("shorts", 0) < LENGTH_MIN_VIDEOS:
+        return None
+    minutes = int(ch.get("minutes", DEFAULT_MINUTES))
+    status = (ch.get("long_uploads") or {}).get("status")
+    top = UNVERIFIED_MINUTES if status in ("eligible", "disallowed") else MINUTES_RANGE[1]
+    minutes = min(minutes, top)
+    w = round(watched)
+    if watched < LENGTH_LOW and minutes > LENGTH_SHORTEST + 1:
+        new = max(LENGTH_SHORTEST, round(minutes * 0.7))
+        return {"minutes": new, "watched": w,
+                "text": f"People watch {w}% of your long videos. Shorter ones usually keep more of them: "
+                        f"make them {new} minutes instead of {minutes}?"}
+    if watched > LENGTH_HIGH and minutes + 3 <= top:
+        new = minutes + 3
+        return {"minutes": new, "watched": w,
+                "text": f"People watch {w}% of your long videos, which is a lot. Longer ones earn more watch "
+                        f"time from the same viewers: make them {new} minutes instead of {minutes}?"}
+    return None
+
+
 AB_MIN = 6            # Shorts counted per side before a side can win
 AB_LEAD = 1.2         # the winner's median must beat the other's by this much
 AB_EXPLORE = 0.2

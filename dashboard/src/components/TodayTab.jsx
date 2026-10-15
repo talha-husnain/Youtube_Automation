@@ -60,15 +60,16 @@ export default function TodayTab({ onOpenTab }) {
         }
     };
 
-    // The posting-time tip (my_channels.time_tip): one click swaps the weakest time.
-    const applyTimes = async (cid, times) => {
+    // The posting-time and length tips (my_channels.time_tip, length_tip):
+    // one click saves the suggested setting.
+    const applyTip = async (cid, patch) => {
         try {
             await apiJson(`/api/my-channels/${cid}`, {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ post_times: times }),
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
             });
             load();
         } catch (e) {
-            setError(e.detail || 'Could not change the posting times.');
+            setError(e.detail || 'Could not change that setting.');
         }
     };
 
@@ -159,8 +160,16 @@ export default function TodayTab({ onOpenTab }) {
                         {c.time_tip && (
                             <div className="flex flex-wrap items-center gap-2 px-3 text-xs text-ink2">
                                 <Clock size={12} className="text-brass" /> <span className="flex-1 min-w-0">{c.time_tip.text}</span>
-                                <button onClick={() => applyTimes(c.id, c.time_tip.post_times)} className="btn-ghost px-2 py-1 text-xs">
+                                <button onClick={() => applyTip(c.id, { post_times: c.time_tip.post_times })} className="btn-ghost px-2 py-1 text-xs">
                                     use {c.time_tip.new}
+                                </button>
+                            </div>
+                        )}
+                        {c.length_tip && (
+                            <div className="flex flex-wrap items-center gap-2 px-3 text-xs text-ink2">
+                                <Clock size={12} className="text-brass" /> <span className="flex-1 min-w-0">{c.length_tip.text}</span>
+                                <button onClick={() => applyTip(c.id, { minutes: c.length_tip.minutes })} className="btn-ghost px-2 py-1 text-xs">
+                                    use {c.length_tip.minutes} min
                                 </button>
                             </div>
                         )}
