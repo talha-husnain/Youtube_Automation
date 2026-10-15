@@ -3165,6 +3165,12 @@ PUBLISH_STEPS = "\n".join([
     "6. For the history channel (long videos): switch to it on YouTube, open youtube.com/verify and verify with your phone. Without this YouTube refuses videos over 15 minutes and custom thumbnails.",
     '7. On each connected channel card open "Channel kit" and press "put About text, keywords and banner on YouTube". Then upload its profile picture yourself in YouTube Studio > Customization > Branding (download it from the same place).',
 ])
+VERIFY_STEPS = "\n".join([
+    "1. On YouTube, switch to the history channel (your picture at the top right > Switch account).",
+    "2. Open youtube.com/verify, pick text message, and type the code YouTube sends to your phone.",
+    "3. That is all. Shortkaar sees it within 6 hours: videos then get their full length and their own "
+    "thumbnails, and thumbnails that were refused before are added to the videos already up.",
+])
 STOCK_STEPS = "\n".join([
     '1. Open pexels.com/api, sign up (Google sign-in is fine), press "Your API Key", fill the short form (purpose: "my own YouTube video maker") and copy the key.',
     "2. Open pixabay.com/accounts/register and sign up. Then open pixabay.com/api/docs: your key is shown under Parameters, next to key.",
@@ -3280,6 +3286,14 @@ def _today():
               "deadline": min(expiring) if expiring else None, "steps": PUBLISH_STEPS}]
     setup += [{"key": f"connect_{r['id']}", "done": r["connected"], "title": f"{r['name']} connected",
                "tab": "channels"} for r in rows]
+    # A long-video channel YouTube has answered for: phone-verified or not
+    # (my_channels.long_minutes keeps the answer, asked every 6 hours).
+    for ch in my_channels.channels():
+        st = (ch.get("long_uploads") or {}).get("status")
+        if my_channels.KINDS.get(ch["kind"], {}).get("long") and st:
+            setup.append({"key": f"verify_{ch['id']}", "done": st == "allowed",
+                          "title": f"{ch['name']} phone-verified (videos over 15 minutes, custom thumbnails)",
+                          "steps": VERIFY_STEPS})
     setup.append({"key": "autopilot", "done": bool(cfg["enabled"]), "title": "Autopilot on for the main channel",
                   "tab": "local-autopilot"})
     # .env is read by each job itself, so keys added there work without a restart.

@@ -376,3 +376,15 @@ def test_a_birthday_idea_needs_wikipedias_date_to_be_today():
     import player_photo as pp
     assert pp.BORN.search("Babar Azam (born 15 October 1994) is").groups()[:2] == ("15", "October")
     assert pp.BORN.search("Virat Kohli (born November 5, 1988) is").group(3) == "November"
+
+
+def test_today_lists_the_phone_check_once_youtube_has_answered(monkeypatch):
+    app_module = __import__("pytest").importorskip("app")
+    ch = mc.add("history")
+    keys = lambda: [s["key"] for s in app_module._today()["setup"]]
+    assert f"verify_{ch['id']}" not in keys()                         # YouTube not asked yet
+    mc._change(ch["id"], lambda c: c.update(long_uploads={"status": "eligible"}))
+    item = next(s for s in app_module._today()["setup"] if s["key"] == f"verify_{ch['id']}")
+    assert item["done"] is False and "youtube.com/verify" in item["steps"]
+    mc._change(ch["id"], lambda c: c.update(long_uploads={"status": "allowed"}))
+    assert next(s for s in app_module._today()["setup"] if s["key"] == f"verify_{ch['id']}")["done"] is True
