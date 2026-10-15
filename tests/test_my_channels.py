@@ -375,3 +375,22 @@ def test_a_failed_job_keeps_the_reason_from_its_log(monkeypatch):
     mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "jx", "status": "running", "at": 1, "day": "d"}]))
     ch = mc.refresh_jobs(mc.get(ch["id"]), lambda j: ("failed", []), "out", now=2)
     assert ch["jobs"][0]["error"] == "Not enough reliable sources for this topic (2)."
+
+
+def test_samples_are_made_one_after_another_even_before_connecting(monkeypatch):
+    import asyncio
+    a, b = mc.add("quiz"), mc.add("cricket")
+    assert mc.want_samples() == [a["id"], b["id"]]
+    made = []
+
+    async def make_one(submit, ch, client_fn, log=print, now=None):
+        made.append(ch["id"])
+        mc._change(ch["id"], lambda c: c["jobs"].append({"status": "running", "at": __import__("time").time(), "day": "d", "job_id": "j"}))
+        return "j"
+    monkeypatch.setattr(mc, "make_one", make_one)
+    monkeypatch.setattr(mc, "connected", lambda ch: {"connected": False})
+    monkeypatch.setattr(mc, "engage_pass", lambda *a, **k: None)
+    asyncio.run(mc.tick(None, lambda j: ("running", []), "out", lambda: None, log=lambda *x: None))
+    assert made == [a["id"]] and "sample_wanted" not in mc.get(a["id"]) and mc.get(b["id"])["sample_wanted"]
+    asyncio.run(mc.tick(None, lambda j: ("running", []), "out", lambda: None, log=lambda *x: None))
+    assert made == [a["id"]]                    # one at a time: the first is still being made

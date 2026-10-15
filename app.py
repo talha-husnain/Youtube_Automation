@@ -3370,6 +3370,15 @@ async def my_channels_disconnect(cid: str):
     return {"ok": True}
 
 
+@app.post("/api/my-channels/samples")
+async def my_channels_samples():
+    """One sample video for every channel, made one after another (connected or not)."""
+    _local_only()
+    import my_channels
+    picked = my_channels.want_samples()
+    return {"ok": True, "queued": picked}
+
+
 @app.post("/api/my-channels/{cid}/make")
 async def my_channels_make(cid: str):
     """Make this channel's next Short now (also before it is connected, to see one)."""

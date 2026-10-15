@@ -40,6 +40,7 @@ function Steps({ text }) {
 export default function TodayTab({ onOpenTab }) {
     const [data, setData] = useState(null);
     const [error, setError] = useState('');
+    const [sampleNote, setSampleNote] = useState('');
 
     const load = useCallback(() => apiJson('/api/today').then((d) => { setData(d); setError(''); })
         .catch((e) => setError(e.detail || 'Could not load today.')), []);
@@ -108,7 +109,18 @@ export default function TodayTab({ onOpenTab }) {
             )}
 
             <div className="card p-5 space-y-3">
-                <p className="text-sm text-ink flex items-center gap-1.5"><Layers size={15} /> Your channels</p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm text-ink flex items-center gap-1.5"><Layers size={15} /> Your channels</p>
+                    <button onClick={async () => {
+                        try {
+                            const d = await apiJson('/api/my-channels/samples', { method: 'POST' });
+                            setSampleNote(`${d.queued.length} sample videos queued: they are made one after another (a few minutes each). Watch them on the Channels page.`);
+                        } catch (e) {
+                            setSampleNote(e.detail || 'Could not queue the samples.');
+                        }
+                    }} className="btn-ghost px-3 py-1.5 text-xs"><Clapperboard size={13} /> make a sample for every channel</button>
+                </div>
+                {sampleNote && <p className="text-xs text-ok">{sampleNote}</p>}
                 {data.channels.map((c) => {
                     const Icon = KIND_ICON[c.kind] || Layers;
                     const ok = c.problems.length === 0;

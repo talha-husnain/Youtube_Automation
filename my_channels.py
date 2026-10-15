@@ -279,6 +279,18 @@ def update(cid, patch):
     return _change(cid, fn)
 
 
+def want_samples(cids=None):
+    """Queue one sample video per channel (all by default); the loop makes them
+    one after another, connected or not, so the owner can watch each first."""
+    now = time.time()
+    picked = []
+    for k, ch in enumerate(channels()):
+        if cids is None or ch["id"] in cids:
+            _change(ch["id"], lambda c, at=now + k: c.update(sample_wanted=at))
+            picked.append(ch["id"])
+    return picked
+
+
 def remove(cid):
     """Forget a channel here: its record, Google token and uploads log. Its
     videos on YouTube stay; Google access can be removed in the Google account."""
@@ -866,10 +878,16 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
         st = await loop.run_in_executor(None, connected, ch)
         if st.get("connected"):
             live.append(ch)
-    # One generated job at a time on this laptop: the channel furthest behind.
+    # One generated job at a time on this laptop: a sample the owner asked for
+    # first (connected or not), else the channel furthest behind.
     if not any(running(c) for c in rows):
+        samples = [c for c in rows if c.get("sample_wanted")]
         behind = [c for c in live if wants_more(c)]
-        if behind:
+        if samples:
+            ch = min(samples, key=lambda c: c.get("sample_wanted", 0))
+            _change(ch["id"], lambda c: c.pop("sample_wanted", None))
+            await make_one(submit, ch, client_fn, log)
+        elif behind:
             ch = min(behind, key=lambda c: (len(_jobs_on(c, today())) / max(1, c["per_day"]), c.get("created", 0)))
             await make_one(submit, ch, client_fn, log)
     for ch in live:
