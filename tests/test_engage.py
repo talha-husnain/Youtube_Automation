@@ -304,8 +304,9 @@ def test_quiz_jobs_carry_a_running_number_and_songs_skip_the_end_card(monkeypatc
 def test_upload_rows_keep_the_question_and_urgent_shorts_go_up_in_20_minutes(monkeypatch):
     ch = mc.add("cricket")
     _connect(mc.account(ch["id"]))
-    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "j", "status": "done", "at": 1, "day": mc.today(),
-                                                   "format": "match", "topic": "x", "urgent": True}]))
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "j", "status": "done", "at": time.time(),
+                                                   "day": mc.today(), "format": "match", "topic": "x",
+                                                   "urgent": True}]))
     got = {}
 
     def upload(path, title, desc, tags, genre, publish_at=None, ai_made=False, meta=None):
