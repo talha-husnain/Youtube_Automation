@@ -96,12 +96,32 @@ def _resting(provider):
     return _read(LIMITS_FILE, {}).get(provider, 0) > time.time()
 
 
-def _rest(provider):
+def _rest(provider, seconds=REST_SECONDS, why="says too many requests"):
     with _lock:
         data = _read(LIMITS_FILE, {})
-        data[provider] = int(time.time()) + REST_SECONDS
+        data[provider] = int(time.time()) + seconds
         _write(LIMITS_FILE, data)
-    print(f"   ⏸️ {provider} says too many requests: resting it for an hour.")
+    print(f"   ⏸️ {provider} {why}: resting it for {seconds // 60} minutes.")
+
+
+# A library that does not answer at all rests too: on 15-oct-2026 Openverse
+# timed out on every search (curl too), and 10 searches at 30 s each held a
+# quiz Short for 100 s before it went on without footage.
+DOWN_AFTER = 2
+DOWN_REST = 900
+_misses = {}
+
+
+def _missed(provider, error):
+    if not isinstance(error, (httpx.TimeoutException, httpx.NetworkError)):
+        return
+    with _lock:
+        _misses[provider] = _misses.get(provider, 0) + 1
+        down = _misses[provider] >= DOWN_AFTER
+        if down:
+            _misses[provider] = 0
+    if down:
+        _rest(provider, DOWN_REST, "is not answering")
 
 def _rendition(files, portrait):
     """The smallest file whose short side is at least 1080, else the largest
@@ -239,7 +259,9 @@ def search(term, portrait=True, kind="video"):
             continue
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
             print(f"   ℹ️ {provider} search failed for '{term}' ({type(e).__name__}).")
+            _missed(provider, e)
             continue
+        _misses.pop(provider, None)
         with _lock:
             data = _read(SEARCH_FILE, {})
             data[cache_key] = {"at": int(time.time()), "items": items}

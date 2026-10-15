@@ -79,7 +79,7 @@ KINDS = {
 PLANNERS = {"cricket": "cricket_shorts", "controversy": "controversy_shorts", "history": "history_videos"}
 MINUTES_RANGE, DEFAULT_MINUTES = (2, 30), 10
 LANGS = ("urdu", "english")
-FORMATS = {"quiz": ["mcq", "riddle", "math", "flags"]}
+FORMATS = {"quiz": ["mcq", "riddle", "math", "flags", "truefalse", "oddone"]}
 # Fast results on the cricket channel: a match Pakistan or India just
 # finished is the most searched cricket topic of the day, worth more than
 # any planned idea, so it jumps the queue and is published 20 minutes after
@@ -565,8 +565,8 @@ def _next_payload(ch, client_fn, log=print):
     if kind == "quiz":
         import quiz_shorts
         fmt = pick_format(ch, FORMATS["quiz"])
-        topic = random.choice(quiz_shorts.TOPICS) if fmt == "mcq" else ""
-        if ch.get("notes") and fmt == "mcq" and random.random() < 0.5:
+        topic = random.choice(quiz_shorts.TOPICS) if fmt in quiz_shorts.FACT_FORMATS else ""
+        if ch.get("notes") and fmt in quiz_shorts.FACT_FORMATS and random.random() < 0.5:
             topic = ch["notes"][:80]
         # The channel's running number: "QUIZ #12" makes a daily series to come back for.
         number = 1 + sum(1 for j in ch.get("jobs") or [] if j.get("status") in ("done", "uploaded"))
@@ -750,6 +750,8 @@ def upload_waiting(ch, job_clips, log=print):
                 done += 1
                 if clip.get("thumbnail"):
                     youtube_account.add_thumbnail(row, clip["thumbnail"])
+                if clip.get("captions"):
+                    youtube_account.add_captions(row, clip["captions"], clip.get("captions_language") or "ur")
                 _set_job(ch["id"], j["job_id"], status="uploaded", video_id=row.get("video_id"),
                          slot=slot.isoformat())
                 log(f"⬆️ {ch['name']}: uploaded '{row['title'][:60]}' for {slot:%d %b %H:%M}.")

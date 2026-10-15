@@ -2824,7 +2824,12 @@ def _job_clips(job_id):
                     "ai_made": genre in ("movies", "music") or bool(c.get("ai_made")),
                     "thumbnail": (os.path.join(job_path, c["thumbnail_file"])
                                   if c.get("thumbnail_file")
-                                  and os.path.isfile(os.path.join(job_path, c["thumbnail_file"])) else None)})
+                                  and os.path.isfile(os.path.join(job_path, c["thumbnail_file"])) else None),
+                    # A long video's own caption track (history_videos.write_srt).
+                    "captions": (os.path.join(job_path, c["captions_file"])
+                                 if c.get("captions_file")
+                                 and os.path.isfile(os.path.join(job_path, c["captions_file"])) else None),
+                    "captions_language": c.get("captions_language") or "ur"})
     return state, out
 
 

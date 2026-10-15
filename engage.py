@@ -66,7 +66,8 @@ PLAYLISTS = {
     ("cricket", "match"): "Cricket match results", ("cricket", "topic"): "Cricket facts and records",
     ("cricket", "versus"): "Who is better? Player vs player", ("quiz", "mcq"): "GK quiz",
     ("quiz", "riddle"): "Paheliyan", ("quiz", "math"): "Dimagh lagao: maths puzzles",
-    ("quiz", "flags"): "Flag quiz: guess the country", ("music", None): "New AI songs",
+    ("quiz", "flags"): "Flag quiz: guess the country", ("quiz", "truefalse"): "Sach ya Jhoot",
+    ("quiz", "oddone"): "Odd one out", ("music", None): "New AI songs",
     ("comedy", None): "Comedy Shorts", ("controversy", None): "Controversies explained",
     ("history", None): "History and stories", ("history", "teaser"): "History in 60 seconds",
 }

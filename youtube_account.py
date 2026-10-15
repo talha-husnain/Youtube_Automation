@@ -423,6 +423,42 @@ def add_thumbnail(row, path):
     return row
 
 
+CAPTIONS_API = "https://www.googleapis.com/upload/youtube/v3/captions"
+CAPTION_UNITS = 400       # captions.insert (Google's quota calculator, 15-oct-2026)
+CAPTION_NAMES = {"ur": "Urdu", "en": "English"}
+
+
+def add_captions(row, path, language="ur"):
+    """Upload an SRT as the video's caption track (400 units, only when the
+    day's quota has room); the uploads.json row records how it went. YouTube's
+    own automatic captions handle Urdu badly; these are the script's words at
+    the voice's times."""
+    if quota_used() + CAPTION_UNITS > 9000:
+        row.update(captions="skipped", captions_error="the day's API quota is nearly used")
+        _save_upload(row)
+        return row
+    try:
+        with open(path, "rb") as f:
+            srt = f.read()
+        meta = {"snippet": {"videoId": row["video_id"], "language": language,
+                            "name": CAPTION_NAMES.get(language, language), "isDraft": False}}
+        boundary = "shortkaar" + secrets.token_hex(8)
+        body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+                f"{json.dumps(meta)}\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n").encode()
+        body += srt + f"\r\n--{boundary}--\r\n".encode()
+        spend(CAPTION_UNITS)
+        r = httpx.post(CAPTIONS_API, params={"uploadType": "multipart", "part": "snippet"}, content=body,
+                       headers={"Authorization": f"Bearer {_token()}",
+                                "Content-Type": f"multipart/related; boundary={boundary}"}, timeout=120)
+        if r.status_code != 200:
+            raise RuntimeError(_google_error(r))
+        row.update(captions="set")
+    except Exception as e:  # noqa: BLE001 — the video is up either way
+        row.update(captions="failed", captions_error=str(e)[:200])
+    _save_upload(row)
+    return row
+
+
 CLAIM_LOOKBACK_DAYS = 7
 
 

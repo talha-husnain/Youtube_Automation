@@ -331,6 +331,51 @@ def test_a_refused_thumbnail_is_recorded_and_spends_its_units(tmp_path, monkeypa
     assert ya.quota_used() == before + 50
 
 
+def test_the_caption_file_has_one_cue_per_caption_line_at_the_voice_times(tmp_path):
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"")
+    texts = ["Rome ek chhota sa gaon tha. Phir woh duniya ka markaz ban gaya."]
+    said = [(str(wav), 6.0)]
+    path = hv.write_srt(str(tmp_path / "c.srt"), texts, said, [(str(wav), 3661.5)])
+    body = open(path, encoding="utf-8").read()
+    cues = [c for c in body.strip().split("\n\n") if c]
+    assert cues[0].startswith("1\n01:01:01,500 --> ")
+    assert len(cues) >= 2 and all(" --> " in c for c in cues)
+    assert "Rome" in body and "\r" not in body
+
+
+def test_no_voiced_lines_means_no_caption_file(tmp_path):
+    assert hv.write_srt(str(tmp_path / "c.srt"), ["x"], [(None, 0.0)], []) is None
+
+
+def test_captions_go_up_as_a_multipart_track_and_spend_400_units(tmp_path, monkeypatch):
+    srt = tmp_path / "c.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nRome\n\n", encoding="utf-8")
+    ya._write(ya.TOKEN_FILE, {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12})
+    before = ya.quota_used()
+    sent = {}
+
+    def post(url, params=None, content=None, headers=None, timeout=None, **kw):
+        sent.update(url=url, params=params, content=content, headers=headers)
+        return _R(200, {"id": "cap1"})
+    monkeypatch.setattr(ya.httpx, "post", post)
+    row = ya.add_captions({"id": "r1", "video_id": "LONG1", "status": "done"}, str(srt), "ur")
+    assert row["captions"] == "set" and ya.quota_used() == before + 400
+    assert "captions" in sent["url"] and sent["params"]["part"] == "snippet"
+    assert b'"videoId": "LONG1"' in sent["content"] and b'"language": "ur"' in sent["content"]
+    assert b"00:00:00,000 --> 00:00:02,000" in sent["content"]
+    assert sent["headers"]["Content-Type"].startswith("multipart/related; boundary=")
+
+
+def test_captions_wait_when_the_days_quota_is_nearly_gone(tmp_path, monkeypatch):
+    srt = tmp_path / "c.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nRome\n\n", encoding="utf-8")
+    ya.spend(9000 - ya.quota_used() + 1)
+    monkeypatch.setattr(ya.httpx, "post", lambda *a, **k: pytest.fail("no call past the budget"))
+    row = ya.add_captions({"id": "r1", "video_id": "LONG1", "status": "done"}, str(srt))
+    assert row["captions"] == "skipped"
+
+
 def test_an_uploaded_long_video_gets_its_teaser_short_next(monkeypatch):
     import time as _t
     ch = mc.add("history")

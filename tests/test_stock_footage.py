@@ -223,6 +223,22 @@ def test_footage_credits_name_the_people_and_a_busy_library_rests(keys, monkeypa
     assert not any("pexels" in c for c in calls)        # Pexels rests for an hour
 
 
+def test_a_library_that_does_not_answer_rests_after_two_timeouts(keys, monkeypatch):
+    calls = []
+
+    def get(url, headers=None, timeout=None):
+        calls.append(url)
+        if "pixabay" in url:
+            raise sm.httpx.ReadTimeout("slow")
+        return _R(PEXELS)
+    monkeypatch.setattr(sm.httpx, "get", get)
+    sm.search("one")
+    sm.search("two")
+    calls.clear()
+    assert [g["provider"] for g in sm.search("three")] == ["Pexels"]
+    assert not any("pixabay" in c for c in calls)
+
+
 def test_the_free_voice_rests_after_microsoft_refuses(monkeypatch, tmp_path):
     import free_voice as fv
 

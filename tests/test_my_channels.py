@@ -306,6 +306,26 @@ def test_quiz_keeps_only_answers_the_check_confirms(monkeypatch):
                        q.FORMATS["riddle"])
 
 
+def test_true_or_false_keeps_the_answer_when_the_options_come_back_flipped():
+    import quiz_shorts as q
+    flipped = q.Question(question="Octopus ke teen dil hote hain.", options=["Jhoot", "Sach"], answer=1,
+                         answer_text="", explain="")
+    assert q._shape_ok(flipped, q.FORMATS["truefalse"])
+    assert flipped.options == ["Sach", "Jhoot"] and flipped.answer == 0 and flipped.answer_text == "Sach"
+    english = q.Question(question="x", options=["True", "False"], answer=1, answer_text="", explain="")
+    assert q._shape_ok(english, q.FORMATS["truefalse"]) and english.options[english.answer] == "Jhoot"
+    assert not q._shape_ok(q.Question(question="x", options=["Haan", "Nahi"], answer=0, answer_text="",
+                                      explain=""), q.FORMATS["truefalse"])
+
+
+def test_the_new_quiz_formats_are_fact_checked_and_planned():
+    import quiz_shorts as q
+    for fmt in ("truefalse", "oddone"):
+        assert fmt in q.FORMATS and fmt in q.FORMAT_TEXT and fmt in q.FACT_FORMATS
+        assert fmt in mc.FORMATS["quiz"]
+    assert q.FORMATS["truefalse"]["options"] == 2 and q.FORMATS["oddone"]["options"] == 4
+
+
 def test_only_free_licence_photos_are_used(monkeypatch, tmp_path):
     import player_photo as pp
     for ok in ("CC BY 3.0", "CC BY-SA 4.0", "CC0", "Public domain", "GODL-India", "cc-by-sa-2.0"):

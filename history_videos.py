@@ -848,6 +848,30 @@ def segment_video(job_dir, video, out, frames, offset, close, events):
     return out
 
 
+def _srt_time(t):
+    ms = int(round(max(0.0, t) * 1000))
+    return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+
+
+def write_srt(path, texts, said, voices, lang="urdu"):
+    """The narration as an SRT caption track, in the groups and times the
+    burned captions use. ``voices`` holds (wav, start) for each voiced text
+    in order (plan() skips a text whose voice failed). Path, or None."""
+    starts = iter(voices)
+    cues = []
+    for text, (wav, secs) in zip(texts, said):
+        if not wav:
+            continue
+        _w, start = next(starts)
+        cues += chunks(text, start, secs, wav=wav, language="en" if lang == "english" else "ur")
+    if not cues:
+        return None
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        for k, (text, a, b) in enumerate(cues, 1):
+            f.write(f"{k}\n{_srt_time(a)} --> {_srt_time(b)}\n{text}\n\n")
+    return path
+
+
 def clock(seconds):
     s = int(seconds)
     return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
@@ -1266,6 +1290,7 @@ def run(output_dir, pipeline):
     if missing > 2:
         raise RuntimeError(f"The AI voice failed for {missing} paragraphs; try again later.")
     segs, voices, whooshes, marks, sections, total = plan(script, said, handle, lang, captions)
+    srt = write_srt(os.path.join(output_dir, "captions.srt"), texts, said, voices, lang)
     print(f"🎬 Rendering {len(segs)} shots ({clock(total)})...")
     video = render(output_dir, segs, pics, title_pic, ".hv_video.mp4")
     narration(os.path.join(output_dir, ".hv_voice.wav"), voices, total)
@@ -1284,6 +1309,9 @@ def run(output_dir, pipeline):
             "why": f"History video: {topic}", "predicted_score": 85, "genre": "history",
             "comment_question": script.question, "ai_voice": "AI voice", "ai_made": ai_used > 0,
             "thumbnail_file": os.path.basename(thumb) if thumb else None,
+            # Uploaded as the video's own caption track (my_channels, captions.insert).
+            "captions_file": os.path.basename(srt) if srt else None,
+            "captions_language": "en" if lang == "english" else "ur",
             "chapters": [{"title": t, "at": round(a, 2)} for t, a in marks],
             "source_links": real, "photo_credit": "\n".join(credits),
             "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in stock],

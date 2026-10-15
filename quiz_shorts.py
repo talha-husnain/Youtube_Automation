@@ -42,7 +42,12 @@ FORMATS = {
     "riddle": {"count": 2, "options": 0, "timer": 7, "label": "PAHELI"},
     "math": {"count": 2, "options": 3, "timer": 6, "label": "DIMAGH LAGAO"},
     "flags": {"count": 4, "options": 4, "timer": 4, "label": "JHANDA"},
+    # Added 15-oct-2026 for variety (the channel learns which formats get views).
+    "truefalse": {"count": 4, "options": 2, "timer": 4, "label": "SACH YA JHOOT"},
+    "oddone": {"count": 3, "options": 4, "timer": 5, "label": "ODD ONE OUT"},
 }
+# Formats whose facts the answer check confirms with Google Search, and that take a topic.
+FACT_FORMATS = ("mcq", "truefalse", "oddone")
 FLAG_QUESTIONS = ["Ye jhanda kis mulk ka hai?", "Aur ye wala jhanda?", "Ab ye pehchano!",
                   "Last one: ye kis mulk ka hai?"]
 FLAG_Y = 470
@@ -101,6 +106,12 @@ FORMAT_TEXT = {
     "riddle": "2 paheliyan (riddles) with a clever one- or two-word answer; no options.",
     "math": "2 quick maths or logic puzzles anyone can solve in their head in 6 seconds, 3 options each.",
     "flags": "4 country flags to recognise, 4 country names each.",
+    "truefalse": ("4 surprising statements (the question field), each either true or false; about half true, "
+                  "half false; options exactly [\"Sach\", \"Jhoot\"], answer 0 when true and 1 when false; the "
+                  "explain field says the real fact."),
+    "oddone": ("3 \"odd one out\" puzzles: the question asks which one does not belong (\"In mein se kaun alag "
+               "hai?\"), 4 options where three clearly share something and one clearly does not; the answer is the "
+               "odd one; the explain field says what the other three share."),
 }
 
 CHECK_PROMPT = """Check this quiz carefully. For each question say if the marked answer is
@@ -175,7 +186,7 @@ def write(client, fmt, topic, handle):
     extra = f["count"] + 2   # spares for the ones the check drops
     prompt = PROMPT.format(
         seconds=45 if fmt == "mcq" else 35, handle=handle or "this channel", format_text=FORMAT_TEXT[fmt],
-        topic_text=f"Topic: {topic}." if topic and fmt == "mcq" else "",
+        topic_text=f"Topic: {topic}." if topic and fmt in FACT_FORMATS else "",
         avoid="\n".join(f"  - {a}" for a in _avoid()) or "  (nothing yet)", count=extra, final=f["count"],
         q_chars=140 if fmt == "riddle" else 90,
         options_text=(f"exactly {f['options']}, each max 22 characters, one clearly right."
@@ -191,7 +202,26 @@ def write(client, fmt, topic, handle):
     return quiz
 
 
+TRUE_FALSE = ("sach", "jhoot")
+TRUE_FALSE_ALIASES = {"true": "sach", "sahi": "sach", "false": "jhoot", "ghalat": "jhoot", "galat": "jhoot"}
+
+
+def _true_false(q):
+    """A truefalse question with its options as [Sach, Jhoot] and the answer
+    moved with them, or None. The model was told the order, but an answer
+    index only means something next to the options it came with."""
+    names = [TRUE_FALSE_ALIASES.get(o.strip().lower(), o.strip().lower()) for o in q.options]
+    if sorted(names) != sorted(TRUE_FALSE) or not 0 <= q.answer < 2:
+        return None
+    q.answer = TRUE_FALSE.index(names[q.answer])
+    q.options = ["Sach", "Jhoot"]
+    q.answer_text = q.options[q.answer]
+    return q
+
+
 def _shape_ok(q, f):
+    if f is FORMATS["truefalse"]:
+        return _true_false(q) is not None
     if f["options"]:
         return len(q.options) == f["options"] and 0 <= q.answer < f["options"] and all(o.strip() for o in q.options)
     return bool(q.answer_text.strip())
@@ -207,9 +237,9 @@ def _checked(client, fmt, questions):
         mark = f"{'ABCD'[q.answer]} ({q.options[q.answer]})" if q.options else q.answer_text
         items.append(f"{k}. {q.question}{opts}\n   Marked answer: {mark}")
     prompt = CHECK_PROMPT.format(items="\n".join(items),
-                                 search=" (use Google Search for facts)" if fmt == "mcq" else "")
+                                 search=" (use Google Search for facts)" if fmt in FACT_FORMATS else "")
     try:
-        if fmt == "mcq":
+        if fmt in FACT_FORMATS:
             from cricket_shorts import grounded
             text, _ = grounded(client, prompt)
         else:
