@@ -1187,9 +1187,25 @@ def pictures(client, script, topic, job_dir, log=print):
     first = raw[order[0]]
     if first in videos:
         first = os.path.join(job_dir, pics[order[0]]["full"])
+    # The thumbnail wants a big, wide picture that fills 16:9 (the opening one
+    # was a tall photo framed on its blurred copy: it looked home-made).
+    from PIL import Image
+    for k in sorted(raw):
+        src = raw[k]
+        if src in videos:
+            continue
+        try:
+            with Image.open(src) as im:
+                if im.width >= 1100 and im.width / max(1, im.height) >= 1.3:
+                    thumb_src = src
+                    break
+        except OSError:
+            continue
+    else:
+        thumb_src = first
     title = os.path.join(".hv_pics", "title.jpg")
     canvas(first, os.path.join(job_dir, title), dark=0.55, blur=8)
-    return pics, title, credits, ai_used, first, stock
+    return pics, title, credits, ai_used, thumb_src, stock
 
 
 def frame_of(video, out, at=1.0):
@@ -1235,8 +1251,8 @@ def run(output_dir, pipeline):
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
     tracks = _bed_tracks(script.sacred)
     mix(output_dir, video, ".hv_voice.wav", os.path.basename(final), total, whooshes, sections, tracks)
-    # The opening scene's 16:9 picture (a frame for footage) under the thumbnail text.
-    thumb = _thumbnail(client, script, output_dir, os.path.join(output_dir, pics[0]["full"]))
+    # A big wide picture of the video (pictures() chooses) under the thumbnail text.
+    thumb = _thumbnail(client, script, output_dir, first_pic)
     real = [(name, _real_url(url)) for name, url in rank_sources(sources)[:8]]
     import stock_media
     desc = describe(script, marks, real, credits, handle, lang, ai_used > 0, stock_media.credit_line(stock))

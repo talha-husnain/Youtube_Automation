@@ -518,6 +518,10 @@ never finished:
     (`fast=True`): medium CRF 18 took 57 s of a 61 s Short.
   - `trends.py`: this week's most viewed short videos per niche (yt-dlp
     search, 12 h cache) go into the cricket and controversy planners.
+- **The local dashboard runs on port 5180** (`autostart.bat`, `--strictPort`):
+  another of the owner's projects (D:\bd\tool) runs Vite on 5173, and the
+  old "is 5173 listening?" check then skipped starting Shortkaar's dashboard
+  at all. The CDP harness BASE is http://127.0.0.1:5180.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file
   got CLAUDE.md committed as CRLF once). The scratch `patchlib.patch`

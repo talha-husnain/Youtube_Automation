@@ -12,7 +12,7 @@ import subprocess
 import sys
 from xml.sax.saxutils import escape
 
-DASHBOARD = os.environ.get("YT_DASHBOARD_URL") or "http://localhost:5173"
+DASHBOARD = os.environ.get("YT_DASHBOARD_URL") or "http://localhost:5180"
 # PowerShell's own AppUserModelID: Windows shows toasts only for a registered
 # app, and this one is on every Windows 10/11.
 APP_ID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"

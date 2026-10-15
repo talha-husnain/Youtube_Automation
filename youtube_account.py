@@ -31,7 +31,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 TOKEN_FILE = os.environ.get("YT_TOKEN_FILE") or os.path.join(ROOT, "output", ".youtube_token.json")
 UPLOADS_FILE = os.path.join(ROOT, "output", ".uploads.json")
 REDIRECT_URI = os.environ.get("YT_REDIRECT_URI") or "http://127.0.0.1:8000/api/youtube/callback"
-DASHBOARD_URL = os.environ.get("YT_DASHBOARD_URL") or "http://localhost:5173"
+DASHBOARD_URL = os.environ.get("YT_DASHBOARD_URL") or "http://localhost:5180"
 _LOOPBACK = re.compile(r"^http://(localhost|127\.0\.0\.1|\[::1\]):\d{2,5}$")
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
