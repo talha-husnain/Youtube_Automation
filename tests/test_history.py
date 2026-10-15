@@ -463,3 +463,34 @@ def test_scenes_wikipedia_has_nothing_for_get_stock_footage_for_free(monkeypatch
     assert "video" not in pics[1] and len(stock) == 2 and ai_used == 0 and credits == []
     assert "modern things" in asked["rule"] and "NO people" in asked["rule"]        # sacred: no people in footage
     assert set(pics) == set(range(len(hv.scenes_of(script))))
+
+
+def test_a_failed_matching_call_falls_back_to_each_scenes_own_article():
+    scenes = [S(line="l", picture="p", wiki="Colosseum", label=""), S(line="l", picture="p", wiki="Colosseum", label=""),
+              S(line="l", picture="p", wiki="Nowhere", label="")]
+    pool = [{"file": "a", "article": "Colosseum"}, {"file": "b", "article": "Rome"}, {"file": "c", "article": "Colosseum"}]
+    assert hv.own_article_picks(scenes, pool) == {0: 0, 1: 2}
+
+
+def test_gemini_blips_are_retried_and_real_errors_are_not(monkeypatch):
+    import short_kit as kit
+    monkeypatch.setattr(kit.time, "sleep", lambda s: None)
+    calls = []
+
+    class Models:
+        def generate_content(self, model, contents, config=None):
+            calls.append(1)
+            if len(calls) < 3:
+                raise ConnectionError("httpx.ConnectError: [Errno 11001] getaddrinfo failed")
+            return types.SimpleNamespace(text='{"ok": true, "problems": []}')
+    client = types.SimpleNamespace(models=Models())
+    assert kit.ask_json(client, hv.Check, "x").ok and len(calls) == 3
+    calls.clear()
+
+    class Bad:
+        def generate_content(self, model, contents, config=None):
+            calls.append(1)
+            raise ValueError("400 INVALID_ARGUMENT: bad schema")
+    with pytest.raises(ValueError):
+        kit.ask_json(types.SimpleNamespace(models=Bad()), hv.Check, "x")
+    assert len(calls) == 1

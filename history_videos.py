@@ -558,6 +558,19 @@ def artwork_with_people(client, paths):
     return {s.index for s in got.pictures if s.artwork_with_people and 0 <= s.index < len(paths)}
 
 
+def own_article_picks(scenes, pool):
+    """{scene: picture} without the model: each scene gets the next unused free
+    picture of the Wikipedia article it named (used when the matching call fails)."""
+    used, out = set(), {}
+    for k, s in enumerate(scenes):
+        for i, p in enumerate(pool):
+            if i not in used and (s.wiki or "").strip().lower() == (p.get("article") or "").lower():
+                out[k] = i
+                used.add(i)
+                break
+    return out
+
+
 def ai_order(n_hook, chapters):
     """Scene indexes in the order AI pictures are worth most: the hook, each
     chapter's first scene, then the rest in story order."""
@@ -1090,7 +1103,11 @@ def pictures(client, script, topic, job_dir, log=print):
             articles.append(a)
     log(f"🖼️ Looking for free pictures in {min(len(articles), MAX_ARTICLES)} Wikipedia articles...")
     pool = candidates(articles, script.sacred)
-    picks = pick(client, topic, sc, pool, script.sacred) if pool else {}
+    try:
+        picks = pick(client, topic, sc, pool, script.sacred) if pool else {}
+    except Exception as e:  # noqa: BLE001 — the video goes on with its own articles' pictures
+        log(f"   ℹ️ Picture matching failed ({type(e).__name__}); each scene takes its own article's pictures.")
+        picks = own_article_picks(sc, pool)
     log(f"   {len(pool)} free pictures found, {len(picks)} fit a scene.")
     files, credits = {}, []
     for scene_idx, p in sorted(picks.items()):

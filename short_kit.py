@@ -61,14 +61,27 @@ def text_model():
     return os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
 
 
-def ask_json(client, schema, contents, tools=None, model=None):
-    """One Gemini call validated against a pydantic schema."""
+TRANSIENT = ("getaddrinfo", "ConnectError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError",
+             "503", "500", "502", "504", "UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED", "Server disconnected")
+
+
+def ask_json(client, schema, contents, tools=None, model=None, tries=3):
+    """One Gemini call validated against a pydantic schema. A network or server
+    blip is retried (this laptop's DNS dropped for minutes on 15-oct-2026 and a
+    10-minute video died at its picture step, its voices already made)."""
     from google.genai import types
-    r = client.models.generate_content(
-        model=model or text_model(), contents=contents,
-        config=types.GenerateContentConfig(response_mime_type="application/json",
-                                           response_schema=schema, tools=tools))
-    return schema.model_validate_json(r.text)
+    for attempt in range(tries):
+        try:
+            r = client.models.generate_content(
+                model=model or text_model(), contents=contents,
+                config=types.GenerateContentConfig(response_mime_type="application/json",
+                                                   response_schema=schema, tools=tools))
+            return schema.model_validate_json(r.text)
+        except Exception as e:  # noqa: BLE001 — only blips are retried
+            if attempt == tries - 1 or not any(m in f"{type(e).__name__} {e}" for m in TRANSIENT):
+                raise
+            print(f"   🔁 Gemini call failed ({type(e).__name__}); trying again in {10 * (attempt + 1)} s.")
+            time.sleep(10 * (attempt + 1))
 
 
 def caption_margin():
