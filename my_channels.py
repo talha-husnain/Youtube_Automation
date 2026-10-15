@@ -1102,6 +1102,8 @@ def upload_waiting(ch, job_clips, log=print):
                     youtube_account.add_thumbnail(row, clip["thumbnail"])
                 if clip.get("captions"):
                     youtube_account.add_captions(row, clip["captions"], clip.get("captions_language") or "ur")
+                    for path, lang in clip.get("captions_extra") or []:
+                        youtube_account.add_captions(row, path, lang, key=f"captions_{lang}")
                 if j.get("series") and (j.get("series_part") or 1) > 1:
                     _link_previous_part(row, j, ch, log)
                 _set_job(ch["id"], j["job_id"], status="uploaded", video_id=row.get("video_id"),

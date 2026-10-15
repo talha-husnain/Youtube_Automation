@@ -2843,7 +2843,10 @@ def _job_clips(job_id):
                     "captions": (os.path.join(job_path, c["captions_file"])
                                  if c.get("captions_file")
                                  and os.path.isfile(os.path.join(job_path, c["captions_file"])) else None),
-                    "captions_language": c.get("captions_language") or "ur"})
+                    "captions_language": c.get("captions_language") or "ur",
+                    "captions_extra": [(os.path.join(job_path, x["file"]), x.get("language") or "en")
+                                       for x in c.get("captions_extra") or []
+                                       if x.get("file") and os.path.isfile(os.path.join(job_path, x["file"]))]})
     return state, out
 
 

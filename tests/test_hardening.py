@@ -100,3 +100,65 @@ def test_reminders_go_to_the_phone_too_when_telegram_is_connected(monkeypatch):
     sent.clear()
     reminders.tick(lambda: today, lambda *a: None, now=sunday + 86400)
     assert sent == []
+
+
+def _echo_srt(tmp_path):
+    srt = tmp_path / "c.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:03,000\nChaar September ko ek larke\n\n"
+                   "2\n00:00:03,000 --> 00:00:06,000\nko takht se utaara gaya. Woh aakhri\n\n"
+                   "3\n00:00:06,000 --> 00:00:09,000\nshehanshah tha.\n\n", encoding="utf-8")
+    return srt
+
+
+def test_english_subtitles_are_translated_by_sentence_at_the_same_times(tmp_path):
+    import history_videos as hv
+    srt = _echo_srt(tmp_path)
+    sentences = hv.srt_sentences(hv.read_srt(str(srt)))
+    assert [s[0] for s in sentences] == ["Chaar September ko ek larke ko takht se utaara gaya.",
+                                        "Woh aakhri shehanshah tha."]
+    assert sentences[0][1] == 0 and 3 < sentences[0][2] < 6 and sentences[1][1] == sentences[0][2]
+    asked = []
+
+    def ask(client, schema, prompt, **kw):
+        asked.append(prompt)
+        if len(asked) == 1:                      # drops one, and a note is not a translation
+            return hv.Cues(lines=[hv.Cue(n=1, en="(I must translate only this line)")])
+        return hv.Cues(lines=[hv.Cue(n=1, en="On 4 September a boy was removed from the throne."),
+                              hv.Cue(n=2, en="He was the last emperor.")])
+    out = hv.translate_srt(None, str(srt), str(tmp_path / "en.srt"), ask=ask)
+    cues = hv.read_srt(out)
+    assert [c[2] for c in cues] == ["On 4 September a boy was removed from the throne.", "He was the last emperor."]
+    assert cues[0][0] == 0 and cues[-1][1] == 9 and len(asked) == 2
+    assert hv.translate_srt(None, str(srt), str(tmp_path / "x.srt"),
+                            ask=lambda *a, **k: hv.Cues(lines=[])) is None      # nothing back: no track
+
+
+def test_a_long_sentence_is_shown_in_even_pieces(tmp_path):
+    import history_videos as hv
+    text = "The boy was Romulus Augustulus, who proved to be the last emperor of the Western Roman Empire."
+    parts = hv._pieces(text, 0, 6)
+    assert len(parts) == 2 and all(len(p[0]) <= hv.EN_CUE_CHARS for p in parts)
+    assert parts[0][2] == parts[1][1] and parts[1][2] == 6 and min(len(p[0]) for p in parts) > 30
+
+
+def test_the_english_track_goes_up_after_the_urdu_one(tmp_path, monkeypatch):
+    srt = _echo_srt(tmp_path)
+    ch = mc.add("history")
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "L", "status": "done", "format": "history", "at": 1}]))
+    monkeypatch.setattr(ya, "status", lambda: {"connected": True})
+    monkeypatch.setattr(ya, "upload", lambda *a, **k: {"status": "done", "video_id": "LoNg0000001", "title": "T"})
+    monkeypatch.setattr(ya, "long_uploads", lambda: "eligible", raising=False)
+    tracks = []
+    monkeypatch.setattr(ya, "add_captions", lambda row, path, language="ur", key="captions":
+                        tracks.append((language, key)) or row)
+    clip = {"index": 0, "path": "p.mp4", "title": "T", "description": "D", "tags": [],
+            "captions": str(srt), "captions_language": "ur", "captions_extra": [(str(srt), "en")]}
+    mc.upload_waiting(mc.get(ch["id"]), lambda job: ("completed", [clip]), log=lambda *a: None)
+    assert tracks == [("ur", "captions"), ("en", "captions_en")]
+
+
+def test_each_caption_track_keeps_its_own_status(tmp_path, monkeypatch):
+    srt = _echo_srt(tmp_path)
+    ya.spend(9000 - ya.quota_used() + 1)
+    row = ya.add_captions({"id": "r1", "video_id": "LONG1", "status": "done"}, str(srt), "en", key="captions_en")
+    assert row["captions_en"] == "skipped" and "captions" not in row

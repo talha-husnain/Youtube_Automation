@@ -950,6 +950,137 @@ def write_srt(path, texts, said, voices, lang="urdu"):
     return path
 
 
+# English subtitles for an Urdu video: YouTube shows them to viewers whose
+# language is English and its search reads caption text, so the video can
+# reach people who do not read Roman Urdu.
+# Translated by SENTENCE, then timed over the caption pieces it spans: piece
+# by piece (a piece stops mid-sentence) the English drifted a line late and
+# once carried the model's own note "(the line cuts off here...)", because
+# Urdu puts the verb last (gemini-2.5-flash, Rome script, 15-oct-2026).
+EN_CAPTIONS_BATCH = 40     # sentences per call
+EN_CAPTIONS_MIN = 0.95     # share that must come back; a missing sentence shows no English
+EN_CUE_CHARS = 84          # two lines of 42 on screen
+TRANSLATE_PROMPT = """Translate these numbered sentences of a Roman Urdu history documentary's narration
+into natural, simple English subtitles. Return all {n}, each with its own number; never merge or split
+them. Keep names, places and dates as they are; keep honorifics such as "Hazrat", "(SAW)", "(AS)", "(RA)"
+where the sentence has them. Only the translation: no notes or comments.
+
+{lines}"""
+_META = re.compile(r"\btranslat|\bI must\b|\bcuts? off\b", re.I)
+
+
+class Cue(BaseModel):
+    n: int
+    en: str
+
+
+class Cues(BaseModel):
+    lines: List[Cue]
+
+
+def _srt_seconds(text):
+    h, m, rest = text.replace(".", ",").split(":")
+    s, ms = rest.split(",")
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
+
+
+def read_srt(path):
+    """[(start, end, line)] of an SRT we wrote (write_srt), times in seconds."""
+    with open(path, encoding="utf-8") as f:
+        blocks = [b for b in f.read().replace("\r\n", "\n").split("\n\n") if b.strip()]
+    out = []
+    for b in blocks:
+        rows = b.strip().split("\n")
+        if len(rows) >= 3 and " --> " in rows[1]:
+            a, z = rows[1].split(" --> ")
+            try:
+                out.append((_srt_seconds(a.strip()), _srt_seconds(z.strip()), " ".join(rows[2:]).strip()))
+            except ValueError:
+                continue
+    return out
+
+
+def srt_sentences(cues):
+    """[(sentence, start, end)]: the caption pieces joined back into sentences,
+    each timed from its first word to its last. A piece's time is shared by
+    its words' lengths, so a sentence that starts mid-piece does not overlap
+    the one that ended there."""
+    out, words, first = [], [], None
+    for a, z, text in cues:
+        ws = text.split()
+        size = sum(len(w) + 1 for w in ws) or 1
+        t = a
+        for w in ws:
+            end = t + (z - a) * (len(w) + 1) / size
+            if not words:
+                first = t
+            words.append(w)
+            t = end
+            if re.search(r"[.?!۔؟][\"')”]*$", w):
+                out.append((" ".join(words), first, end))
+                words = []
+    if words:
+        out.append((" ".join(words), first, cues[-1][1]))
+    return out
+
+
+def _pieces(text, start, end):
+    """One English sentence as cues of at most EN_CUE_CHARS, its time shared
+    by length."""
+    # Even pieces: filled greedily, a sentence left "Empire." alone for 0.3 s.
+    target = len(text) / max(1, -(-len(text) // EN_CUE_CHARS))
+    parts, cur = [], ""
+    for w in text.split():
+        if cur and (len(cur) >= target or len(cur) + 1 + len(w) > EN_CUE_CHARS):
+            parts.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}".strip()
+    if cur:
+        parts.append(cur)
+    total = sum(len(p) for p in parts) or 1
+    out, t = [], start
+    for p in parts:
+        span = (end - start) * len(p) / total
+        out.append((p, t, t + span))
+        t += span
+    return out
+
+
+def translate_srt(client, src, dst, ask=None):
+    """The SRT at ``src`` in English at ``dst``, sentence by sentence at the
+    same times. Path, or None when too little came back."""
+    ask = ask or kit.ask_json
+    sentences = srt_sentences(read_srt(src))
+    if not sentences:
+        return None
+
+    def run(items):
+        got = ask(client, Cues, TRANSLATE_PROMPT.format(
+            n=len(items), lines="\n".join(f"{n}. {sentences[n - 1][0]}" for n in items)))
+        return {c.n: c.en.strip() for c in got.lines
+                if c.n in items and c.en.strip() and not _META.search(c.en)}
+
+    # Lines carry their numbers: asked for 60 at a time the model dropped 1-3
+    # of them in every batch; the dropped ones are asked again on their own.
+    done = {}
+    for k in range(0, len(sentences), EN_CAPTIONS_BATCH):
+        items = list(range(k + 1, min(len(sentences), k + EN_CAPTIONS_BATCH) + 1))
+        done.update(run(items))
+        missing = [n for n in items if n not in done]
+        if missing:
+            done.update(run(missing))
+    if len(done) < EN_CAPTIONS_MIN * len(sentences):
+        return None
+    with open(dst, "w", encoding="utf-8", newline="\n") as f:
+        k = 0
+        for n, (_ur, a, z) in enumerate(sentences, 1):
+            for text, s, e in _pieces(done.get(n, ""), a, z):
+                k += 1
+                f.write(f"{k}\n{_srt_time(s)} --> {_srt_time(e)}\n{text}\n\n")
+    return dst
+
+
 def clock(seconds):
     s = int(seconds)
     return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
@@ -1439,6 +1570,12 @@ def run(output_dir, pipeline):
         raise RuntimeError(f"The AI voice failed for {missing} paragraphs; try again later.")
     segs, voices, whooshes, marks, sections, total = plan(script, said, handle, lang, captions)
     srt = write_srt(os.path.join(output_dir, "captions.srt"), texts, said, voices, lang)
+    en_srt = None
+    if srt and lang != "english" and os.environ.get("HISTORY_EN_CAPTIONS", "1").strip() != "0":
+        try:
+            en_srt = translate_srt(client, srt, os.path.join(output_dir, "captions.en.srt"))
+        except Exception as e:  # noqa: BLE001 — the Urdu track is enough on its own
+            print(f"⚠️ English subtitles skipped: {type(e).__name__}: {e}")
     print(f"🎬 Rendering {len(segs)} shots ({clock(total)})...")
     video = render(output_dir, segs, pics, title_pic, ".hv_video.mp4")
     narration(os.path.join(output_dir, ".hv_voice.wav"), voices, total)
@@ -1460,6 +1597,7 @@ def run(output_dir, pipeline):
             # Uploaded as the video's own caption track (my_channels, captions.insert).
             "captions_file": os.path.basename(srt) if srt else None,
             "captions_language": "en" if lang == "english" else "ur",
+            "captions_extra": [{"file": os.path.basename(en_srt), "language": "en"}] if en_srt else [],
             "chapters": [{"title": t, "at": round(a, 2)} for t, a in marks],
             "source_links": real, "photo_credit": "\n".join(credits),
             "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in stock],

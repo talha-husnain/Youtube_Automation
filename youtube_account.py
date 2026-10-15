@@ -480,13 +480,13 @@ CAPTION_UNITS = 400       # captions.insert (Google's quota calculator, 15-oct-2
 CAPTION_NAMES = {"ur": "Urdu", "en": "English"}
 
 
-def add_captions(row, path, language="ur"):
+def add_captions(row, path, language="ur", key="captions"):
     """Upload an SRT as the video's caption track (400 units, only when the
     day's quota has room); the uploads.json row records how it went. YouTube's
     own automatic captions handle Urdu badly; these are the script's words at
     the voice's times."""
     if quota_used() + CAPTION_UNITS > 9000:
-        row.update(captions="skipped", captions_error="the day's API quota is nearly used")
+        row.update({key: "skipped", f"{key}_error": "the day's API quota is nearly used"})
         _save_upload(row)
         return row
     try:
@@ -504,9 +504,9 @@ def add_captions(row, path, language="ur"):
                                 "Content-Type": f"multipart/related; boundary={boundary}"}, timeout=120)
         if r.status_code != 200:
             raise RuntimeError(_google_error(r))
-        row.update(captions="set")
+        row.update({key: "set"})
     except Exception as e:  # noqa: BLE001 — the video is up either way
-        row.update(captions="failed", captions_error=str(e)[:200])
+        row.update({key: "failed", f"{key}_error": str(e)[:200]})
     _save_upload(row)
     return row
 
