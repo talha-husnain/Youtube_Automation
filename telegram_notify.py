@@ -126,10 +126,13 @@ def poll(handle):
             answer = f"That did not work: {type(e).__name__}"
         try:
             _call("answerCallbackQuery", data={"callback_query_id": q["id"], "text": (answer or "")[:190]})
-            if answer:
-                send_text(answer)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — "query is too old" after a minute: the message below still says it
             pass
+        if answer:
+            try:
+                send_text(answer)
+            except Exception:  # noqa: BLE001
+                pass
         done += 1
     _save({**_load(), "offset": st.get("offset", 0)})
     return done

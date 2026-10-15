@@ -14,11 +14,32 @@ import shutil
 import time
 
 BACKUP_EVERY = 3600
+BUSY_TRIES, BUSY_WAIT = 20, 0.05
 
 
 def _load(path):
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    # Windows refuses to open a file while another thread replaces it
+    # (PermissionError): that is a busy file, not a damaged one. Read as
+    # damaged, the tick got the hour-old backup and could upload a video twice.
+    for k in range(BUSY_TRIES):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except PermissionError:
+            if k == BUSY_TRIES - 1:
+                raise
+            time.sleep(BUSY_WAIT)
+
+
+def _replace(tmp, path):
+    for k in range(BUSY_TRIES):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if k == BUSY_TRIES - 1:
+                raise
+            time.sleep(BUSY_WAIT)
 
 
 def read(path, default):
@@ -28,6 +49,8 @@ def read(path, default):
             return data
     except FileNotFoundError:
         return default
+    except PermissionError:
+        raise                             # still busy after a second: never guess with an old copy
     except (OSError, ValueError):
         pass
     try:
@@ -53,4 +76,4 @@ def write(path, data):
             os.utime(bak)
     except (OSError, ValueError):
         pass
-    os.replace(tmp, path)
+    _replace(tmp, path)

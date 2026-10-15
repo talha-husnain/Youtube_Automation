@@ -1233,9 +1233,14 @@ def telegram_press(data):
         return "That video is no longer in Shortkaar."
     if skip(cid, job_id):
         return f"Skipped. {ch['name']} makes another one in its place."
-    if job.get("status") == "skipped":
+    status = job.get("status")
+    if status == "skipped":
         return "Already skipped."
-    return "Too late: it has already been uploaded. Remove it in YouTube Studio if you want it gone."
+    if status == "uploaded":
+        return "Too late: it has already been uploaded. Remove it in YouTube Studio if you want it gone."
+    if status == "failed":
+        return "Nothing to skip: that video failed and was never uploaded."
+    return "That video is not finished yet, so there is nothing to skip."
 
 
 def skip(cid, job_id):
@@ -1369,6 +1374,14 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
         elif behind:
             ch = min(behind, key=lambda c: (len(_jobs_on(c, today())) / max(1, c["per_day"]), c.get("created", 0)))
             await make_one(submit, ch, client_fn, log)
+    # Skip presses on the review messages (Telegram) before any upload, so a
+    # press just before the hold ends still stops it.
+    if any(c.get("review_hours") for c in rows):
+        try:
+            import telegram_notify
+            await loop.run_in_executor(None, telegram_notify.poll, telegram_press)
+        except Exception as e:  # noqa: BLE001
+            log(f"⚠️ Telegram poll: {type(e).__name__}")
     for ch in live:
         ch = get(ch["id"]) or ch
         if upload_due(ch, t):
@@ -1382,13 +1395,6 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
             await loop.run_in_executor(None, retry_extras, ch, log)
         if ch.get("kind") == "cricket":
             await loop.run_in_executor(None, match_watch, ch, client_fn, log, t)
-    # Skip presses on the review messages (Telegram), when any channel holds videos.
-    if any(c.get("review_hours") for c in rows):
-        try:
-            import telegram_notify
-            await loop.run_in_executor(None, telegram_notify.poll, telegram_press)
-        except Exception as e:  # noqa: BLE001
-            log(f"⚠️ Telegram poll: {type(e).__name__}")
     # Engagement on every connected channel, the main one included.
     for cid in ["main"] + [c["id"] for c in live]:
         await loop.run_in_executor(None, engage_pass, cid, client_fn, log)

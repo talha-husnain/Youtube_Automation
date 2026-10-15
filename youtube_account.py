@@ -397,38 +397,49 @@ def _send_from(location, path, size, offset):
         return httpx.put(location, content=pieces(), headers=headers, timeout=1800)
 
 
+class _Busy(RuntimeError):
+    """YouTube answered the status check with a 5xx or 429: ask again later."""
+
+
 def _received(location, size):
     """(bytes YouTube has, or None when the upload is complete, final response)."""
     r = httpx.put(location, headers={"Content-Range": f"bytes */{size}", "Content-Length": "0"}, timeout=60)
     if r.status_code in (200, 201):
         return None, r
+    if r.status_code == 429 or r.status_code >= 500:
+        raise _Busy(_google_error(r))
     if r.status_code != 308:
-        raise RuntimeError(_google_error(r))
+        raise RuntimeError(_google_error(r))         # 404/410: the upload session expired
     got = r.headers.get("range") or ""
     return (int(got.rsplit("-", 1)[1]) + 1 if "-" in got else 0), r
 
 
 def _send_resuming(location, path, size, sleep=None):
     sleep = sleep or time.sleep
-    offset = 0
+    offset, last = 0, None
     for attempt in range(len(RESUME_WAITS) + 1):
-        try:
-            done = _send_from(location, path, size, offset)
-            if done.status_code in (200, 201) or done.status_code < 500:
-                return done
-        except httpx.TransportError:
-            if attempt == len(RESUME_WAITS):
-                raise
+        if offset is not None:
+            try:
+                done = _send_from(location, path, size, offset)
+                if done.status_code in (200, 201) or not (done.status_code >= 500 or done.status_code in (308, 429)):
+                    return done
+                last = done
+            except httpx.TransportError as e:
+                last = e
         if attempt == len(RESUME_WAITS):
-            return done
+            break
         sleep(RESUME_WAITS[attempt])
         try:
-            offset, final = _received(location, size)
-        except httpx.TransportError:
-            continue                      # still offline: same offset, next wait
-        if offset is None:
+            got, final = _received(location, size)
+        except (httpx.TransportError, _Busy) as e:
+            offset, last = None, e        # where YouTube stopped is unknown: send nothing, ask again
+            continue
+        if got is None:
             return final
-    return done
+        offset = got
+    if isinstance(last, Exception):
+        raise last
+    return last
 
 
 def upload(path, title, description, tags=(), genre="comedy", publish_at=None,

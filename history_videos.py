@@ -966,7 +966,10 @@ them. Keep names, places and dates as they are; keep honorifics such as "Hazrat"
 where the sentence has them. Only the translation: no notes or comments.
 
 {lines}"""
-_META = re.compile(r"\btranslat|\bI must\b|\bcuts? off\b", re.I)
+# A model note, not narration: "Greek books were translated" and "they cut off
+# the water" are real lines, "(the line cuts off here...)" is not.
+_META = re.compile(r"^\s*(?:note|translation|translator)\b|\([^)]*\b(?:translat\w*|the line|this line|"
+                   r"original text)\b[^)]*\)", re.I)
 
 
 class Cue(BaseModel):

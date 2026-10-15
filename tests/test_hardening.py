@@ -388,3 +388,88 @@ def test_today_lists_the_phone_check_once_youtube_has_answered(monkeypatch):
     assert item["done"] is False and "youtube.com/verify" in item["steps"]
     mc._change(ch["id"], lambda c: c.update(long_uploads={"status": "allowed"}))
     assert next(s for s in app_module._today()["setup"] if s["key"] == f"verify_{ch['id']}")["done"] is True
+
+
+def test_a_busy_status_check_is_asked_again_and_nothing_is_resent_blind(tmp_path, monkeypatch):
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"y" * 1000)
+    ya._write(ya.TOKEN_FILE, {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12})
+    monkeypatch.setattr(ya.httpx, "post", lambda *a, **k: _Resp(200, {}, {"location": "https://up/session"}))
+    script = iter([_Resp(503), _Resp(503), _Resp(308, headers={"range": "bytes=0-599"}),
+                   _Resp(200, {"id": "BuSy0000001", "status": {"privacyStatus": "public"}})])
+    sends = []
+
+    def put(url, content=None, headers=None, timeout=None, **kw):
+        if content is not None and not headers.get("Content-Range", "").startswith("bytes */"):
+            sends.append((headers.get("Content-Range"), len(b"".join(content))))
+        return next(script)
+    monkeypatch.setattr(ya.httpx, "put", put)
+    monkeypatch.setattr(ya.time, "sleep", lambda s: None)
+    row = ya.upload(str(video), "T", "D")
+    assert row["status"] == "done" and row["video_id"] == "BuSy0000001"
+    # The full send got a 503, the first check a 503 (nothing resent), the next said 600 bytes arrived.
+    assert sends == [(None, 1000), ("bytes 600-999/1000", 400)]
+
+
+def test_subtitle_lines_that_mention_translating_are_kept():
+    import history_videos as hv
+    for line in ("They cut off the water of the Euphrates.", "Greek books were translated into Arabic.",
+                 "I must go to Kufa, he said."):
+        assert not hv._META.search(line)
+    assert hv._META.search("(the line cuts off here, but I must translate only what is given)")
+
+
+def test_the_skip_answer_says_what_really_happened():
+    ch = mc.add("quiz")
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "f", "status": "failed"},
+                                                  {"job_id": "u", "status": "uploaded"},
+                                                  {"job_id": "r", "status": "running"}]))
+    assert mc.telegram_press(f"skip:{ch['id']}:f").startswith("Nothing to skip")
+    assert mc.telegram_press(f"skip:{ch['id']}:u").startswith("Too late")
+    assert mc.telegram_press(f"skip:{ch['id']}:r").startswith("That video is not finished")
+
+
+def test_the_confirmation_is_sent_even_when_telegram_refuses_a_late_answer(monkeypatch):
+    import telegram_notify as tg
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:SECRET")
+    tg._save({"chat_id": 42})
+    sent = []
+
+    def call(method, timeout=30, **kw):
+        if method == "getUpdates":
+            return [{"update_id": 1, "callback_query": {"id": "q", "data": "x", "message": {"chat": {"id": 42}}}}]
+        if method == "answerCallbackQuery":
+            raise RuntimeError("Telegram said: query is too old")
+        sent.append(kw["data"]["text"])
+        return {}
+    monkeypatch.setattr(tg, "_call", call)
+    assert tg.poll(lambda data: "Skipped.") == 1 and sent == ["Skipped."]
+
+
+def test_a_busy_file_is_waited_for_not_swapped_for_its_backup(tmp_path, monkeypatch):
+    import builtins
+    import safe_json
+    path = str(tmp_path / "s.json")
+    safe_json.write(path, {"v": 1})
+    safe_json.write(path, {"v": 2})                       # the backup holds v1
+    real_open, busy = builtins.open, [3]
+
+    def flaky(p, *a, **k):
+        if p == path and busy[0]:
+            busy[0] -= 1
+            raise PermissionError("in use")
+        return real_open(p, *a, **k)
+    monkeypatch.setattr(builtins, "open", flaky)
+    monkeypatch.setattr(safe_json.time, "sleep", lambda s: None)
+    assert safe_json.read(path, {}) == {"v": 2}
+    real_replace, refused = safe_json.os.replace, [2]
+
+    def replace(a, b):
+        if refused[0]:
+            refused[0] -= 1
+            raise PermissionError("in use")
+        return real_replace(a, b)
+    monkeypatch.setattr(safe_json.os, "replace", replace)
+    safe_json.write(path, {"v": 3})
+    monkeypatch.setattr(builtins, "open", real_open)
+    assert safe_json.read(path, {}) == {"v": 3}
