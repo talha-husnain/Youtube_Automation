@@ -44,6 +44,13 @@ KEEP_DAYS = 7
 MAX_CHANNELS = 6
 MAX_PER_DAY = 10          # the channel's own daily upload limit is about 10 (14-oct-2026)
 TRIES_PER_SHORT = 2       # a day of failures stops at twice the Shorts wanted
+# Failures that say nothing about the idea: Gemini's quota, a network drop.
+# Counted as tries, an hour of them used up the day and nothing was made
+# after Gemini came back; instead they pause the channel for a while.
+TRANSIENT = re.compile(r"\b429\b|RESOURCE_EXHAUSTED|quota|rate.?limit|too many requests|\b50[234]\b|UNAVAILABLE|"
+                       r"overloaded|timed out|ConnectError|getaddrinfo|network|\bDNS\b|temporarily", re.I)
+TRANSIENT_PAUSE = 1800
+TRANSIENT_MAX = 6         # a day; past that they count like any other failure
 UPLOAD_TRIES = 3
 IDEAS_RETRY = 1800
 EXPLORE = 0.3
@@ -742,12 +749,13 @@ def _next_payload(ch, client_fn, log=print):
 
 def wants_more(ch, now=None):
     day = today(now)
-    if not ch.get("enabled") or running(ch):
+    if not ch.get("enabled") or running(ch) or ch.get("paused_until", 0) > (now.timestamp() if now else time.time()):
         return False
     if teaser_due(ch):
         return True
     made = len(_jobs_on(ch, day))
-    tries = len(_jobs_on(ch, day, ("running", "done", "uploaded", "failed")))
+    passing = sum(1 for j in _jobs_on(ch, day, ("failed",)) if j.get("transient"))
+    tries = len(_jobs_on(ch, day, ("running", "done", "uploaded", "failed"))) - min(passing, TRANSIENT_MAX)
     if (ch.get("ideas") or [{}])[0].get("urgent"):
         return tries < (ch["per_day"] + 2) * TRIES_PER_SHORT   # a fresh result goes even past today's count
     return made < ch["per_day"] and tries < ch["per_day"] * TRIES_PER_SHORT and len(waiting(ch)) < ch["per_day"]
@@ -858,6 +866,9 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
                         j["done_at"] = int(now)
                     if err:
                         j["error"] = err
+                    if status == "failed" and err and TRANSIENT.search(err):
+                        j["transient"] = True
+                        c["paused_until"] = int(now) + TRANSIENT_PAUSE
             job = next((j for j in c["jobs"] if j.get("job_id") == job_id), {})
             topic = job.get("topic")
             if status == "done" and job.get("format") != "teaser":   # a teaser's topic is already used

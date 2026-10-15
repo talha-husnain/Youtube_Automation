@@ -122,3 +122,27 @@ def test_finished_videos_are_stamped_and_telegram_hears_of_held_ones(monkeypatch
     job = mc.get(ch["id"])["jobs"][0]
     assert job["status"] == "done" and job["done_at"] > 0
     assert len(said) == 1 and "Quiz #3" in said[0] and "2 h" in said[0]
+
+
+def test_a_quota_or_network_failure_pauses_the_channel_without_using_a_try():
+    ch = mc.add("quiz")
+    mc._change(ch["id"], lambda c: c.update(per_day=1, jobs=[{"job_id": "q", "status": "running", "at": time.time(),
+                                                              "day": mc.today()}]))
+    mc.failure_reason = lambda job_id: "429 RESOURCE_EXHAUSTED: You exceeded your current quota"
+    try:
+        mc.refresh_jobs(mc.get(ch["id"]), lambda job: ("failed", []), "out")
+    finally:
+        mc.failure_reason = None
+    c = mc.get(ch["id"])
+    assert c["jobs"][0]["transient"] and c["paused_until"] > time.time() + 1700
+    assert mc.wants_more(c) is False                                  # paused
+    mc._change(ch["id"], lambda x: x.update(paused_until=time.time() - 1))     # the pause is over
+    mc._change(ch["id"], lambda x: x["jobs"].append({"job_id": "q2", "status": "failed", "day": mc.today(),
+                                                     "at": time.time(), "transient": True}))
+    assert mc.wants_more(mc.get(ch["id"])) is True        # two outage failures, still a try left
+    mc._change(ch["id"], lambda x: x["jobs"].append({"job_id": "q3", "status": "failed", "day": mc.today(),
+                                                     "at": time.time(), "error": "Only 1 of the questions passed"}))
+    mc._change(ch["id"], lambda x: x["jobs"].append({"job_id": "q4", "status": "failed", "day": mc.today(),
+                                                     "at": time.time(), "error": "Only 1 of the questions passed"}))
+    assert mc.wants_more(mc.get(ch["id"])) is False       # real failures still count
+    assert not mc.TRANSIENT.search("Not enough reliable sources for this topic (2).")

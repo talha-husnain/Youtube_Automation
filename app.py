@@ -3236,6 +3236,9 @@ def _today():
             p.append("switched off")
         if ch.get("upload_paused_until", 0) > now:
             p.append("daily upload limit reached, uploads start again later")
+        if ch.get("paused_until", 0) > now:
+            p.append("waiting until " + datetime.fromtimestamp(ch["paused_until"]).strftime("%H:%M")
+                     + " (Gemini's limit or the network; it goes on by itself)")
         failed_jobs = my_channels._jobs_on(ch, day, ("failed",))
         if failed_jobs:
             # The latest reason, so the owner knows whether it needs them or fixes itself.

@@ -599,6 +599,11 @@ never finished:
   Test runs with `free` went to the paid Gemini voice before (15-oct-2026),
   and without the free voice's word timings captions fall back to Whisper
   alignment: 7 silent minutes on this CPU for a 3-minute video.
+- **Outage failures pause, not count** (`my_channels.TRANSIENT`): a job that
+  failed on Gemini's quota, a rate limit or the network marks itself
+  `transient` and pauses the channel 30 min (`paused_until`, shown on Today);
+  up to 6 a day do not use one of the day's tries (TRIES_PER_SHORT = 2 per
+  wanted video, which an hour-long outage used to burn).
 - **Review hold** (`review_hours` per channel, 0-24, Channels tab): a
   finished video (`done_at`) waits that long before uploading so the owner
   can watch and skip it; Telegram, when connected, says when one is ready.
