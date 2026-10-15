@@ -4526,6 +4526,8 @@ async def process_endpoint(
     history_part: Optional[str] = Form(None),
     history_parts: Optional[str] = Form(None),
     history_before: Optional[str] = Form(None),
+    history_today: Optional[str] = Form(None),
+    history_avoid: Optional[str] = Form(None),
     channel: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
@@ -4600,6 +4602,8 @@ async def process_endpoint(
         history_part = body.get("history_part")
         history_parts = body.get("history_parts")
         history_before = body.get("history_before")
+        history_today = body.get("history_today")
+        history_avoid = body.get("history_avoid")
         channel = body.get("channel")
 
     # Two or more links: one short made of their best moments (compilation.py),
@@ -4851,6 +4855,18 @@ async def process_endpoint(
         except (TypeError, ValueError):
             env["HISTORY_MINUTES"] = "10"
         env["HISTORY_LANG"] = "english" if str(history_lang or "").lower() == "english" else "urdu"
+        if str(history_today or "").lower() in ("1", "true", "yes"):
+            # The daily "on this day" Short (history_today.py), with the events already made.
+            env["HISTORY_TODAY"] = "1"
+            env["HISTORY_TOPIC"] = env["HISTORY_TOPIC"] or "aaj ki tareekh"
+            avoid = history_avoid
+            if isinstance(avoid, str):
+                try:
+                    avoid = json.loads(avoid)
+                except ValueError:
+                    avoid = []
+            env["HISTORY_AVOID"] = json.dumps([str(a)[:120] for a in (avoid or [])][-40:] if isinstance(
+                avoid, list) else [], ensure_ascii=False)
         if history_series:
             # One part of a series (history_videos.series_env checks the numbers).
             env["HISTORY_SERIES"] = re.sub(r"\s+", " ", str(history_series)).strip()[:120]

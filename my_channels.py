@@ -275,6 +275,8 @@ def update(cid, patch):
             ch["color"] = patch["color"].upper()
         if "notes" in patch:
             ch["notes"] = " ".join(str(patch["notes"] or "").split())[:300]
+        if "daily_short" in patch:
+            ch["daily_short"] = bool(patch["daily_short"])
         if "review_hours" in patch:
             try:
                 ch["review_hours"] = max(0, min(REVIEW_MAX_HOURS, int(patch["review_hours"])))
@@ -323,7 +325,21 @@ def today(now=None):
 def _jobs_on(ch, day, statuses=("running", "done", "uploaded")):
     """The day's jobs; a long video's teaser Short is extra, not one of the day's videos."""
     return [j for j in ch.get("jobs") or [] if j.get("day") == day and j.get("status") in statuses
-            and j.get("format") != "teaser"]
+            and j.get("format") not in EXTRA_FORMATS]
+
+
+# Shorts of the history channel that come on top of its long videos.
+EXTRA_FORMATS = ("teaser", "today")
+
+
+def today_short_due(ch, now=None):
+    """True while the history channel still owes today's "Aaj ki tareekh"
+    Short (history_today.py): on by default (daily_short), two tries a day."""
+    if not KINDS.get(ch.get("kind"), {}).get("long") or not ch.get("daily_short", True):
+        return False
+    day = today(now)
+    mine = [j for j in ch.get("jobs") or [] if j.get("format") == "today" and j.get("day") == day]
+    return not any(j.get("status") in ("running", "done", "uploaded") for j in mine) and len(mine) < 2
 
 
 TEASER_WINDOW = 20 * 3600     # a long video's files are kept this long for its Shorts
@@ -350,7 +366,7 @@ def teaser_due(ch, now=None):
         return None
     now = now or time.time()
     for j in sorted(ch.get("jobs") or [], key=lambda j: j.get("at", 0)):
-        if (j.get("status") == "uploaded" and j.get("format") != "teaser" and j.get("video_id")
+        if (j.get("status") == "uploaded" and j.get("format") not in EXTRA_FORMATS and j.get("video_id")
                 and _parts(j) < shorts_per_long(ch) and now - j.get("at", 0) < TEASER_WINDOW):
             return j
     return None
@@ -374,6 +390,7 @@ def keeps(job_id, cid, age_seconds):
         # An uploaded long video stays until its Shorts are made from it, and
         # no longer than teaser_due would still offer it (its folder is GBs).
         or (j.get("status") == "uploaded" and KINDS.get(ch.get("kind"), {}).get("long")
+            and j.get("format") not in EXTRA_FORMATS
             and _parts(j) < shorts_per_long(ch) and time.time() - j.get("at", 0) < TEASER_WINDOW))
         for j in ch.get("jobs") or [])
 
@@ -545,7 +562,8 @@ def learn(ch, log=print):
             kept.setdefault(r.get("format") or "other", []).append(r["retention"])
     # Teaser Shorts get Shorts-sized views: the best and worst lists that steer
     # the next long videos compare long videos only.
-    ranked = sorted([r for r in mature if r.get("format") != "teaser"], key=lambda r: r["views"], reverse=True)
+    ranked = sorted([r for r in mature if r.get("format") not in EXTRA_FORMATS], key=lambda r: r["views"],
+                    reverse=True)
     stats = {"at": int(time.time()), "tracked": len(rows), "counted": len(mature),
              "views": sum((numbers.get(r["video_id"]) or {}).get("views", 0) for r in rows),
              "median": _median([r["views"] for r in mature]),
@@ -702,6 +720,11 @@ def _next_payload(ch, client_fn, log=print):
                 {"label": f"{'Moment ' + str(part) if part else 'Teaser'}: {long_video.get('label', '')}"[:120],
                  "format": "teaser", "part": part, "topic": long_video.get("topic"),
                  "teaser_of": long_video["job_id"], "publish_after": long_video.get("slot")})
+    if today_short_due(ch):
+        made = [u[6:] for u in ch.get("used") or [] if str(u).startswith("today:")]
+        return ({**look, "genre": "history", "history_today": True, "history_lang": ch.get("lang", "urdu"),
+                 "history_avoid": made[-40:], "bg_music": True},
+                {"label": f"Aaj ki tareekh: {datetime.now():%d %B}", "format": "today", "topic": ""})
     if kind in PLANNERS:
         if not ch.get("ideas"):
             if time.time() - _ideas_failed.get(ch["id"], 0) < IDEAS_RETRY:
@@ -776,7 +799,7 @@ def wants_more(ch, now=None):
     day = today(now)
     if not ch.get("enabled") or running(ch) or ch.get("paused_until", 0) > (now.timestamp() if now else time.time()):
         return False
-    if teaser_due(ch):
+    if teaser_due(ch) or today_short_due(ch, now):
         return True
     made = len(_jobs_on(ch, day))
     passing = sum(1 for j in _jobs_on(ch, day, ("failed",)) if j.get("transient"))
@@ -861,6 +884,8 @@ def _used_items(job_path):
         return short["quiz"].get("questions") or []
     if short.get("song"):
         return [short["song"].get("title")]
+    if (short.get("history") or {}).get("today"):
+        return [f"today:{short['history'].get('event')}"]
     return []
 
 
@@ -997,7 +1022,7 @@ def upload_waiting(ch, job_clips, log=print):
             if not j.get("qa") and os.environ.get("VIDEO_QA", "1") != "0":
                 # Nobody watches these go up: a silent, black or frozen render stops here.
                 import video_qa
-                long = bool(KINDS.get(ch["kind"], {}).get("long")) and j.get("format") != "teaser"
+                long = bool(KINDS.get(ch["kind"], {}).get("long")) and j.get("format") not in EXTRA_FORMATS
                 try:
                     problems = video_qa.check(clip["path"], long=long)
                 except video_qa.Unchecked as e:
@@ -1027,10 +1052,15 @@ def upload_waiting(ch, job_clips, log=print):
                 # Today's teaser and the moments of earlier long videos would all
                 # land 15 minutes after the same posting time: one per gap.
                 slot = _clear_of(max(after, soon), youtube_account.uploads())
+            elif j.get("format") == "today":
+                # On its own date, from noon: the story is "aaj ke din".
+                soon = datetime.now().astimezone() + timedelta(minutes=URGENT_AFTER_MINUTES)
+                noon = soon.replace(hour=12, minute=0, second=0, microsecond=0)
+                slot = _clear_of(max(soon, noon), youtube_account.uploads())
             else:
                 slot = youtube_account.next_slots(ch["post_times"], 1)[0]
             desc = promote(clip["description"], ch["id"])
-            if KINDS[ch["kind"]].get("long") and j.get("format") != "teaser":
+            if KINDS[ch["kind"]].get("long") and j.get("format") not in EXTRA_FORMATS:
                 import history_videos
                 ups = youtube_account.uploads()
                 if j.get("series"):
@@ -1039,7 +1069,7 @@ def upload_waiting(ch, job_clips, log=print):
                 desc = history_videos.watch_next(desc, ups, ch.get("lang", "urdu"))
             row = youtube_account.upload(
                 clip["path"], clip["title"], desc, clip["tags"],
-                "history_teaser" if j.get("format") == "teaser" else KINDS[ch["kind"]]["genre"],
+                "history_teaser" if j.get("format") in EXTRA_FORMATS else KINDS[ch["kind"]]["genre"],
                 publish_at=slot, ai_made=clip.get("ai_made", False),
                 meta={"job_id": j["job_id"], "clip_index": clip["index"], "channel": ch["id"],
                       "format": j.get("format"), "topic": j.get("topic"), "seconds": clip.get("seconds"),

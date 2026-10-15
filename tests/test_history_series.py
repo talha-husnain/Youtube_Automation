@@ -40,7 +40,7 @@ def test_a_part_knows_its_series_and_carries_its_number(monkeypatch):
 
 def test_the_next_part_is_planned_with_its_series(monkeypatch):
     ch = mc.add("history")
-    mc._change(ch["id"], lambda c: c.update(ideas=hv.series_ideas("series: Rome | Rise | Fall")))
+    mc._change(ch["id"], lambda c: c.update(daily_short=False, ideas=hv.series_ideas("series: Rome | Rise | Fall")))
     payload, meta = mc.next_payload(mc.get(ch["id"]), lambda: None)
     assert payload["history_series"] == "Rome" and payload["history_part"] == 1 and payload["history_parts"] == 2
     assert meta["series"] == "Rome" and meta["series_part"] == 1 and meta["label"] == "Part 1: Rise"

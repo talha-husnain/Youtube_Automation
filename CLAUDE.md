@@ -599,6 +599,18 @@ never finished:
   Test runs with `free` went to the paid Gemini voice before (15-oct-2026),
   and without the free voice's word timings captions fall back to Whisper
   alignment: 7 silent minutes on this CPU for a 3-minute video.
+- **Aaj ki tareekh** (`history_today.py`, `HISTORY_TODAY=1`, history channel
+  switch `daily_short`, on by default): one "on this day" Short a day on top
+  of the long videos (format `today`, in `EXTRA_FORMATS` with `teaser`, so
+  it is not one of the day's videos, gets no teasers, is QA'd as a Short and
+  uploads from noon on its own date). Grounded research of an event on
+  today's day and month, 3+ sources, the history RULES and HONOUR, one fact
+  check with a rewrite; sacred stories get no people and no music. Events
+  go on `used` as `today:<event>` and come back as `history_avoid`. First
+  real one (15-oct): Abdus Salam's Nobel, announced 15 Oct 1979.
+- **History videos stay at 14 min until verified** (`long_minutes`,
+  `youtube_account.long_uploads` = channels.list status.longUploadsStatus,
+  asked every 6 h): "eligible"/"disallowed" caps the length; unknown keeps it.
 - **Outage failures pause, not count** (`my_channels.TRANSIENT`): a job that
   failed on Gemini's quota, a rate limit or the network marks itself
   `transient` and pauses the channel 30 min (`paused_until`, shown on Today);

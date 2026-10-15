@@ -1400,6 +1400,9 @@ def run(output_dir, pipeline):
     from controversy_shorts import _real_url
     if os.environ.get("HISTORY_TEASER_OF"):
         return run_teaser(output_dir, pipeline)
+    if os.environ.get("HISTORY_TODAY") == "1":
+        import history_today        # the channel's daily "on this day" Short
+        return history_today.run(output_dir, pipeline)
     topic = re.sub(r"\s+", " ", os.environ.get("HISTORY_TOPIC") or "").strip()[:200]
     if len(topic) < 3:
         raise RuntimeError("Write the story or topic of the video.")

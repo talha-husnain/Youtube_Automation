@@ -233,7 +233,7 @@ def test_the_history_channel_makes_1_to_3_long_videos(monkeypatch):
     ch = mc.update(ch["id"], {"per_day": 9, "minutes": 45, "lang": "french", "post_times": ["1:00", "2:00",
                                                                                             "3:00", "4:00"]})
     assert ch["per_day"] == 3 and ch["minutes"] == 30 and ch["lang"] == "urdu" and len(ch["post_times"]) == 3
-    ch = mc.update(ch["id"], {"minutes": 12, "lang": "english"})
+    ch = mc.update(ch["id"], {"minutes": 12, "lang": "english", "daily_short": False})
     s = mc.summary(mc.get(ch["id"]))
     assert s["max_per_day"] == 3 and s["long"] is True and s["minutes"] == 12 and s["lang"] == "english"
     assert mc.summary(mc.get(mc.add("quiz")["id"]))["max_per_day"] == mc.MAX_PER_DAY

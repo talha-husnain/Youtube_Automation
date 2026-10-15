@@ -236,6 +236,11 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                             <input defaultValue={ch.notes} onBlur={(e) => e.target.value !== ch.notes && save({ notes: e.target.value })}
                                 placeholder="Topics you want (e.g. Rome, Karbala, the Caliphs, the US economy)"
                                 className="input-field text-xs py-1.5" aria-label="history topics" maxLength={300} />
+                            <label className="flex items-center gap-2 text-xs text-ink2">
+                                <input type="checkbox" checked={ch.daily_short !== false} onChange={() => save({ daily_short: ch.daily_short === false })}
+                                    aria-label="daily on this day Short" />
+                                also a daily &quot;Aaj ki tareekh&quot; Short (what happened on this date in history), on top of the long videos
+                            </label>
                             {ch.minutes > 15 && (
                                 <p className="text-xs text-warn">
                                     Videos over 15 minutes need a verified channel: switch to this channel on YouTube, open youtube.com/verify and verify with your phone. The same unlocks custom thumbnails.

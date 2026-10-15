@@ -69,7 +69,7 @@ PLAYLISTS = {
     ("quiz", "flags"): "Flag quiz: guess the country", ("quiz", "truefalse"): "Sach ya Jhoot",
     ("quiz", "oddone"): "Odd one out", ("music", None): "New AI songs",
     ("comedy", None): "Comedy Shorts", ("controversy", None): "Controversies explained",
-    ("history", None): "History and stories", ("history", "teaser"): "History in 60 seconds",
+    ("history", None): "History and stories", ("history", "teaser"): "History in 60 seconds", ("history", "today"): "Aaj ki tareekh",
 }
 
 REPLY_PROMPT = """You reply to viewer comments for {who} ({handle}).
