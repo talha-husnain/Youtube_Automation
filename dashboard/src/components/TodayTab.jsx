@@ -221,7 +221,12 @@ export default function TodayTab({ onOpenTab }) {
                 </label>
                 <label className="flex items-center gap-2 text-xs text-ink2">
                     <input type="checkbox" checked={data.notify.summary} onChange={() => setNotify({ summary: !data.notify.summary })} aria-label="evening summary" />
-                    the day&apos;s numbers every evening at {data.notify.summary_at}
+                    the day&apos;s numbers every evening at {data.notify.summary_at}, and the week&apos;s on Sundays
+                </label>
+                <label className="flex items-center gap-2 text-xs text-ink2">
+                    <input type="checkbox" checked={data.notify.phone} onChange={() => setNotify({ phone: !data.notify.phone })} aria-label="also on Telegram" />
+                    send them to my phone on Telegram too
+                    {!data.notify.telegram && <span className="text-muted">(connect Telegram on the My channel tab first)</span>}
                 </label>
                 {held && (
                     <button onClick={() => setNotify({ snooze_until: 0 })} className="text-[11px] text-brass hover:underline">start reminders now</button>

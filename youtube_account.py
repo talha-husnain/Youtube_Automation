@@ -334,13 +334,26 @@ def _clean(text, limit):
     return (text or "").replace("<", "").replace(">", "").strip()[:limit]
 
 
+def _clean_description(text):
+    # The description's limit is 5,000 BYTES (videos resource docs), not
+    # characters: an emoji is 4 bytes and Urdu letters 2, so a 4,900-character
+    # description can still be refused. Cut at a whole character.
+    text = _clean(text, DESCRIPTION_MAX)
+    raw = text.encode("utf-8")
+    if len(raw) <= DESCRIPTION_MAX:
+        return text
+    return raw[:DESCRIPTION_MAX].decode("utf-8", "ignore").rstrip()
+
+
 def _tags(tags):
     out, used = [], 0
     for t in tags or []:
-        t = _clean(str(t).lstrip("#"), 60)
-        if t and used + len(t) + 1 <= TAGS_MAX:
+        t = _clean(str(t).lstrip("#").replace(",", " "), 60)
+        # The 500-character tag limit counts a tag with a space as quoted (+2).
+        size = len(t) + 1 + (2 if " " in t else 0)
+        if t and used + size <= TAGS_MAX:
             out.append(t)
-            used += len(t) + 1
+            used += size
     return out
 
 
@@ -364,7 +377,7 @@ def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
            "asked": "scheduled" if publish_at else privacy, "status": "uploading",
            "created": int(time.time()), **(meta or {})}
     _save_upload(row)
-    body = {"snippet": {"title": row["title"] or "Short", "description": _clean(description, DESCRIPTION_MAX),
+    body = {"snippet": {"title": row["title"] or "Short", "description": _clean_description(description),
                         "tags": _tags(tags), "categoryId": CATEGORY.get(genre, "24")},
             "status": {"privacyStatus": "private" if publish_at else privacy,
                        "selfDeclaredMadeForKids": False,
@@ -450,7 +463,7 @@ def add_to_description(video_id, line):
     if line in old:
         return False
     new = credits.insert(old, line)
-    if len(new) > DESCRIPTION_MAX:
+    if len(new.encode("utf-8")) > DESCRIPTION_MAX:
         raise RuntimeError("the description has no room left")
     snippet = {k: sn[k] for k in ("title", "categoryId", "tags", "defaultLanguage", "defaultAudioLanguage")
                if sn.get(k)}

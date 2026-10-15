@@ -2349,6 +2349,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(my_channels.loop_forever(
             _autopilot_submit, _job_clips, OUTPUT_DIR, short_kit.gemini, is_active=lambda: not _draining,
             today_fn=_today))
+        asyncio.create_task(_stay_awake_loop())
     yield
     # Cleanup (optional: cancel worker)
 
@@ -2782,6 +2783,19 @@ async def finder_channel(url: str):
         return await _in_thread(channel_tools.channel_info, url)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=channel_tools.why_not(e))
+
+
+async def _stay_awake_loop():
+    """keep_awake.refresh each minute on the event loop's own thread (Windows
+    ties the stay-awake request to the thread that made it)."""
+    import keep_awake
+    while True:
+        try:
+            working = any((j or {}).get("status") in ("queued", "processing") for j in list(jobs.values()))
+            keep_awake.refresh(working)
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️ Stay-awake error: {type(e).__name__}: {e}")
+        await asyncio.sleep(60)
 
 
 def _job_clips(job_id):
@@ -3280,9 +3294,11 @@ def _today():
                        "uploaded_today": sum(r["uploaded_today"] for r in rows),
                        "scheduled": sum(r["scheduled"] for r in rows), "views": views,
                        "views_gain": reminders.views_gain(views) if views is not None else 0,
+                       "disk_free_gb": round(my_channels.disk_free_gb(), 1),
                        "subscribers": sum(r["subscribers"] or 0 for r in rows)},
             "todo": reminders.things_to_do({"channels": rows}),
-            "notify": {"reminders": rem["reminders"], "summary": rem["summary"],
+            "notify": {"reminders": rem["reminders"], "summary": rem["summary"], "phone": rem.get("phone", True),
+                       "telegram": __import__("telegram_notify").status().get("connected", False),
                        "snooze_until": rem["snooze_until"], "slots": list(reminders.SLOTS),
                        "summary_at": reminders.SUMMARY_AT},
             "quota_used": youtube_account.quota_used()}

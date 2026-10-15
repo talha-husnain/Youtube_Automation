@@ -6,7 +6,9 @@ sign-in), one that already stopped, a channel still waiting to be
 connected. One notification covers all of it, and clicking it opens the
 Today tab with the steps. ``snooze_until`` holds them back: the owner asked
 on 15-oct-2026 to be reminded on Friday or Saturday, when there is time.
-At SUMMARY_AT the day's numbers go up as one more notification.
+At SUMMARY_AT the day's numbers go up as one more notification, and on
+Sundays the week's (videos, views, best video per channel). With Telegram
+connected the same messages go to the owner's phone too.
 """
 import json
 import os
@@ -18,8 +20,9 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(ROOT, "output", ".reminders.json")
 SLOTS = ("11:00", "19:00")
 SUMMARY_AT = "21:30"
+WEEKLY_DAY = 6            # Sunday (datetime.weekday)
 EXPIRY_WARN_DAYS = 5
-DEFAULTS = {"reminders": True, "summary": True, "snooze_until": 0, "sent": {}, "views_at": {}}
+DEFAULTS = {"reminders": True, "summary": True, "phone": True, "snooze_until": 0, "sent": {}, "views_at": {}}
 _lock = threading.Lock()
 
 
@@ -43,7 +46,7 @@ def _save(st):
 def update(patch):
     with _lock:
         st = load()
-        for key in ("reminders", "summary"):
+        for key in ("reminders", "summary", "phone"):
             if key in patch:
                 st[key] = bool(patch[key])
         if "snooze_until" in patch:
@@ -76,6 +79,10 @@ def things_to_do(today, now=None):
         out.append(f"Waiting to be connected: {', '.join(waiting)}.")
     # A channel that keeps failing (a key, a quota, a source that is gone)
     # makes nothing all day and nobody is watching the runs.
+    free = (today.get("totals") or {}).get("disk_free_gb")
+    if free is not None and free < DISK_WARN_GB:
+        out.append(f"The disk has only {free:.1f} GB free, so new videos wait. Emptying the Recycle Bin or "
+                   "deleting old files in Downloads makes room.")
     for c in today["channels"]:
         if c.get("enabled", True) and c.get("failed_today", 0) >= FAILS_WARN:
             why = f" The latest reason: {c['fail_reason']}" if c.get("fail_reason") else ""
@@ -84,6 +91,7 @@ def things_to_do(today, now=None):
 
 
 FAILS_WARN = 3
+DISK_WARN_GB = 5          # my_channels.MIN_FREE_GB: below it no new video starts
 
 
 def _slot_due(st, now_dt):
@@ -105,6 +113,66 @@ def summary_text(today):
     return ". ".join(parts) + "."
 
 
+def _channel_rows(cid):
+    """(uploads.json rows, views of a row) of one channel. The main channel's
+    rows carry no views; learning.py keeps them per video id."""
+    import youtube_account
+    if cid == "main":
+        try:
+            import learning
+            stats = learning.load().get("stats") or {}
+        except Exception:  # noqa: BLE001
+            stats = {}
+        return youtube_account.uploads(), lambda r: int((stats.get(r.get("video_id")) or {}).get("views") or 0)
+    import my_channels
+    with youtube_account.use(my_channels.account(cid)):
+        rows = youtube_account.uploads()
+    return rows, lambda r: int(r.get("views") or 0)
+
+
+def week_text(today, now=None, rows_fn=_channel_rows):
+    """The last 7 days per channel: videos up, their views, the best one."""
+    ts = now or time.time()
+    since = ts - 7 * 86400
+    lines, total_n, total_v = [], 0, 0
+    for ch in today.get("channels") or []:
+        try:
+            rows, views_of = rows_fn(ch["id"])
+        except Exception:  # noqa: BLE001 — one unreadable channel does not stop the report
+            continue
+        week = [r for r in rows if r.get("video_id") and r.get("status") == "done"
+                and since <= r.get("created", 0) <= ts and not r.get("blocked")]
+        if not week:
+            continue
+        views = sum(views_of(r) for r in week)
+        best = max(week, key=views_of)
+        total_n += len(week)
+        total_v += views
+        line = f"{ch['name']}: {len(week)} videos, {views:,} views"
+        if views_of(best):
+            line += f". Best: {(best.get('title') or '').split(' #')[0][:60]} ({views_of(best):,})"
+        lines.append(line + ".")
+    if not lines:
+        return "No videos went up this week."
+    head = f"This week: {total_n} videos, {total_v:,} views on them so far."
+    return "\n".join([head] + lines)
+
+
+def _phone(st, title, text):
+    """The same message on Telegram when it is connected; never fails the tick."""
+    if not st.get("phone"):
+        return False
+    try:
+        import telegram_notify
+        if not telegram_notify.status().get("connected"):
+            return False
+        telegram_notify.send_text(f"{title}\n{text}")
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ Telegram reminder failed: {type(e).__name__}")
+        return False
+
+
 def tick(today_fn, toast, now=None):
     """Called every minute by the channel loop. ``today_fn()`` -> app._today()."""
     now_dt = datetime.fromtimestamp(now) if now else datetime.now()
@@ -114,6 +182,7 @@ def tick(today_fn, toast, now=None):
     key = _slot_due(st, now_dt) if st["reminders"] and ts >= st.get("snooze_until", 0) else None
     want_summary = (st["summary"] and now_dt.strftime("%H:%M") >= SUMMARY_AT
                     and f"{now_dt:%Y-%m-%d} summary" not in st["sent"])
+    want_week = want_summary and now_dt.weekday() == WEEKLY_DAY
     if not key and not want_summary:
         return sent
     today = today_fn()
@@ -121,10 +190,17 @@ def tick(today_fn, toast, now=None):
         todo = things_to_do(today, ts)
         if todo:
             toast("Shortkaar needs you (15 minutes)", " ".join(todo), "today")
+            _phone(st, "Shortkaar needs you (15 minutes)", " ".join(todo))
             sent.append("reminder")
     if want_summary:
         toast("Shortkaar today", summary_text(today), "today")
+        _phone(st, "Shortkaar today", summary_text(today))
         sent.append("summary")
+    if want_week:
+        text = week_text(today, ts)
+        toast("Shortkaar this week", text, "today")
+        _phone(st, "Shortkaar this week", text)
+        sent.append("week")
     with _lock:
         st = load()
         if key:

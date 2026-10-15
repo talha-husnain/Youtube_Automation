@@ -51,6 +51,14 @@ TRANSIENT = re.compile(r"\b429\b|RESOURCE_EXHAUSTED|quota|rate.?limit|too many r
                        r"overloaded|timed out|ConnectError|getaddrinfo|network|\bDNS\b|temporarily", re.I)
 TRANSIENT_PAUSE = 1800
 TRANSIENT_MAX = 6         # a day; past that they count like any other failure
+# A job the server no longer knows, with nothing on disk: the server restarted
+# (watchdog, laptop reboot) and the job could not be resumed. Waiting for the
+# timeout held the one-job-at-a-time loop for up to 3 hours.
+LOST_AFTER = 600
+LOST = "the job was lost when the server restarted"
+# A long video needs a few GB while it renders (shots, voices, the join); a
+# full disk fails it at the last step, after all its AI calls were paid.
+MIN_FREE_GB = 5
 UPLOAD_TRIES = 3
 IDEAS_RETRY = 1800
 EXPLORE = 0.3
@@ -160,6 +168,14 @@ def _change(cid, fn):
 
 def folder(cid):
     return os.path.join(CHANNELS_DIR, cid)
+
+
+def disk_free_gb():
+    import shutil
+    try:
+        return shutil.disk_usage(os.path.dirname(STATE_FILE)).free / 1e9
+    except OSError:
+        return float("inf")
 
 
 def account(cid):
@@ -900,6 +916,8 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
         elif state in ("failed", "error", "cancelled") or (state == "completed" and not clips):
             reason = failure_reason(j["job_id"]) if failure_reason else None
             changed.append((j["job_id"], "failed", reason or "the job failed", []))
+        elif state == "missing" and now - j.get("at", now) > LOST_AFTER:
+            changed.append((j["job_id"], "failed", LOST, []))
         elif now - j.get("at", now) > KINDS.get(ch["kind"], {}).get("timeout", JOB_TIMEOUT):
             changed.append((j["job_id"], "failed", "took too long", []))
     if not changed:
@@ -916,7 +934,9 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
                         j["done_at"] = int(now)
                     if err:
                         j["error"] = err
-                    if status == "failed" and err and TRANSIENT.search(err):
+                    if status == "failed" and err == LOST:
+                        j["transient"] = True             # not the idea's fault, and no outage to wait out
+                    elif status == "failed" and err and TRANSIENT.search(err):
                         j["transient"] = True
                         c["paused_until"] = int(now) + TRANSIENT_PAUSE
             job = next((j for j in c["jobs"] if j.get("job_id") == job_id), {})
@@ -1197,6 +1217,9 @@ def claim_check(ch, log=print):
 
 # ------------------------------------------------------------------ loop
 
+_disk_said = [0.0]
+
+
 async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
     """One pass over every channel (the loop calls this each minute)."""
     loop = asyncio.get_event_loop()
@@ -1214,7 +1237,11 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
             live.append(ch)
     # One generated job at a time on this laptop: a sample the owner asked for
     # first (connected or not), else the channel furthest behind.
-    if not any(running(c) for c in rows):
+    room = disk_free_gb() >= MIN_FREE_GB
+    if not room and t - _disk_said[0] >= 3600:
+        _disk_said[0] = t
+        log(f"⚠️ Only {disk_free_gb():.1f} GB free on the disk: no new videos until {MIN_FREE_GB} GB are free.")
+    if room and not any(running(c) for c in rows):
         samples = [c for c in rows if c.get("sample_wanted")]
         behind = [c for c in live if wants_more(c)]
         if samples:
@@ -1227,7 +1254,9 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
     for ch in live:
         ch = get(ch["id"]) or ch
         if upload_due(ch, t):
-            await loop.run_in_executor(None, upload_waiting, ch, job_clips, log)
+            import keep_awake
+            with keep_awake.task():
+                await loop.run_in_executor(None, upload_waiting, ch, job_clips, log)
         if t - ch.get("last_claim_check", 0) >= CLAIM_CHECK_EVERY:
             await loop.run_in_executor(None, claim_check, ch, log)
         if t - ch.get("last_learn", 0) >= LEARN_EVERY:

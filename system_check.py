@@ -198,9 +198,23 @@ def watchdog():
             _row("Watchdog", "warn", "Not running.", "Run autostart.bat once (it starts at every login)."))
 
 
+def stay_awake():
+    """Does the laptop stay awake while a video is made (keep_awake.py)?"""
+    import keep_awake
+    if os.environ.get("KEEP_AWAKE", "1").strip() == "0":
+        return _row("Stay awake", "warn", "Off (KEEP_AWAKE=0): the laptop may sleep in the middle of a video.")
+    if not keep_awake.on_charger():
+        return _row("Stay awake", "warn", "On battery: the laptop may sleep in the middle of a video.",
+                    "Keep the charger in while the channels work.")
+    st = keep_awake.state()
+    return _row("Stay awake", "ok", "Working now: the laptop stays awake until it is done." if st["awake"] else
+                "On the charger: while a video is made or uploaded the laptop does not go to sleep "
+                "(closing the lid still does).")
+
+
 def run_all(output_dir, cap_gb, retention_seconds):
     rows = [gemini(), *downloader(), ffmpeg(), disk(output_dir, cap_gb), *channel(), autopilot(),
-            free_voice(), stock(), quota(), watchdog()]
+            free_voice(), stock(), quota(), watchdog(), stay_awake()]
     import short_kit
     n = len(short_kit.music_tracks())
     rows.append(_row("Background music", "ok" if n else "warn", f"{n} track(s) in the music folder.",
