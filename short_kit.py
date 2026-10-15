@@ -38,6 +38,10 @@ MUSIC_DIR = os.environ.get("MUSIC_DIR") or os.path.join(os.path.dirname(os.path.
 MUSIC_EXT = (".mp3", ".m4a", ".wav", ".ogg", ".aac", ".flac")
 # Far under the voices (LOUDNORM_FILTER, -14): a bed, not a song.
 BED_LOUDNORM = "loudnorm=I=-30:TP=-8:LRA=11"
+# A render whose captions are burned in a second pass: veryfast at CRF 16 took
+# 29 s where the default medium CRF 18 took 57 s on a 61 s Short (15-oct-2026),
+# and the caption pass re-encodes at full quality anyway.
+FAST_PASS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p"]
 
 
 def neutral_stem(prefix):
@@ -71,22 +75,287 @@ def caption_margin():
     return round(CAPTION_TOP_PX * 288 / OUT_H)
 
 
-def timed_transcript(lines, language="ur"):
-    """[(text, start, end)] -> the transcript shape the caption burner reads.
+def speech_spans(wav, gap=0.12, floor_db=-32.0):
+    """[(start, end)] where the voice in a clean TTS wav is speaking: 20 ms
+    frames louder than ``floor_db`` below the peak, pauses shorter than ``gap``
+    bridged. [] when the file cannot be read."""
+    try:
+        import numpy as np
+        with wave.open(wav, "rb") as w:
+            rate, n = w.getframerate(), w.getnframes()
+            if w.getsampwidth() != 2 or not n:
+                return []
+            data = np.frombuffer(w.readframes(n), dtype=np.int16).astype(np.float32)
+            if w.getnchannels() > 1:
+                data = data.reshape(-1, w.getnchannels()).mean(axis=1)
+    except (OSError, wave.Error, EOFError, ImportError, ValueError):
+        return []
+    hop = max(1, rate // 50)
+    frames = len(data) // hop
+    if not frames:
+        return []
+    rms = np.sqrt((data[:frames * hop].reshape(frames, hop) ** 2).mean(axis=1)) + 1e-6
+    loud = 20 * np.log10(rms / rms.max()) > floor_db
+    spans, start = [], None
+    for k, on in enumerate(loud):
+        t = k * hop / rate
+        if on and start is None:
+            start = t
+        elif not on and start is not None:
+            spans.append([start, t])
+            start = None
+    if start is not None:
+        spans.append([start, frames * hop / rate])
+    merged = []
+    for s in spans:
+        if merged and s[0] - merged[-1][1] < gap:
+            merged[-1][1] = s[1]
+        else:
+            merged.append(s)
+    return [(a, b) for a, b in merged if b - a >= 0.06]
 
-    Voice models give no word times, so each line's words share its time by
+
+def _spread(words, weights, spans, a, b):
+    """Words over the speech between a and b, by length."""
+    inside = [(max(s, a), min(e, b)) for s, e in spans if min(e, b) > max(s, a)] or [(a, b)]
+    total = sum(e - s for s, e in inside) or 1e-3
+    mass = float(sum(weights)) or 1.0
+
+    def at(fraction):
+        left = fraction * total
+        for s, e in inside:
+            if left <= e - s + 1e-9:
+                return s + left
+            left -= e - s
+        return inside[-1][1]
+    out, acc = [], 0.0
+    for wt in weights:
+        s, acc = at(acc / mass), acc + wt
+        out.append((s, at(acc / mass)))
+    return out
+
+
+def spoken_weight(word):
+    """How long a word takes to say, roughly: numbers are short to write and
+    long to say ("680" = "chhe sau assi"), abbreviations go letter by letter."""
+    core = word.strip(".,?!;:'\"()")
+    if any(ch.isdigit() for ch in core):
+        return 3 + 3 * sum(ch.isdigit() for ch in core)
+    if 2 <= len(core) <= 4 and core.isupper():
+        return 3 * len(core)
+    return len(core) + 2
+
+
+def word_times(words, spans, length):
+    """[(start, end)] in wav time for ``words`` spoken in ``spans``.
+
+    A plain spread by length put a sentence end 3 s early on a real narration
+    line (15-oct-2026, checked against Whisper's word times): TTS voices pause
+    longest at full stops, and numbers take long to say. So the sentence ends
+    (. ? !) take the longest pauses of the line, in order; each comma then
+    takes the clear pause nearest where it is expected inside its sentence;
+    the words between two anchors share only the speech between them."""
+    spans = spans or [(0.0, length)]
+    weights = [spoken_weight(w) for w in words]
+    pauses = [(spans[i][1], spans[i + 1][0]) for i in range(len(spans) - 1)]
+    strong = [k for k, w in enumerate(words[:-1]) if w[-1:] in ".?!"]
+    anchors = {}                                  # word index -> (pause start, pause end)
+    if strong and len(pauses) >= len(strong):
+        longest = sorted(sorted(pauses, key=lambda p: p[1] - p[0], reverse=True)[:len(strong)])
+        anchors.update(zip(strong, longest))
+
+    def expect(k, lo_k, lo_t, hi_k, hi_t):
+        mass = sum(weights[lo_k + 1:hi_k + 1]) or 1
+        return lo_t + (hi_t - lo_t) * sum(weights[lo_k + 1:k + 1]) / mass
+    soft = [k for k, w in enumerate(words[:-1]) if w[-1:] in ",;:" and k not in anchors]
+    for k in soft:
+        lo = max([j for j in anchors if j < k], default=-1)
+        hi = min([j for j in anchors if j > k], default=len(words) - 1)
+        lo_t = anchors[lo][1] if lo >= 0 else spans[0][0]
+        hi_t = anchors[hi][0] if hi in anchors else spans[-1][1]
+        e = expect(k, lo, lo_t, hi, hi_t)
+        taken = set(anchors.values())
+        options = [p for p in pauses if p not in taken and p[1] - p[0] >= 0.15 and lo_t < p[0] < hi_t
+                   and abs(p[0] - e) <= 0.9]
+        if options:
+            anchors[k] = min(options, key=lambda p: abs(p[0] - e) - (p[1] - p[0]))
+    # Anchors must run forward in time; drop any that would not.
+    ordered, last = [], spans[0][0]
+    for k in sorted(anchors):
+        if anchors[k][0] > last:
+            ordered.append((k, anchors[k][0]))
+            ordered.append((k, anchors[k][1]))     # the next words start after the pause
+            last = anchors[k][1]
+    anchors = [(-1, spans[0][0])] + ordered
+    out = [None] * len(words)
+    bounds = [anchors[0]] + anchors[1:] + [(len(words) - 1, spans[-1][1])]
+    k0, t0 = -1, spans[0][0]
+    for k1, t1 in bounds[1:]:
+        if k1 > k0 and t1 > t0:
+            for j, ts in zip(range(k0 + 1, k1 + 1), _spread(words[k0 + 1:k1 + 1], weights[k0 + 1:k1 + 1],
+                                                             spans, t0, t1)):
+                out[j] = ts
+            k0 = k1
+        t0 = max(t0, t1)
+    # Anything left (no speech found for it) shares the tail.
+    if None in out:
+        k = out.index(None)
+        for j, ts in zip(range(k, len(words)), _spread(words[k:], weights[k:], spans, t0, max(t0 + 0.1, length))):
+            out[j] = ts
+    return [(s, max(e, s + 0.05)) for s, e in out]
+
+
+_whisper = {}
+_whisper_lock = __import__("threading").Lock()
+
+
+def whisper_words(wav, language="ur"):
+    """[(start, end)] of each word Whisper hears in our own voice line, or [].
+
+    Roman Urdu is the Urdu sentence letter for letter, so Whisper (writing Urdu
+    script) usually finds exactly as many words as the script has: 22 of 22 and
+    27 of 27 on a real narration line, 15-oct-2026. Model loaded once."""
+    try:
+        from faster_whisper import WhisperModel
+        with _whisper_lock:
+            if "m" not in _whisper:
+                _whisper["m"] = WhisperModel(os.environ.get("CAPTION_WHISPER") or "small", device="cpu",
+                                             compute_type="int8", cpu_threads=4)
+            model = _whisper["m"]
+            segs, _info = model.transcribe(wav, language=language, word_timestamps=True, vad_filter=False,
+                                           condition_on_previous_text=False, beam_size=1)
+            return [(w.word.strip(), float(w.start), float(w.end))
+                    for s in segs for w in (s.words or []) if w.word.strip()]
+    except Exception:  # noqa: BLE001 — the pause method takes over
+        return []
+
+
+CLAUSE_END = tuple(".,?!;:۔،؟")
+
+
+def _units(word):
+    """How many words Whisper writes for one Roman word: "maidan-e-Karbala"
+    is two in Urdu script (the izafat -e- joins the first), "ahl-o-ayal" three."""
+    parts = [p for p in word.split("-") if p]
+    return max(1, len([p for p in parts if p.lower() != "e"]))
+
+
+def _grid(heard, n_units, weights):
+    """Times for n units spread over Whisper's words by length, using its real
+    word starts and ends as the clock (a word count that differs a little
+    still lands each unit near the right sound)."""
+    m = len(heard)
+    total = float(sum(weights)) or 1.0
+
+    def at(x):
+        k = min(int(x), m - 1)
+        s, e = heard[k][1], heard[k][2]
+        return s + (min(x, m) - k) * (e - s)
+    out, acc = [], 0.0
+    for wt in weights:
+        a = at(acc / total * m)
+        acc += wt
+        out.append((a, at(acc / total * m)))
+    return out
+
+
+def align_heard(words, heard):
+    """[(start, end)] per word from Whisper's (text, start, end) words: exact
+    when the counts match, else clause by clause (both sides end clauses at
+    punctuation), else over the whole line. None when nothing was heard."""
+    if not heard or not words:
+        return None
+    units, owner = [], []
+    for k, w in enumerate(words):
+        n = _units(w)
+        for j in range(n):
+            units.append(w if j == n - 1 else w.split("-")[0])
+            owner.append(k)
+    weights = [spoken_weight(u) for u in units]
+
+    def clauses(seq, text_of, ends):
+        out, cur = [], []
+        for i, item in enumerate(seq):
+            cur.append(i)
+            if text_of(item).endswith(ends):
+                out.append(cur)
+                cur = []
+        return out + ([cur] if cur else [])
+    # Whisper marks clauses its own way (on 8 real lines: the same commas, only
+    # the full stops, or nothing), so try commas, then sentences, then the line.
+    times = None
+    for ends in (CLAUSE_END, tuple(".?!۔؟")):
+        ours, theirs = clauses(units, lambda u: u, ends), clauses(heard, lambda h: h[0], ends)
+        if len(ours) == len(theirs) and len(ours) > 1:
+            times = []
+            for oc, tc in zip(ours, theirs):
+                hs = [heard[i] for i in tc]
+                if len(oc) == len(hs):
+                    times += [(h[1], h[2]) for h in hs]
+                else:
+                    times += _grid(hs, len(oc), [weights[i] for i in oc])
+            break
+    if times is None:
+        times = ([(h[1], h[2]) for h in heard] if len(units) == len(heard)
+                 else _grid(heard, len(units), weights))
+    out = []
+    for k in range(len(words)):
+        mine = [t for t, o in zip(times, owner) if o == k]
+        out.append((mine[0][0], max(mine[-1][1], mine[0][0] + 0.05)))
+    for k in range(1, len(out)):           # never run backwards
+        if out[k][0] < out[k - 1][0]:
+            out[k] = (out[k - 1][0], max(out[k][1], out[k - 1][0] + 0.05))
+    return out
+
+
+def line_word_times(text, wav, length, language="ur"):
+    """[(start, end)] per word of ``text`` in its own voice wav: Whisper's word
+    times when it heard the same number of words, else spread over the real
+    speech (speech_spans + word_times), else by length. EXACT_CAPTIONS=pauses
+    skips Whisper, =0 uses length only."""
+    words = (text or "").split()
+    mode = os.environ.get("EXACT_CAPTIONS", "whisper")
+    if not words or not wav or mode == "0":
+        return None
+    import free_voice
+    told = free_voice.heard_words(wav)        # the free voice says when each word is spoken
+    if told:
+        got = align_heard(words, told)
+        if got:
+            return got
+    if mode == "whisper":
+        got = align_heard(words, whisper_words(wav, language))
+        if got:
+            return got
+    spans = speech_spans(wav)
+    return word_times(words, spans, length) if spans else None
+
+
+def timed_transcript(lines, language="ur"):
+    """[(text, start, end[, wav])] -> the transcript shape the caption burner reads.
+
+    Voice models give no word times. With the line's wav, its words are spread
+    over the moments the voice is actually speaking (speech_spans), so the
+    highlight waits through pauses; without it, over the line's whole time by
     length (the same spread the take's gold highlight uses)."""
     segs = []
-    for text, start, end in lines:
+    for line in lines:
+        text, start, end = line[:3]
+        wav = line[3] if len(line) > 3 else None
         words = (text or "").split()
         if not words or end <= start:
             continue
-        weights = [len(w) + 2 for w in words]
-        t, out = start, []
-        for w, wt in zip(words, weights):
-            d = (end - start) * wt / sum(weights)
-            out.append({"word": " " + w, "start": round(t, 3), "end": round(t + d, 3)})
-            t += d
+        exact = line_word_times(text, wav, end - start, "en" if language == "en" else "ur") if wav else None
+        if exact:
+            times = [(start + a, start + b) for a, b in exact]
+        else:
+            weights = [len(w) + 2 for w in words]
+            t, times = start, []
+            for wt in weights:
+                d = (end - start) * wt / sum(weights)
+                times.append((t, t + d))
+                t += d
+        out = [{"word": " " + w, "start": round(a, 3), "end": round(min(b, end), 3)} for w, (a, b) in zip(words, times)]
         segs.append({"start": start, "end": end, "text": text, "words": out})
     return {"language": language, "segments": segs}
 
@@ -108,14 +377,25 @@ def speed_up(path, factor):
 def voice_lines(client, items, job_dir, prefix):
     """items: [{"text", "voice", "style", "language"?}] -> [(wav path, seconds) | (None, 0.0)].
 
-    Three at a time; 8 calls back to back met no rate limit (8-oct-2026)."""
+    The free Microsoft voices (free_voice.py) read every line they can unless
+    VOICE_ENGINE=gemini; a line they fail, or one in a language they do not
+    take, is read by Gemini. Three at a time; 8 Gemini calls back to back met
+    no rate limit (8-oct-2026)."""
     import ai_take
+    import free_voice
+    free = free_voice.voice_items(client, items) if free_voice.engine() == "edge" else [None] * len(items)
 
     def one(k):
         it = items[k]
         path = os.path.join(job_dir, f".{prefix}_{k + 1}.wav")
-        secs = ai_take.speak(client, it["text"], path, it.get("voice") or ai_take.DEFAULT_VOICE,
-                             it.get("style"), **({"language": it["language"]} if it.get("language") else {}))
+        secs = None
+        if free[k]:
+            secs = free_voice.speak(free[k][0], path, free[k][1], free[k][2])
+        if not secs:
+            if os.path.exists(path + ".words.json"):
+                os.remove(path + ".words.json")
+            secs = ai_take.speak(client, it["text"], path, it.get("voice") or ai_take.DEFAULT_VOICE,
+                                 it.get("style"), **({"language": it["language"]} if it.get("language") else {}))
         return (path, secs) if secs else (None, 0.0)
 
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -211,7 +491,7 @@ def bg_source(colors, seconds):
 
 def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=(),
            music=None, visualizer=False, silent=False, fades=None, music_seconds=None, bed=None,
-           images=(), bg_image=None):
+           images=(), bg_image=None, bg_video=None, fast=False):
     """Make a 1080x1920 short: gradient (or ``bg_image``), an optional wave
     line from ``music``, pictures, then the text layer.
 
@@ -226,18 +506,29 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     between t0 and t1, fading in and out and growing by ``zoom`` (0.05 = 5%).
     bg_image: a picture for the whole background instead of the gradient,
     panning slowly (the AI songs' cover art).
+    bg_video: a finished background (broll.py's stock footage at the canvas
+    size, at least ``seconds`` long) instead of either.
     """
     ass_path = os.path.join(os.path.dirname(os.path.abspath(out_path)),
                             f"gen_{os.getpid()}_{int(time.time() * 1000) % 10**8}.ass")
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write("\n".join(ass_header(extra_styles) + list(events)) + "\n")
-    if bg_image:
+    if bg_video:
+        cmd = ["ffmpeg", "-y", "-v", "error", "-i", bg_video]
+        bg_image = None
+    elif bg_image:
         cmd = ["ffmpeg", "-y", "-v", "error", "-loop", "1", "-framerate", str(FPS),
                "-t", f"{seconds:.3f}", "-i", bg_image]
     else:
         cmd = ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", bg_source(colors, seconds)]
     cmd += ["-f", "lavfi", "-t", f"{seconds:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
     graph, v, mix, idx = [], "[0:v]", ["[1:a]"], 2
+    if bg_video:
+        # Footage gets a dark fade top and bottom so the title and captions read.
+        import broll
+        cmd += ["-i", broll.shade(OUT_W, OUT_H)]
+        graph.append(f"[0:v][{idx}:v]overlay=0:0:format=auto[shaded]")
+        v, idx = "[shaded]", idx + 1
     if bg_image:
         # 10% larger than the canvas, then a slow drift of the crop window:
         # movement for the price of a crop (zoompan per frame is far slower).
@@ -305,7 +596,7 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     try:
         r = subprocess.run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
                                   "-t", f"{seconds:.3f}", "-r", str(FPS),
-                                  *video_encode_args(QUALITY), "-c:a", "aac", "-b:a", "192k",
+                                  *(FAST_PASS if fast else video_encode_args(QUALITY)), "-c:a", "aac", "-b:a", "192k",
                                   *METADATA_SCRUB, "-movflags", "+faststart", out_path],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                            errors="replace", timeout=1800)

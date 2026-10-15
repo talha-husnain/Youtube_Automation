@@ -582,9 +582,12 @@ def topic_frame_events(story, total, handle):
     return ev
 
 
-def _voice_timeline(client, lines, output_dir, stem, voice=None, style=None):
-    """Voice every line; (windows [(k, start, end)], voices, caption lines, end)."""
+def _voice_timeline(client, lines, output_dir, stem, voice=None, style=None, broll_rule=""):
+    """Voice every line; (windows [(k, start, end)], voices, caption lines, end).
+    The background footage for the same lines is searched meanwhile (broll)."""
+    import broll
     voice = voice or os.environ.get("CRICKET_VOICE") or "Fenrir"
+    broll.prefetch(output_dir, lines[0] if lines else "", [t for t in lines if (t or "").strip()], broll_rule, client)
     said = kit.voice_lines(client, [{"text": t, "voice": voice, "style": style or VOICE_STYLE} for t in lines],
                            output_dir, stem)
     if not any(p for p, _ in said):
@@ -595,7 +598,7 @@ def _voice_timeline(client, lines, output_dir, stem, voice=None, style=None):
         windows.append((k, t, t + secs + GAP))
         if path:
             voices.append((path, t))
-        caps.append((text, t, t + secs))
+        caps.append((text, t, t + secs, path))
         t += secs + GAP
     return windows, voices, caps, t + 0.6
 
@@ -627,22 +630,35 @@ def _photo(name, output_dir, kind="cricket"):
 
 
 def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_end, clip, seo,
-            images=(), photos=(), genre="cricket", after_seo=None):
+            images=(), photos=(), genre="cricket", after_seo=None, broll_rule=""):
+    import broll
     import seo_copy
     outro_s = cfg["outro_seconds"]
     card_ev, card_sfx = kit.end_card(body_end, outro_s)
     total = body_end + (outro_s if card_ev else 0.0)
     track = _bed(genre)
+    # Free stock footage behind the cards, one clip per voice line (broll.py);
+    # without keys or results the gradient stays.
+    bg, footage = broll.background_for(seo.get("source_title") or clip.get("video_title_for_youtube_short") or genre,
+                                       clip["captions"]["segments"], total, output_dir, rule=broll_rule)
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
     print(f"🎬 Rendering the {genre} short ({total:.0f}s"
           + (f", music: {os.path.basename(track)}" if track else "") + ")...")
-    kit.render(final, total, colors, kit.ambient_events(total) + events + card_ev, STYLES,
-               voices=voices, sfx=sfx + card_sfx, bed=(track, body_end) if track else None, images=images)
+    kit.render(final, total, colors, ([] if bg else kit.ambient_events(total)) + events + card_ev, STYLES,
+               voices=voices, sfx=sfx + card_sfx, bed=(track, body_end) if track else None, images=images,
+               bg_video=bg, fast=bool(clip.get("captions")))
     clip.update({"end": round(total, 3), "seconds": round(total, 3), "file": final,
-                 "background_music": os.path.basename(track) if track else None})
+                 "background_music": os.path.basename(track) if track else None,
+                 "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in footage]})
     seo_copy.apply([clip], clip["captions"], **seo)
     if after_seo:
         after_seo(clip)
+    if footage:
+        import credits
+        import stock_media
+        for field in ("seo_description", "video_description_for_instagram"):
+            if clip.get(field):
+                clip[field] = credits.insert(clip[field], stock_media.credit_line(footage))
     if photos:
         # Free licences ask for credit: in the copy, never on screen.
         import credits

@@ -363,6 +363,8 @@ def run(output_dir, pipeline):
         lines.append(f"Sahi jawab: {q.answer_text}! {q.explain}")
     lines.append(quiz.outro_line)
     print(f"🎙️ Voicing {len(lines)} lines...")
+    import broll
+    broll.prefetch(output_dir, quiz.title, lines, FOOTAGE_RULE, client)   # footage is searched while voicing
     said = kit.voice_lines(client, [{"text": t, "voice": voice, "style": VOICE_STYLE} for t in lines],
                            output_dir, stem)
     if not any(p for p, _ in said):
@@ -378,7 +380,7 @@ def run(output_dir, pipeline):
     events += _pill(t + 0.2, hook_end, 1040, (f"QUIZ #{number} | " if number else "") + f"{len(quiz.questions)} {f['label']}")
     if said[0][0]:
         voices.append((said[0][0], t))
-    caps.append((lines[0], t, t + lens[0]))
+    caps.append((lines[0], t, t + lens[0], said[0][0]))
     t = hook_end
     for k, q in enumerate(quiz.questions):
         qi, ri = 1 + 2 * k, 2 + 2 * k
@@ -386,7 +388,7 @@ def run(output_dir, pipeline):
         sfx.append((kit.WHOOSH, 0.3, max(0.0, q0 - 0.15)))
         if said[qi][0]:
             voices.append((said[qi][0], q0 + 0.2))
-        caps.append((lines[qi], q0 + 0.2, q0 + 0.2 + lens[qi]))
+        caps.append((lines[qi], q0 + 0.2, q0 + 0.2 + lens[qi], said[qi][0]))
         timer0 = q0 + 0.2 + lens[qi] + 0.3
         reveal0 = timer0 + f["timer"]
         for s in range(f["timer"]):
@@ -394,7 +396,7 @@ def run(output_dir, pipeline):
         sfx.append((DING, 0.9, reveal0))
         if said[ri][0]:
             voices.append((said[ri][0], reveal0 + 0.15))
-        caps.append((lines[ri], reveal0 + 0.15, reveal0 + 0.15 + lens[ri]))
+        caps.append((lines[ri], reveal0 + 0.15, reveal0 + 0.15 + lens[ri], said[ri][0]))
         end = reveal0 + 0.15 + lens[ri] + 0.5
         events += question_events(k + 1, len(quiz.questions), f["label"], q, q0, timer0, reveal0, end,
                                   picture=bool(pictures))
@@ -409,7 +411,7 @@ def run(output_dir, pipeline):
     events += _pill(o0 + 0.3, o0 + lens[-1] + 0.8, 980, "COMMENT KARO")
     if said[-1][0]:
         voices.append((said[-1][0], o0 + 0.1))
-    caps.append((lines[-1], o0 + 0.1, o0 + 0.1 + lens[-1]))
+    caps.append((lines[-1], o0 + 0.1, o0 + 0.1 + lens[-1], said[-1][0]))
     body_end = o0 + lens[-1] + 0.8
 
     outro_s = cfg["outro_seconds"]
@@ -422,12 +424,14 @@ def run(output_dir, pipeline):
     if cfg["handle"]:
         frame.append(kit.dialogue(1, 0, total, "QzSmall", rf"{{\an5\pos({CX},70)\alpha&H40&}}{cfg['handle']}"))
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
+    transcript = kit.timed_transcript(caps)
+    import broll
+    bg, footage = broll.background_for(quiz.title, transcript["segments"], total, output_dir, client, FOOTAGE_RULE)
     print(f"🎬 Rendering the quiz short ({total:.0f}s"
           + (f", music: {os.path.basename(track)}" if track else "") + ")...")
     kit.render(final, total, [cfg["bg"], kit.blend("#4C1D95", cfg["bg"], 0.35), kit.blend("#1E3A8A", cfg["bg"], 0.3)],
-               kit.ambient_events(total) + frame + events + card_ev, STYLES, voices=voices,
-               sfx=sfx + card_sfx, bed=(track, body_end) if track else None, images=images)
-    transcript = kit.timed_transcript(caps)
+               ([] if bg else kit.ambient_events(total)) + frame + events + card_ev, STYLES, voices=voices,
+               sfx=sfx + card_sfx, bed=(track, body_end) if track else None, images=images, bg_video=bg)
     clip = {"start": 0.0, "end": round(total, 3), "seconds": round(total, 3), "file": final,
             "video_title_for_youtube_short": quiz.title, "viral_hook_text": quiz.hook_line,
             "why": f"Quiz ({fmt}): {topic or 'mixed'}", "predicted_score": 85, "genre": "quiz",
@@ -442,10 +446,21 @@ def run(output_dir, pipeline):
                    + (f" It is the channel's daily quiz number {number}: start the title with \"Quiz #{number}:\"."
                       if number else ""),
                    text_limit=4000)
+    if footage:
+        import credits
+        import stock_media
+        clip["footage"] = [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in footage]
+        for field in ("seo_description", "video_description_for_instagram"):
+            if clip.get(field):
+                clip[field] = credits.insert(clip[field], stock_media.credit_line(footage))
     # The question is on screen already: no burned captions.
     clip["captions"] = None
     kit.finish(output_dir, stem, [clip], transcript, pipeline, extra={"genre": "quiz"})
 
+
+# The footage behind a question must not give the answer away.
+FOOTAGE_RULE = ("This is a quiz: never footage that shows or hints at an answer, never a flag, map with names, "
+                "text or numbers; calm footage of the question's subject or theme. ")
 
 SEO_CONTEXT = ("IMPORTANT: this short is NOT comedy. It is a quiz Short ({kind}, topic: {topic}) with "
                "exactly {n} questions (a score is out of {n}) and a countdown before each answer. Ignore the comedy phrases and hashtags above: use quiz "

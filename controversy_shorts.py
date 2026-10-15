@@ -36,6 +36,10 @@ import short_kit as kit
 VOICE_STYLE = "like a calm, gripping documentary narrator, natural Urdu accent, serious, never mocking"
 MIN_SOURCES = 3
 RED = "#7F1D1D"
+# Stock footage beside a real person's name must not suggest what no court
+# said: handcuffs or prison bars next to "allegations" read as guilt.
+FOOTAGE_RULE = ("Never footage that suggests a crime, arrest or guilt (handcuffs, prison bars, police "
+                "arrests, mugshots), never a recognisable face, never religious or political symbols. ")
 RULES = ("religion or blasphemy; politics or the army of any country; anyone under 18; sexual assault or "
          "harassment claims no court has ruled on; private people who are not famous; suicide or self-harm; "
          "a named person's health or mental illness; family members who are not public figures themselves")
@@ -218,7 +222,8 @@ def run(output_dir, pipeline):
     lines = [story.hook_line] + [b.line for b in story.beats] + [story.status_line, story.question]
     print(f"🎙️ Voicing {len(lines)} lines...")
     windows, voices, caps, body_end = cs._voice_timeline(
-        client, lines, output_dir, stem, voice=os.environ.get("CONTROVERSY_VOICE") or "Charon", style=VOICE_STYLE)
+        client, lines, output_dir, stem, voice=os.environ.get("CONTROVERSY_VOICE") or "Charon", style=VOICE_STYLE,
+        broll_rule=FOOTAGE_RULE)
     frame = SimpleNamespace(kicker="CONTROVERSY", title=story.title)
     events, sfx, images, n = cs.topic_frame_events(frame, body_end, cfg["handle"]), [], [], len(story.beats)
     for k, a, b in windows:
@@ -261,4 +266,5 @@ def run(output_dir, pipeline):
                voices, sfx, body_end, clip,
                {"source_title": topic, "context": SEO_CONTEXT.format(person=story.person, topic=topic),
                 "text_limit": 4000},
-               images=images, photos=[photo["info"]] if photo else [], genre="controversy", after_seo=add_sources)
+               images=images, photos=[photo["info"]] if photo else [], genre="controversy", after_seo=add_sources,
+               broll_rule=FOOTAGE_RULE)

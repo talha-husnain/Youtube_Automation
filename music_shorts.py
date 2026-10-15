@@ -34,6 +34,10 @@ CX = kit.OUT_W // 2
 LYRIA_MODEL = os.environ.get("MUSIC_MODEL") or "lyria-3.5"
 MAX_SONG = 58.0      # Shorts music of a minute at most (owner's ask), end card after
 SING_TRIES = 3
+# Mood footage under the lyrics: a stranger singing or playing would look like
+# a music video of someone else's song.
+FOOTAGE_RULE = ("Mood footage that fits the song's feeling (city lights, rain, roads, sea, sky, nature); never "
+                "a person singing, rapping or playing an instrument, never text. ")
 STYLES = ["upbeat pop", "lo-fi chill", "acoustic love song", "EDM dance pop", "R&B slow jam", "pop punk",
           "country pop", "indie folk", "afrobeats", "synthwave", "motivational anthem", "sad piano ballad"]
 THEMES = ["falling in love", "heartbreak", "summer nights", "late night drive", "best friends",
@@ -315,7 +319,6 @@ def run(output_dir, pipeline):
         raise RuntimeError(f"Lyria refused {SING_TRIES} songs in a row; the next Short tries another style.")
     seconds = media_seconds(song)
     print(f"   ✅ {seconds:.0f}s of song. Painting the cover...")
-    art = cover(client, p, os.path.join(output_dir, f".{stem}_cover.png"))
     print("👂 Timing the lyrics...")
     lyrics = [*p.verse, *p.pre_chorus, *p.chorus]
     lines = align(lyrics, hear(song, lyrics))
@@ -338,14 +341,22 @@ def run(output_dir, pipeline):
                                    rf"{{\an5\pos({CX},1640)\1c&HFFFFFF&\fad(300,300)}}"
                                    rf"NEW SONG EVERY DAY{(' | ' + cfg['handle']) if cfg['handle'] else ''}"))
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
-    print(f"🎬 Rendering the song short ({total:.0f}s{', with cover' if art else ''})...")
+    # Free mood footage under the lyrics, one clip per line (broll.py); the
+    # AI cover (a paid image call) only when no footage is found.
+    import broll
+    bg, footage = broll.background_for(f"{p.title}: a {p.genre} song about {theme}",
+                                       [{"start": a, "text": t} for t, a, _b in lines], total, output_dir, client,
+                                       FOOTAGE_RULE)
+    art = None if bg else cover(client, p, os.path.join(output_dir, f".{stem}_cover.png"))
+    print(f"🎬 Rendering the song short ({total:.0f}s{', with footage' if bg else ', with cover' if art else ''})...")
     kit.render(final, total, [kit.blend(colors[0], "#000000", 0.6), kit.blend(colors[-1], "#000000", 0.5)],
                events, LYRIC_STYLES, sfx=card_sfx, music=(song, start, 1.0), visualizer=True,
-               fades=(1.2, body), music_seconds=body, bg_image=art)
+               fades=(1.2, body), music_seconds=body, bg_image=art, bg_video=bg)
     hashtags = " ".join("#" + re.sub(r"[^A-Za-z0-9_]", "", h) for h in (p.hashtags or [])[:4] if h.strip())
     description = (f"{p.description.strip()}\n\nLyrics:\n" + "\n".join(p.chorus) +
                    "\n\nAn original AI-generated song: lyrics written with AI, music and vocals made "
-                   "with Google Lyria." + (f"\n\n{hashtags} #shorts" if hashtags else "\n\n#shorts"))
+                   "with Google Lyria." + (f"\n{__import__('stock_media').credit_line(footage)}" if footage else "")
+                   + (f"\n\n{hashtags} #shorts" if hashtags else "\n\n#shorts"))
     clip = {"start": 0.0, "end": round(total, 3), "seconds": round(total, 3), "file": final,
             "video_title_for_youtube_short": p.title, "viral_hook_text": p.chorus[0],
             "why": f"AI song: {style}, {theme}", "predicted_score": 80, "genre": "music",
@@ -356,5 +367,6 @@ def run(output_dir, pipeline):
             "ai_voice": "AI music and vocals (Google Lyria)",
             "comment_question": "Which line hit you the hardest? 🎧",
             "song": {"title": p.title, "style": style, "theme": theme, "genre": p.genre,
-                     "lyrics": lyrics, "cover": bool(art)}}
+                     "lyrics": lyrics, "cover": bool(art)},
+            "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in footage]}
     kit.finish(output_dir, stem, [clip], None, pipeline, extra={"genre": "music"})

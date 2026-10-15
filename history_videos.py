@@ -71,7 +71,11 @@ MIN_SOURCES = 3
 SHOT_SECONDS = 11.0            # a new picture or a closer crop about this often
 GAP = 0.35                     # after each voice paragraph
 TITLE_CARD, CHAPTER_CARD, END_CARD = 3.2, 2.6, 6.0
-AI_IMAGES = int(os.environ.get("HISTORY_AI_IMAGES") or 10)
+# Free by default (owner, 15-oct-2026: "everything should be free"): Wikipedia
+# and stock footage only. AI pictures (~$0.067 each) and the AI thumbnail
+# (~$0.10) come back with HISTORY_AI_IMAGES=10 / HISTORY_AI_THUMBNAIL=1.
+AI_IMAGES = int(os.environ.get("HISTORY_AI_IMAGES") or 0)
+AI_THUMBNAIL = os.environ.get("HISTORY_AI_THUMBNAIL", "0") == "1"
 AI_IMAGE_SIZE = os.environ.get("HISTORY_IMAGE_SIZE") or "1K"
 WIKI_WIDTH = 1920              # a standard Wikimedia thumbnail width
 MAX_ARTICLES = 16
@@ -106,6 +110,9 @@ RULES = ("mocking or judging any religion, sect, prophet or revered religious fi
 SACRED = ("prophets, the Prophet's family (Ahl al-Bayt), the companions (Sahaba), the imams, or other revered "
           "religious figures")
 NO_PEOPLE = f"For anything about {SACRED}: show NO people at all, only places, landscapes, objects, maps and light."
+# Stock libraries are mostly today's world: a car or a phone in a scene about 476 AD breaks the story.
+FOOTAGE_RULE = ("This is a history documentary: never modern things (cars, phones, screens, modern buildings, "
+                "power lines, people in modern clothes) unless the scene is about today. ")
 
 
 class Scene(BaseModel):
@@ -710,26 +717,33 @@ def _rect(layer, t0, t1, x, y, w, h, colour="#000000", alpha="70", fade=(250, 25
                         rf"\fad({fade[0]},{fade[1]})\p1}}m 0 0 l {w} 0 l {w} {h} l 0 {h}{{\p0}}")
 
 
-def chunks(text, t0, secs, max_words=7, max_chars=44):
-    """Caption groups [(text, start, end)]: words share the paragraph's time by
-    length (the voice has no word times), a group ends at punctuation."""
+def chunks(text, t0, secs, max_words=7, max_chars=44, wav=None, language="ur"):
+    """Caption groups [(text, start, end)], a group ends at punctuation. The
+    voice has no word times: with its wav they come from Whisper or the real
+    pauses (short_kit.line_word_times), else from length."""
     words = (text or "").split()
     if not words or secs <= 0:
         return []
-    weights = [len(w) + 2 for w in words]
-    total = float(sum(weights))
-    out, cur, cw, t = [], [], 0, t0
-    for k, (w, wt) in enumerate(zip(words, weights)):
+    times = kit.line_word_times(text, wav, secs, language) if wav else None
+    if not times:
+        weights = [len(w) + 2 for w in words]
+        acc, times = 0.0, []
+        for wt in weights:
+            times.append((secs * acc / sum(weights), secs * (acc + wt) / sum(weights)))
+            acc += wt
+    out, cur, first = [], [], 0
+    for k, w in enumerate(words):
+        if not cur:
+            first = k
         cur.append(w)
-        cw += wt
         last = k == len(words) - 1
         full = len(cur) >= max_words or (not last and len(" ".join(cur + [words[k + 1]])) > max_chars)
         if last or full or (len(cur) >= 3 and w[-1:] in ".,?!;:"):
-            d = secs * cw / total
-            out.append((" ".join(cur), t, t + d))
-            t += d
-            cur, cw = [], 0
-    return out
+            out.append((" ".join(cur), t0 + times[first][0], t0 + times[k][1]))
+            cur = []
+    # Each group stays up until the next one starts: no blink during short pauses.
+    return [(t, a, out[i + 1][1] if i + 1 < len(out) and out[i + 1][1] - b < 0.6 else b)
+            for i, (t, a, b) in enumerate(out)]
 
 
 def shot_events(d, label=None, caps=(), handle="", question=None):
@@ -799,6 +813,26 @@ def segment(job_dir, picture, out, frames, motion, events):
     return out
 
 
+def segment_video(job_dir, video, out, frames, offset, close, events):
+    """One shot from a stock clip (looped if short), same encode settings as segment()."""
+    ass = out[:-4] + ".ass"
+    with open(os.path.join(job_dir, ass), "w", encoding="utf-8") as f:
+        f.write(_ass(events))
+    zoom = "crop=iw*0.86:ih*0.86," if close else ""
+    vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}scale={W}:{H},fps={FPS},"
+          f"setsar=1,format=yuv420p,"
+          f"ass=filename='{escape_filter_value(ass)}':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'")
+    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{offset:.2f}", "-stream_loop", "-1", "-i", video,
+                        "-vf", vf, "-frames:v", str(frames), "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",
+                        "-crf", "21", "-pix_fmt", "yuv420p", "-video_track_timescale", "30000", "-an", out],
+                       cwd=job_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                       errors="replace", timeout=900)
+    if r.returncode != 0:
+        raise RuntimeError(f"footage shot failed: {r.stderr.strip()[-300:]}")
+    os.remove(os.path.join(job_dir, ass))
+    return out
+
+
 def clock(seconds):
     s = int(seconds)
     return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
@@ -851,7 +885,7 @@ def plan(script, said, handle, lang, captions=True):
         dur = (secs or 0) + GAP
         if wav:
             voices.append((wav, start))
-        caps = chunks(text, 0.0, secs) if captions and wav and not question else []
+        caps = chunks(text, 0.0, secs, wav=wav, language="en" if lang == "english" else "ur") if captions and wav and not question else []
         shots = max(1, round(dur / SHOT_SECONDS))
         edges = [round(dur * k / shots * FPS) for k in range(shots + 1)]
         for k in range(shots):
@@ -889,7 +923,7 @@ def plan(script, said, handle, lang, captions=True):
     return segs, voices, whooshes, marks, sections, at()
 
 
-def describe(script, marks, sources, credits, handle, lang, ai_used):
+def describe(script, marks, sources, credits, handle, lang, ai_used, stock_line=""):
     """The YouTube description: summary, chapters, question, sources, picture credits, follow line."""
     import youtube_account
     word = WORDS.get(lang, WORDS["urdu"])
@@ -903,6 +937,8 @@ def describe(script, marks, sources, credits, handle, lang, ai_used):
     pics = ["", "Pictures: free-licence pictures from Wikimedia Commons"
             + ("; the other pictures are AI illustrations." if ai_used else ".")] if credits else (
         ["", "Pictures: AI illustrations."] if ai_used else [])
+    if stock_line:
+        pics = (pics or [""]) + [stock_line]
     budget = youtube_account.DESCRIPTION_MAX - len("\n".join(head + pics + tail)) - 60
     lines, left = [], len(credits)
     for c in credits:
@@ -918,27 +954,40 @@ def describe(script, marks, sources, credits, handle, lang, ai_used):
 
 
 def _thumbnail(client, script, job_dir, fallback):
-    """thumbnail.jpg: an AI picture with the text set by PIL; the best free
-    picture with the text when the image call fails. Returns the path or None."""
+    """thumbnail.jpg: free by default, the video's opening picture with the
+    hook text set by PIL over a dark fade on the left; HISTORY_AI_THUMBNAIL=1
+    asks the image model for a new picture first (~$0.10). Path or None."""
     import thumbnail as th
     out = os.path.join(job_dir, "thumbnail.jpg")
-    scene = (f"{script.thumb_picture}. Epic and dramatic, historical. "
-             + (NO_PEOPLE if script.sacred else "Never show any prophet or revered religious figure."))
-    concept = {"scene": scene, "text": script.thumb_text.upper()[:40], "text_position": "left",
-               "text_color": "yellow"}
-    try:
-        return th._generate_one(client, concept, [], out, burn_text=True)
-    except Exception as e:  # noqa: BLE001 — fall back to a free picture
-        print(f"   ℹ️ AI thumbnail failed ({type(e).__name__}); using a picture from the video.")
+    text = script.thumb_text.upper()[:40]
+    if AI_THUMBNAIL:
+        scene = (f"{script.thumb_picture}. Epic and dramatic, historical. "
+                 + (NO_PEOPLE if script.sacred else "Never show any prophet or revered religious figure."))
+        try:
+            return th._generate_one(client, {"scene": scene, "text": text, "text_position": "left",
+                                             "text_color": "yellow"}, [], out, burn_text=True)
+        except Exception as e:  # noqa: BLE001 — fall back to a free picture
+            print(f"   ℹ️ AI thumbnail failed ({type(e).__name__}); using a picture from the video.")
     if not fallback:
         return None
     try:
-        from PIL import Image
-        im = th.burn_thumbnail_text(Image.open(fallback), concept["text"], "left", "yellow").convert("RGB")
-        im = im.resize((th.THUMB_W, th.THUMB_H))
-        im.save(out, "JPEG", quality=88)
+        from PIL import Image, ImageDraw
+        im = Image.open(fallback).convert("RGB")
+        s = max(th.THUMB_W / im.width, th.THUMB_H / im.height)
+        im = im.resize((max(th.THUMB_W, round(im.width * s)), max(th.THUMB_H, round(im.height * s))), Image.LANCZOS)
+        x, y = (im.width - th.THUMB_W) // 2, (im.height - th.THUMB_H) // 2
+        im = im.crop((x, y, x + th.THUMB_W, y + th.THUMB_H))
+        shade = Image.new("L", im.size, 0)
+        draw = ImageDraw.Draw(shade)
+        fade_end = round(th.THUMB_W * 0.62)
+        for col in range(fade_end):
+            draw.line([(col, 0), (col, th.THUMB_H)], fill=round(190 * (1 - col / fade_end)))
+        im = Image.composite(Image.new("RGB", im.size, (0, 0, 0)), im, shade)
+        im = th.burn_thumbnail_text(im, text, "left", "yellow").convert("RGB")
+        im.save(out, "JPEG", quality=90)
         return out
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        print(f"   ℹ️ No thumbnail ({type(e).__name__}).")
         return None
 
 
@@ -996,11 +1045,18 @@ def render(job_dir, segs, pics, title_pic, out_name, workers=3, log=print):
 
     def one(k):
         s = segs[k]
+        name = f".hv_seg/s{k:04d}.mp4"
         if s["pic"] in ("title", "end"):
             picture = title_pic
         else:
-            picture = pics[s["pic"]][s["variant"]]
-        name = f".hv_seg/s{k:04d}.mp4"
+            entry = pics[s["pic"]]
+            if entry.get("video") and s["variant"] != "card":
+                # Stock footage plays; the second shot of a scene starts later in the clip.
+                secs = entry.get("seconds") or 0
+                offset = 0.3 if s["variant"] == "full" else max(0.3, secs * 0.45)
+                return segment_video(job_dir, entry["video"], name, s["frames"], offset,
+                                     s["variant"] == "close", s["events"])
+            picture = entry[s["variant"]]
         return segment(job_dir, picture, name, s["frames"], s["motion"], s["events"])
     done = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -1061,6 +1117,27 @@ def pictures(client, script, topic, job_dir, log=print):
             names = {f for f, path in files.items() if path in drop}
             credits = [c for c in credits if not any(c.startswith(n[:80] + ":") for n in names)]
     log(f"   ✅ {len(raw)} of {len(sc)} scenes have a free picture ({len(credits)} pictures).")
+    # Free stock footage (Pexels, Pixabay) for the scenes Wikipedia had nothing for.
+    videos, stock = {}, []
+    missing = [k for k in range(len(sc)) if k not in raw]
+    if missing:
+        import broll
+        import stock_media
+        if stock_media.available():
+            rule = FOOTAGE_RULE + ((NO_PEOPLE + " ") if script.sacred else "")
+            try:
+                lines = [sc[k].picture for k in missing]
+                terms = broll.terms_for(client, topic, lines, rule)
+                got = stock_media.for_scenes(client, topic, lines, terms, portrait=False, log=log, rule=rule)
+            except Exception as e:  # noqa: BLE001 — footage is a bonus
+                log(f"   ℹ️ No stock footage this time ({type(e).__name__}).")
+                got = [None] * len(missing)
+            for k, item in zip(missing, got):
+                if item:
+                    raw[k] = item["path"]
+                    stock.append(item)
+                    if item["kind"] == "video":
+                        videos[item["path"]] = item
     want = [k for k in ai_order(len(script.hook), [len(c.scenes) for c in script.chapters]) if k not in raw]
     want = want[:max(0, AI_IMAGES)]
     ai_used = 0
@@ -1095,16 +1172,30 @@ def pictures(client, script, topic, job_dir, log=print):
         src = raw[k]
         if src not in made:
             base = os.path.join(".hv_pics", f"c{len(made):03d}")
-            made[src] = {"full": canvas(src, os.path.join(job_dir, base + "_full.jpg")) and base + "_full.jpg",
-                         "close": canvas(src, os.path.join(job_dir, base + "_close.jpg"), close=True)
+            still = src
+            if src in videos:
+                # A frame of the clip for the chapter card and the title.
+                still = frame_of(src, os.path.join(job_dir, base + "_frame.jpg")) or src
+            made[src] = {"full": canvas(still, os.path.join(job_dir, base + "_full.jpg")) and base + "_full.jpg",
+                         "close": canvas(still, os.path.join(job_dir, base + "_close.jpg"), close=True)
                          and base + "_close.jpg",
-                         "card": canvas(src, os.path.join(job_dir, base + "_card.jpg"), dark=0.55, blur=6)
+                         "card": canvas(still, os.path.join(job_dir, base + "_card.jpg"), dark=0.55, blur=6)
                          and base + "_card.jpg"}
+            if src in videos:
+                made[src].update(video=src, seconds=float(videos[src].get("seconds") or 0))
         pics[k] = made[src]
     first = raw[order[0]]
+    if first in videos:
+        first = os.path.join(job_dir, pics[order[0]]["full"])
     title = os.path.join(".hv_pics", "title.jpg")
     canvas(first, os.path.join(job_dir, title), dark=0.55, blur=8)
-    return pics, title, credits, ai_used, first
+    return pics, title, credits, ai_used, first, stock
+
+
+def frame_of(video, out, at=1.0):
+    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", video, "-frames:v", "1", "-q:v", "2",
+                        out], capture_output=True, text=True, timeout=120)
+    return out if r.returncode == 0 and os.path.isfile(out) else None
 
 
 def run(output_dir, pipeline):
@@ -1126,10 +1217,14 @@ def run(output_dir, pipeline):
     print(f"   ✅ \"{script.title}\": {len(script.chapters)} chapters, {len(sc)} scenes, {word_count(script)} words, "
           f"{len(sources)} sources{', sacred: no people shown, no music' if script.sacred else ''}.")
     stem = kit.neutral_stem("History")
-    pics, title_pic, credits, ai_used, first_pic = pictures(client, script, topic, output_dir)
     texts = [s.line for s in sc] + [script.outro, script.question]
-    print(f"🎙️ Voicing {len(texts)} paragraphs...")
-    said = voice_all(client, texts, output_dir, lang, os.environ.get("HISTORY_VOICE") or "Charon")
+    print(f"🎙️ Voicing {len(texts)} paragraphs while the pictures are found...")
+    # The two are independent and each takes a minute or more on a long video.
+    with ThreadPoolExecutor(max_workers=1) as voicing:
+        said_later = voicing.submit(voice_all, client, texts, output_dir, lang,
+                                    os.environ.get("HISTORY_VOICE") or "Charon")
+        pics, title_pic, credits, ai_used, first_pic, stock = pictures(client, script, topic, output_dir)
+        said = said_later.result()
     missing = sum(1 for p, _ in said if not p)
     if missing > 2:
         raise RuntimeError(f"The AI voice failed for {missing} paragraphs; try again later.")
@@ -1140,9 +1235,11 @@ def run(output_dir, pipeline):
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
     tracks = _bed_tracks(script.sacred)
     mix(output_dir, video, ".hv_voice.wav", os.path.basename(final), total, whooshes, sections, tracks)
-    thumb = _thumbnail(client, script, output_dir, first_pic)
+    # The opening scene's 16:9 picture (a frame for footage) under the thumbnail text.
+    thumb = _thumbnail(client, script, output_dir, os.path.join(output_dir, pics[0]["full"]))
     real = [(name, _real_url(url)) for name, url in rank_sources(sources)[:8]]
-    desc = describe(script, marks, real, credits, handle, lang, ai_used > 0)
+    import stock_media
+    desc = describe(script, marks, real, credits, handle, lang, ai_used > 0, stock_media.credit_line(stock))
     clip = {"start": 0.0, "end": round(total, 3), "seconds": round(total, 3), "file": final,
             "video_title_for_youtube_short": script.title, "seo_title": script.title[:100],
             "seo_description": desc, "seo_tags": [t[:40] for t in script.tags][:15],
@@ -1152,8 +1249,10 @@ def run(output_dir, pipeline):
             "thumbnail_file": os.path.basename(thumb) if thumb else None,
             "chapters": [{"title": t, "at": round(a, 2)} for t, a in marks],
             "source_links": real, "photo_credit": "\n".join(credits),
+            "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in stock],
             "history": {"topic": topic, "minutes": minutes, "lang": lang, "sacred": script.sacred,
-                        "pictures": {"free": len(credits), "ai": ai_used}, "background_music": bool(tracks),
+                        "pictures": {"free": len(credits), "stock": len(stock), "ai": ai_used},
+                        "background_music": bool(tracks),
                         "script": script.model_dump()}}
     kit.finish(output_dir, stem, [clip], None, pipeline, extra={"genre": "history", "format": "16:9"})
     print(f"   ⏱️ Made in {(time.time() - started) / 60:.1f} min.")

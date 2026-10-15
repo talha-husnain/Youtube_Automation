@@ -131,14 +131,14 @@ def test_a_sacred_story_drops_artwork_with_people_and_its_credit(monkeypatch, tm
         return out
     monkeypatch.setattr(hv, "ai_picture", ai)
     monkeypatch.setattr(hv, "AI_IMAGES", 1)
-    pics, title, credits, ai_used, first = hv.pictures(None, script, "t", str(tmp_path), log=lambda *a: None)
+    pics, title, credits, ai_used, first, stock = hv.pictures(None, script, "t", str(tmp_path), log=lambda *a: None)
     assert looked == [2] and [c.split(":")[0] for c in credits] == ["pic0.jpg"]
     assert ai_used == 1 and made == [True]          # the hook scene got an AI picture without people
     assert set(pics) == set(range(len(hv.scenes_of(script))))   # every scene has a picture
     assert all(os.path.isfile(os.path.join(tmp_path, v)) for p in pics.values() for v in p.values())
     # Not sacred: nobody looks, the painting stays.
     looked.clear()
-    pics, title, credits, ai_used, first = hv.pictures(None, _script(), "t", str(tmp_path), log=lambda *a: None)
+    pics, title, credits, ai_used, first, stock = hv.pictures(None, _script(), "t", str(tmp_path), log=lambda *a: None)
     assert looked == [] and len(credits) == 2
 
 
