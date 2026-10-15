@@ -599,6 +599,10 @@ never finished:
   Test runs with `free` went to the paid Gemini voice before (15-oct-2026),
   and without the free voice's word timings captions fall back to Whisper
   alignment: 7 silent minutes on this CPU for a 3-minute video.
+- **Review hold** (`review_hours` per channel, 0-24, Channels tab): a
+  finished video (`done_at`) waits that long before uploading so the owner
+  can watch and skip it; Telegram, when connected, says when one is ready.
+  Urgent match results never wait. Default 0 = upload at once, as before.
 - **Watchdog** (`autostart.bat watch`): autostart leaves one minimised copy
   of itself that reruns the port checks every 5 minutes (a stopped server
   came back in 4 minutes on 15-oct-2026). It is found by its command line

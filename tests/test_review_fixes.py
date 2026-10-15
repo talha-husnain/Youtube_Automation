@@ -84,3 +84,41 @@ def test_blocked_videos_are_never_linked():
 def test_english_set_up_lines_keep_the_pronoun():
     assert hv._no_roman("Then I tell you what Yazid I did", "english") == "Then I tell you what Yazid I did"
     assert hv._no_roman("Phir Yazid I ne faisla kiya", "urdu") == "Phir Yazid ne faisla kiya"
+
+
+def test_a_held_video_waits_its_review_hours_and_a_match_result_does_not(monkeypatch):
+    ch = mc.add("cricket")
+    mc.update(ch["id"], {"review_hours": 6})
+    now = time.time()
+    mc._change(ch["id"], lambda c: c.update(jobs=[
+        {"job_id": "a", "status": "done", "format": "topic", "at": now - 600, "done_at": now - 600},
+        {"job_id": "b", "status": "done", "format": "match", "at": now - 600, "done_at": now - 600, "urgent": True},
+        {"job_id": "c", "status": "done", "format": "topic", "at": now - 8 * 3600, "done_at": now - 7 * 3600}]))
+    monkeypatch.setattr(ya, "status", lambda: {"connected": True})
+    went = []
+
+    def upload(path, title, desc, tags, genre, publish_at=None, ai_made=False, meta=None):
+        went.append(meta["job_id"])
+        return {"status": "done", "video_id": "X" * 11, "title": title}
+    monkeypatch.setattr(ya, "upload", upload)
+    clip = {"index": 0, "path": "p.mp4", "title": "T", "description": "D", "tags": []}
+    mc.upload_waiting(mc.get(ch["id"]), lambda job: ("completed", [clip]), log=lambda *a: None)
+    assert sorted(went) == ["b", "c"]                    # "a" still has 5 h 50 min to be watched
+    assert mc.get(ch["id"])["review_hours"] == 6
+    mc.update(ch["id"], {"review_hours": 99})
+    assert mc.get(ch["id"])["review_hours"] == mc.REVIEW_MAX_HOURS
+
+
+def test_finished_videos_are_stamped_and_telegram_hears_of_held_ones(monkeypatch):
+    import telegram_notify
+    ch = mc.add("quiz")
+    mc.update(ch["id"], {"review_hours": 2})
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "q", "status": "running", "at": time.time()}]))
+    monkeypatch.setattr(telegram_notify, "status", lambda: {"connected": True})
+    said = []
+    monkeypatch.setattr(telegram_notify, "send_text", lambda text: said.append(text))
+    clip = {"title": "Quiz #3"}
+    mc.refresh_jobs(mc.get(ch["id"]), lambda job: ("completed", [clip]), "out")
+    job = mc.get(ch["id"])["jobs"][0]
+    assert job["status"] == "done" and job["done_at"] > 0
+    assert len(said) == 1 and "Quiz #3" in said[0] and "2 h" in said[0]

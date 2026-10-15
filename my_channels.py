@@ -268,6 +268,11 @@ def update(cid, patch):
             ch["color"] = patch["color"].upper()
         if "notes" in patch:
             ch["notes"] = " ".join(str(patch["notes"] or "").split())[:300]
+        if "review_hours" in patch:
+            try:
+                ch["review_hours"] = max(0, min(REVIEW_MAX_HOURS, int(patch["review_hours"])))
+            except (TypeError, ValueError):
+                pass
         if KINDS.get(ch["kind"], {}).get("long"):
             if "minutes" in patch:
                 try:
@@ -841,12 +846,16 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
             changed.append((j["job_id"], "failed", "took too long", []))
     if not changed:
         return ch
+    if ch.get("review_hours"):
+        _tell_review(ch, [job_id for job_id, status, _e, _u in changed if status == "done"], job_clips)
 
     def fn(c):
         for job_id, status, err, used in changed:
             for j in c.get("jobs") or []:
                 if j.get("job_id") == job_id:
                     j["status"] = status
+                    if status == "done":
+                        j["done_at"] = int(now)
                     if err:
                         j["error"] = err
             job = next((j for j in c["jobs"] if j.get("job_id") == job_id), {})
@@ -858,6 +867,34 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
 
 
 # ------------------------------------------------------------------ uploading
+
+REVIEW_MAX_HOURS = 24
+
+
+def held_for_review(ch, j, now=None):
+    """True while a finished video waits the channel's review_hours, so the
+    owner can watch it (Channels tab or Telegram) and skip it first."""
+    hours = int(ch.get("review_hours") or 0)
+    return bool(hours) and (now or time.time()) < (j.get("done_at") or j.get("at", 0)) + hours * 3600
+
+
+def _tell_review(ch, job_ids, job_clips):
+    """A Telegram message per video held for review, when Telegram is set up."""
+    if not job_ids:
+        return
+    try:
+        import telegram_notify
+        if not telegram_notify.status().get("connected"):
+            return
+        for job_id in job_ids:
+            _state, clips = job_clips(job_id)
+            if clips:
+                telegram_notify.send_text(
+                    f"{ch['name']}: \"{clips[0]['title'][:90]}\" is ready and goes up in "
+                    f"{ch['review_hours']} h unless you skip it in Shortkaar (Channels tab).")
+    except Exception:  # noqa: BLE001 — a message never stops the channel
+        pass
+
 
 SLOT_GAP = timedelta(minutes=40)
 QA_TRIES = 3
@@ -914,6 +951,8 @@ def upload_waiting(ch, job_clips, log=print):
         if not youtube_account.status()["connected"]:
             return {"done": 0, "limit": False}
         for j in sorted(waiting(ch), key=lambda j: j.get("at", 0)):
+            if held_for_review(ch, j) and not j.get("urgent"):   # a match result is news for hours only
+                continue
             _state, clips = job_clips(j["job_id"])
             if not clips:
                 _set_job(ch["id"], j["job_id"], status="failed", error="no longer on this computer")

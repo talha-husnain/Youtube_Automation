@@ -247,6 +247,14 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                         <p className="text-xs text-muted mb-2">Posting times (every day, this computer&apos;s time)</p>
                         <Times times={ch.post_times} max={ch.max_per_day || maxPerDay} onChange={(t) => save({ post_times: t })} />
                     </div>
+                    <label className="flex flex-wrap items-center gap-2 text-xs text-ink2">
+                        Hold each new video before it uploads, so you can watch it and skip it:
+                        <select value={ch.review_hours || 0} onChange={(e) => save({ review_hours: Number(e.target.value) })}
+                            className="input-field !w-auto text-xs py-1" aria-label={`review time for ${ch.name}`}>
+                            {[0, 2, 6, 12, 24].map((h) => <option key={h} value={h}>{h ? `${h} hours` : 'no, upload right away'}</option>)}
+                        </select>
+                        {ch.review_hours > 0 && <span className="text-muted">(match results still go at once; Telegram tells you when one is ready)</span>}
+                    </label>
                     <EngageSwitches ch={ch} save={save} />
                     <ChannelKit ch={ch} />
                     <UpNext ch={ch} onChanged={onChanged} />
@@ -275,6 +283,11 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                                     </span>
                                     <span className="text-ink2 min-w-0 break-words flex-1">{j.title || j.label}</span>
                                     {j.slot && <span className="text-muted">{when(j.slot)}</span>}
+                                    {j.status === 'done' && ch.review_hours > 0 && !j.urgent
+                                        && ((j.done_at || j.at) + ch.review_hours * 3600) * 1000 > Date.now() && (
+                                        <span className="text-brass">held until {new Date(((j.done_at || j.at) + ch.review_hours * 3600) * 1000)
+                                            .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                    )}
                                     {j.video_url && (
                                         <a href={getApiUrl(j.video_url)} target="_blank" rel="noreferrer" className="text-brass hover:underline">watch</a>
                                     )}
