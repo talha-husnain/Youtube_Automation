@@ -1126,6 +1126,11 @@ def upload_waiting(ch, job_clips, log=print):
                 soon = datetime.now().astimezone() + timedelta(minutes=URGENT_AFTER_MINUTES)
                 noon = soon.replace(hour=12, minute=0, second=0, microsecond=0)
                 slot = _clear_of(max(soon, noon), youtube_account.uploads())
+                if j.get("day") and slot.strftime("%Y-%m-%d") != j["day"]:
+                    # Uploaded late in the evening, it would go public tomorrow: "aaj" would be wrong.
+                    _set_job(ch["id"], j["job_id"], status="skipped", error="too late in the day to post")
+                    log(f"⏭️ {ch['name']}: not uploading '{clip['title'][:60]}': its day is over.")
+                    continue
             else:
                 slot = youtube_account.next_slots(ch["post_times"], 1)[0]
             desc = promote(clip["description"], ch["id"])

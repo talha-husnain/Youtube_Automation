@@ -490,3 +490,18 @@ def test_news_that_waited_too_long_is_skipped_not_posted(monkeypatch):
     mc.upload_waiting(mc.get(ch["id"]), lambda job: ("completed", [{"path": "p"}]), log=lambda *a: None)
     job = mc.get(ch["id"])["jobs"][0]
     assert job["status"] == "skipped" and "too old" in job["error"]
+
+
+def test_a_daily_short_that_would_go_public_tomorrow_is_skipped(monkeypatch):
+    from datetime import datetime as _dt
+    ch = mc.add("history")
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "t", "status": "done", "format": "today",
+                                                   "at": time.time(), "day": mc.today(), "qa": "ok"}]))
+    monkeypatch.setattr(ya, "status", lambda: {"connected": True})
+    monkeypatch.setattr(ya, "upload", lambda *a, **k: __import__("pytest").fail("posted on the wrong day"))
+    late = _dt.now().astimezone().replace(hour=23, minute=59)
+    monkeypatch.setattr(mc, "_clear_of", lambda slot, rows: late + __import__("datetime").timedelta(minutes=20))
+    clip = {"index": 0, "path": "p.mp4", "title": "Aaj ki tareekh", "description": "", "tags": []}
+    mc.upload_waiting(mc.get(ch["id"]), lambda job: ("completed", [clip]), log=lambda *a: None)
+    job = mc.get(ch["id"])["jobs"][0]
+    assert job["status"] == "skipped" and "too late" in job["error"]
