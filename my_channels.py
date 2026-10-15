@@ -490,16 +490,32 @@ def learn(ch, log=print):
                 continue
             if n["public"] and age >= timedelta(hours=MATURE_HOURS):
                 mature.append(r)
-    by_format = {}
+        # How much of each video people watch: on a small channel it moves
+        # long before the views do, and it is what Shorts are ranked by.
+        try:
+            watched = youtube_account.video_analytics(LOOKBACK_DAYS) if mature else {}
+        except Exception:  # noqa: BLE001 — retention is a bonus over the views
+            watched = {}
+        for r in mature:
+            a = watched.get(r["video_id"])
+            if a:
+                r.update(retention=a["avg_percent"], watch_seconds=a["avg_seconds"])
+                youtube_account._save_upload(r)
+    by_format, kept = {}, {}
     for r in mature:
         by_format.setdefault(r.get("format") or "other", []).append(r["views"])
+        if r.get("retention") is not None:
+            kept.setdefault(r.get("format") or "other", []).append(r["retention"])
     # Teaser Shorts get Shorts-sized views: the best and worst lists that steer
     # the next long videos compare long videos only.
     ranked = sorted([r for r in mature if r.get("format") != "teaser"], key=lambda r: r["views"], reverse=True)
     stats = {"at": int(time.time()), "tracked": len(rows), "counted": len(mature),
              "views": sum((numbers.get(r["video_id"]) or {}).get("views", 0) for r in rows),
              "median": _median([r["views"] for r in mature]),
-             "formats": {f: {"shorts": len(v), "median": _median(v)} for f, v in by_format.items()},
+             "formats": {f: {"shorts": len(v), "median": _median(v),
+                             **({"watched": _median(kept[f])} if kept.get(f) else {})}
+                         for f, v in by_format.items()},
+             "watched": _median([x for v in kept.values() for x in v]) if kept else None,
              "best": [f"{r['title'][:80]} ({r['views']} views)" for r in ranked[:5]],
              "worst": [f"{r['title'][:80]} ({r['views']} views)" for r in ranked[-5:][::-1]]
              if len(ranked) >= 8 else []}
@@ -601,7 +617,13 @@ def pick_format(ch, options, rnd=random):
     scored = [o for o in options if (seen.get(o) or {}).get("shorts", 0) >= MIN_FOR_LEARNING]
     if not scored or rnd.random() < EXPLORE:
         return rnd.choice(options)
-    return max(scored, key=lambda o: seen[o]["median"])
+    return max(scored, key=lambda o: format_score(seen[o]))
+
+
+def format_score(v):
+    """Median views weighted by how much of it people watch (50% is neutral):
+    100 views watched to 90% beat 120 views swiped away at 40%."""
+    return v.get("median", 0) * (0.5 + (v.get("watched") if v.get("watched") is not None else 50) / 100)
 
 
 # ------------------------------------------------------------------ making

@@ -39,7 +39,10 @@ STATE_FILE = os.path.join(ROOT, "output", ".free_voice.json")
 
 
 def engine():
-    return (os.environ.get("VOICE_ENGINE") or "edge").lower()
+    # "free" is what people call it: a test run with VOICE_ENGINE=free went to
+    # the paid Gemini voice on 15-oct-2026 because only "edge" matched.
+    name = (os.environ.get("VOICE_ENGINE") or "edge").lower()
+    return "edge" if name == "free" else name
 
 
 def rest_info():

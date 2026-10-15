@@ -297,10 +297,11 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                             <p className="text-xs text-ink flex items-center gap-1.5"><Brain size={13} /> What it learned (every 6 hours)</p>
                             <p className="text-xs text-ink2">
                                 {stats.tracked} Shorts tracked, {stats.counted} counted (public 2 days), {stats.views} views in all
-                                {stats.counted > 0 ? `, median ${stats.median}` : ''}.
+                                {stats.counted > 0 ? `, median ${stats.median}` : ''}
+                                {stats.watched != null ? `, people watch ${stats.watched}% of each on average` : ''}.
                             </p>
                             {formats.length > 1 && (
-                                <p className="text-xs text-ink2">{formats.map(([f, v]) => `${f}: median ${v.median} (${v.shorts})`).join(' · ')}</p>
+                                <p className="text-xs text-ink2">{formats.map(([f, v]) => `${f}: median ${v.median}${v.watched != null ? `, ${v.watched}% watched` : ''} (${v.shorts})`).join(' · ')}</p>
                             )}
                             {stats.best?.length > 0 && <p className="text-[11px] text-muted">Best: {stats.best.slice(0, 3).join(' · ')}</p>}
                         </div>

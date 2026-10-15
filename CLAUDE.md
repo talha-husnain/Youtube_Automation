@@ -590,6 +590,15 @@ never finished:
   through `youtube_account.add_to_description` (videos.update sends the whole
   snippet back, 51 units). Each series gets its own playlist. Dropping one
   part from Up next drops the rest of that series.
+- **Retention in learning** (`my_channels.learn`, `format_score`): each
+  counted Short gets `retention` (YouTube Analytics averageViewPercentage);
+  `stats.formats[f].watched` and `stats.watched` are medians, and quiz
+  formats / song styles are picked by median views x (0.5 + watched/100).
+  Analytics refusing leaves views-only learning as before.
+- `VOICE_ENGINE` is `edge` (free) or `gemini`; `free` is accepted as `edge`.
+  Test runs with `free` went to the paid Gemini voice before (15-oct-2026),
+  and without the free voice's word timings captions fall back to Whisper
+  alignment: 7 silent minutes on this CPU for a 3-minute video.
 - **Watchdog** (`autostart.bat watch`): autostart leaves one minimised copy
   of itself that reruns the port checks every 5 minutes (a stopped server
   came back in 4 minutes on 15-oct-2026). It is found by its command line
