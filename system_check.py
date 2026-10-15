@@ -142,8 +142,65 @@ def autopilot():
                                    "This computer must be on with Shortkaar running.")
 
 
+def _env():
+    """.env as each job reads it: keys added there work without a restart."""
+    from dotenv import dotenv_values
+    return {**os.environ, **{k: v for k, v in dotenv_values(os.path.join(ROOT, ".env")).items() if v}}
+
+
+def free_voice():
+    import free_voice as fv
+    if fv.engine() != "edge":
+        return _row("Free voice", "ok", "Off: the Gemini voice reads everything.")
+    rest = fv.rest_info()
+    if rest:
+        until = datetime.fromtimestamp(rest["until"]).strftime("%H:%M")
+        return _row("Free voice", "warn", f"Resting until {until} ({rest.get('reason') or 'refused'}); "
+                                          "the Gemini voice reads lines until then.", "Nothing to do: it comes back by itself.")
+    return _row("Free voice", "ok", "Ready (Microsoft's read-aloud voice, no cost).")
+
+
+def stock():
+    import stock_media
+    env = _env()
+    have = [n for n, k in (("Pexels", "PEXELS_API_KEY"), ("Pixabay", "PIXABAY_API_KEY")) if (env.get(k) or "").strip()]
+    resting = [p for p in ("pexels", "pixabay", "openverse") if stock_media._resting(p)]
+    detail = (f"Keys: {', '.join(have)}." if have else "No Pexels or Pixabay key yet: only Openverse photos.")
+    if resting:
+        detail += f" Resting now (too many requests or not answering): {', '.join(resting)}."
+    return _row("Free stock footage", "ok" if len(have) == 2 and not resting else "warn", detail,
+                "" if len(have) == 2 else "Add PEXELS_API_KEY and PIXABAY_API_KEY to .env (both free; steps on Today).")
+
+
+def quota():
+    import youtube_account
+    used = youtube_account.quota_used()
+    return _row("YouTube API quota today", "ok" if used < 8000 else "warn",
+                f"{used:,} of 10,000 units used (resets at midnight Pacific time).",
+                "" if used < 8000 else "Engagement pauses near the limit; uploads keep going.")
+
+
+def watchdog():
+    """Is autostart's watchdog running (it restarts a stopped server)?"""
+    if os.name != "nt":
+        return _row("Watchdog", "ok", "Only used on Windows.")
+    try:
+        # No double quotes inside: Python's argument quoting turned the -Filter
+        # string into something that matched nothing.
+        r = subprocess.run(["powershell", "-NoProfile", "-Command",
+                            "@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'cmd.exe' -and "
+                            "$_.CommandLine -like '*autostart.bat*watch*' }).Count"],
+                           capture_output=True, text=True, timeout=30)
+        on = (r.stdout or "").strip() not in ("", "0")
+    except (OSError, subprocess.SubprocessError):
+        return _row("Watchdog", "warn", "Could not check.")
+    return (_row("Watchdog", "ok", "Running: a stopped server restarts within 5 minutes.") if on else
+            _row("Watchdog", "warn", "Not running.", "Run autostart.bat once (it starts at every login)."))
+
+
 def run_all(output_dir, cap_gb, retention_seconds):
-    rows = [gemini(), *downloader(), ffmpeg(), disk(output_dir, cap_gb), *channel(), autopilot()]
+    rows = [gemini(), *downloader(), ffmpeg(), disk(output_dir, cap_gb), *channel(), autopilot(),
+            free_voice(), stock(), quota(), watchdog()]
     import short_kit
     n = len(short_kit.music_tracks())
     rows.append(_row("Background music", "ok" if n else "warn", f"{n} track(s) in the music folder.",

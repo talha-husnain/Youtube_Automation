@@ -509,6 +509,24 @@ def test_system_check_reads_plainly(monkeypatch, tmp_path):
     assert sc.autopilot()["status"] == "ok" and "Next run" in sc.autopilot()["detail"]
 
 
+def test_system_check_names_the_free_voice_stock_keys_and_quota(monkeypatch):
+    import free_voice
+    import stock_media
+    import system_check as sc
+    monkeypatch.setenv("VOICE_ENGINE", "edge")
+    monkeypatch.setattr(free_voice, "rest_info", lambda: {"until": 2e9, "reason": "Microsoft refused"})
+    row = sc.free_voice()
+    assert row["status"] == "warn" and "Microsoft refused" in row["detail"]
+    monkeypatch.setattr(sc, "_env", lambda: {"PEXELS_API_KEY": "k"})
+    monkeypatch.setattr(stock_media, "_resting", lambda p: p == "openverse")
+    row = sc.stock()
+    assert row["status"] == "warn" and "Keys: Pexels." in row["detail"] and "openverse" in row["detail"]
+    monkeypatch.setattr(sc, "_env", lambda: {"PEXELS_API_KEY": "k", "PIXABAY_API_KEY": "k"})
+    monkeypatch.setattr(stock_media, "_resting", lambda p: False)
+    assert sc.stock()["status"] == "ok"
+    assert "of 10,000 units" in sc.quota()["detail"]
+
+
 def test_batch_starts_one_job_per_video_with_the_saved_look(monkeypatch):
     app_module = pytest.importorskip("app")
     from fastapi.testclient import TestClient
