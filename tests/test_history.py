@@ -421,3 +421,45 @@ def test_a_teaser_goes_up_15_minutes_after_its_long_video(monkeypatch):
     assert got["done"] == 1 and sent["genre"] == "history_teaser"
     assert sent["at"] == after + timedelta(minutes=15) and sent["meta"]["format"] == "teaser"
     assert youtube_account.CATEGORY["history_teaser"] == "27" and "history_teaser" not in youtube_account.LONG_GENRES
+
+
+def test_a_stock_clip_plays_as_a_history_shot(tmp_path):
+    import subprocess
+    clip = tmp_path / "clip.mp4"
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=1280x720:d=2:r=25",
+                    "-pix_fmt", "yuv420p", str(clip)], check=True)
+    events = hv.shot_events(3.0, "476 AD", [("Rome gir gaya", 0.2, 1.5)], "@h")
+    # 3 s from a 2 s clip: it loops; the closer crop and a later start must work too.
+    hv.segment_video(str(tmp_path), str(clip), "s.mp4", 90, 0.8, True, events)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-show_entries",
+                            "stream=width,height,nb_read_frames,r_frame_rate", "-of", "csv=p=0", str(tmp_path / "s.mp4")],
+                           capture_output=True, text=True).stdout.strip()
+    assert probe == "1920,1080,30/1,90"
+    assert not list(tmp_path.glob("*.ass"))
+
+
+def test_scenes_wikipedia_has_nothing_for_get_stock_footage_for_free(monkeypatch, tmp_path):
+    import subprocess
+    import broll
+    import stock_media
+    from PIL import Image
+    clip = tmp_path / "clip.mp4"
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=1920x1080:d=3:r=30",
+                    "-pix_fmt", "yuv420p", str(clip)], check=True)
+    photo = tmp_path / "photo.jpg"
+    Image.new("RGB", (2400, 1350), (90, 70, 50)).save(photo)
+    monkeypatch.setattr(hv, "candidates", lambda articles, sacred: [])
+    monkeypatch.setattr(hv, "AI_IMAGES", 0)
+    monkeypatch.setattr(stock_media, "available", lambda: True)
+    asked = {}
+    monkeypatch.setattr(broll, "terms_for", lambda client, topic, lines, rule="": asked.update(rule=rule) or ["t"] * len(lines))
+    items = [{"kind": "video", "path": str(clip), "seconds": 3.0, "provider": "Pexels", "author": "Ann", "page": "p"},
+             {"kind": "photo", "path": str(photo), "seconds": 0.0, "provider": "Pixabay", "author": "", "page": "q"}]
+    monkeypatch.setattr(stock_media, "for_scenes", lambda client, topic, lines, terms, portrait, log, rule:
+                        (items + [None] * len(lines))[:len(lines)])
+    script = _script(sacred=True)
+    pics, title, credits, ai_used, thumb, stock = hv.pictures(None, script, "t", str(tmp_path), log=lambda *a: None)
+    assert pics[0]["video"] == str(clip) and os.path.isfile(os.path.join(tmp_path, pics[0]["full"]))
+    assert "video" not in pics[1] and len(stock) == 2 and ai_used == 0 and credits == []
+    assert "modern things" in asked["rule"] and "NO people" in asked["rule"]        # sacred: no people in footage
+    assert set(pics) == set(range(len(hv.scenes_of(script))))
