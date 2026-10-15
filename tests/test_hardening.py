@@ -321,3 +321,43 @@ def test_the_length_tip_follows_how_much_people_watch():
     c["stats"]["formats"]["history"].update(watched=10, shorts=2)
     assert mc.length_tip(c) is None                                          # too few videos to say
     assert mc.length_tip(mc.get(mc.add("quiz")["id"])) is None
+
+
+def test_the_review_message_has_a_skip_button_that_works_from_the_phone(monkeypatch):
+    import json as _json
+    import telegram_notify as tg
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:SECRET")
+    tg._save({"chat_id": 42, "name": "Talha"})
+    ch = mc.add("quiz")
+    mc.update(ch["id"], {"review_hours": 6})
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "j1", "status": "running", "at": time.time(),
+                                                   "day": mc.today()}]))
+    calls = []
+    presses = []
+
+    def call(method, timeout=30, **kw):
+        calls.append((method, kw.get("data") or {}))
+        if method == "getUpdates":
+            out, presses[:] = list(presses), []
+            return out
+        return {}
+    monkeypatch.setattr(tg, "_call", call)
+    clip = {"index": 0, "path": "p.mp4", "title": "Quiz #12", "description": "", "tags": []}
+    mc.refresh_jobs(mc.get(ch["id"]), lambda job: ("completed", [clip]), "out")
+    sent = next(d for m, d in calls if m == "sendMessage")
+    button = _json.loads(sent["reply_markup"])["inline_keyboard"][0][0]
+    assert button["text"] == "Skip this video" and button["callback_data"] == f"skip:{ch['id']}:j1"
+    presses += [{"update_id": 7, "callback_query": {"id": "q1", "data": button["callback_data"],
+                                                    "message": {"chat": {"id": 42}}}},
+                {"update_id": 8, "callback_query": {"id": "q2", "data": button["callback_data"],
+                                                    "message": {"chat": {"id": 999}}}}]      # someone else
+    assert tg.poll(mc.telegram_press) == 1
+    assert mc.get(ch["id"])["jobs"][0]["status"] == "skipped"
+    answer = next(d for m, d in calls if m == "answerCallbackQuery")
+    assert answer["callback_query_id"] == "q1" and answer["text"].startswith("Skipped.")
+    assert tg._load()["offset"] == 9 and tg._load()["chat_id"] == 42          # pressed once, never again
+    gets = [d for m, d in calls if m == "getUpdates"]
+    assert gets[0]["offset"] == 0 and "callback_query" in gets[0]["allowed_updates"]
+    assert mc.telegram_press(f"skip:{ch['id']}:j1") == "Already skipped."
+    assert mc.telegram_press("skip:nope:j1") == "That video is no longer in Shortkaar."
+    assert mc.telegram_press("other") == ""

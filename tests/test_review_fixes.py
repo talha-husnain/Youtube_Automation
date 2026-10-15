@@ -116,7 +116,7 @@ def test_finished_videos_are_stamped_and_telegram_hears_of_held_ones(monkeypatch
     mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "q", "status": "running", "at": time.time()}]))
     monkeypatch.setattr(telegram_notify, "status", lambda: {"connected": True})
     said = []
-    monkeypatch.setattr(telegram_notify, "send_text", lambda text: said.append(text))
+    monkeypatch.setattr(telegram_notify, "send_text", lambda text, **kw: said.append(text))
     clip = {"title": "Quiz #3"}
     mc.refresh_jobs(mc.get(ch["id"]), lambda job: ("completed", [clip]), "out")
     job = mc.get(ch["id"])["jobs"][0]

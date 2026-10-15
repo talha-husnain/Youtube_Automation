@@ -63,7 +63,9 @@ def connect():
     """Find the chat that wrote to the bot and remember it."""
     if not _token():
         raise RuntimeError("Add TELEGRAM_BOT_TOKEN to .env and restart Shortkaar first.")
-    updates = _call("getUpdates", timeout=20) or []
+    # allowed_updates is remembered by Telegram: poll() asks for button
+    # presses too, so both name the same list.
+    updates = _call("getUpdates", timeout=20, data={"allowed_updates": UPDATES}) or []
     chats = [u.get("message", {}).get("chat") for u in updates if u.get("message")]
     chats = [c for c in chats if c and c.get("type") == "private"]
     if not chats:
@@ -89,9 +91,48 @@ def _chat():
     return chat
 
 
-def send_text(text):
-    return _call("sendMessage", data={"chat_id": _chat(), "text": text[:TEXT_MAX],
-                                      "disable_web_page_preview": "true"})
+def send_text(text, buttons=None):
+    """``buttons``: [(label, data)] shown under the message; a press comes
+    back through poll()."""
+    data = {"chat_id": _chat(), "text": text[:TEXT_MAX], "disable_web_page_preview": "true"}
+    if buttons:
+        data["reply_markup"] = json.dumps({"inline_keyboard": [[{"text": t, "callback_data": d[:64]}
+                                                                for t, d in buttons]]})
+    return _call("sendMessage", data=data)
+
+
+UPDATES = json.dumps(["message", "callback_query"])
+
+
+def poll(handle):
+    """Button presses since the last poll: ``handle(data)`` -> the answer
+    shown to the owner. Presses from any other chat are ignored. Returns how
+    many were handled."""
+    st = _load()
+    chat = st.get("chat_id")
+    if not chat or not _token():
+        return 0
+    updates = _call("getUpdates", timeout=15, data={"offset": int(st.get("offset", 0)), "timeout": 0,
+                                                     "allowed_updates": UPDATES}) or []
+    done = 0
+    for u in updates:
+        st["offset"] = max(int(st.get("offset", 0)), int(u.get("update_id", 0)) + 1)
+        q = u.get("callback_query")
+        if not q or (q.get("message") or {}).get("chat", {}).get("id") != chat:
+            continue
+        try:
+            answer = handle(q.get("data") or "")
+        except Exception as e:  # noqa: BLE001 — a bad press must not stop the poll
+            answer = f"That did not work: {type(e).__name__}"
+        try:
+            _call("answerCallbackQuery", data={"callback_query_id": q["id"], "text": (answer or "")[:190]})
+            if answer:
+                send_text(answer)
+        except Exception:  # noqa: BLE001
+            pass
+        done += 1
+    _save({**_load(), "offset": st.get("offset", 0)})
+    return done
 
 
 def send_short(path, title, description="", pinned="", when="", tiktok=""):

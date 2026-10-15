@@ -261,7 +261,7 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                             className="input-field !w-auto text-xs py-1" aria-label={`review time for ${ch.name}`}>
                             {[0, 2, 6, 12, 24].map((h) => <option key={h} value={h}>{h ? `${h} hours` : 'no, upload right away'}</option>)}
                         </select>
-                        {ch.review_hours > 0 && <span className="text-muted">(match results still go at once; Telegram tells you when one is ready)</span>}
+                        {ch.review_hours > 0 && <span className="text-muted">(match results still go at once; Telegram tells you when one is ready, with a Skip button)</span>}
                     </label>
                     <EngageSwitches ch={ch} save={save} />
                     <ChannelKit ch={ch} />
