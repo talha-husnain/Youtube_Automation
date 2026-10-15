@@ -3246,6 +3246,9 @@ def _today():
                                    len(my_channels._jobs_on(ch, day)), (ch.get("stats") or {}).get("views"),
                                    p, bool(ch.get("enabled"))))
         rows[-1]["time_tip"] = my_channels.time_tip(ch)
+        rows[-1]["failed_today"] = len(failed_jobs)
+        rows[-1]["fail_reason"] = (sorted(failed_jobs, key=lambda j: j.get("at", 0))[-1].get("error") or ""
+                                   )[:160] if failed_jobs else ""
         rows[-1]["asked"] = __import__("engage").requests(my_channels.account(ch["id"]), limit=3)
     connected = [r for r in rows if r["connected"]]
     expiring = [r["expires"] for r in connected if r.get("expires")]

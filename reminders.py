@@ -74,7 +74,16 @@ def things_to_do(today, now=None):
     waiting = [c["name"] for c in today["channels"] if not c.get("connected")]
     if waiting:
         out.append(f"Waiting to be connected: {', '.join(waiting)}.")
+    # A channel that keeps failing (a key, a quota, a source that is gone)
+    # makes nothing all day and nobody is watching the runs.
+    for c in today["channels"]:
+        if c.get("enabled", True) and c.get("failed_today", 0) >= FAILS_WARN:
+            why = f" The latest reason: {c['fail_reason']}" if c.get("fail_reason") else ""
+            out.append(f"{c['name']}: {c['failed_today']} videos failed today.{why}")
     return out
+
+
+FAILS_WARN = 3
 
 
 def _slot_due(st, now_dt):

@@ -208,6 +208,13 @@ def test_no_reminder_when_nothing_needs_the_owner_and_the_summary_at_night():
     assert reminders.things_to_do(far) == []          # more than 5 days left: not yet
     gone = _today(expires=time.time() - 60)
     assert "stopped" in reminders.things_to_do(gone)[0]
+    failing = _today(expires=None)
+    failing["channels"][0].update(failed_today=3, fail_reason="This video type needs GEMINI_API_KEY in .env.")
+    assert reminders.things_to_do(failing) == [
+        f"{failing['channels'][0]['name']}: 3 videos failed today. The latest reason: This video type needs "
+        "GEMINI_API_KEY in .env."]
+    failing["channels"][0].update(failed_today=2)
+    assert reminders.things_to_do(failing) == []      # two can be bad luck
 
 
 def test_today_page_lists_every_channel_and_the_setup(monkeypatch):
