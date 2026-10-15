@@ -473,3 +473,20 @@ def test_a_busy_file_is_waited_for_not_swapped_for_its_backup(tmp_path, monkeypa
     safe_json.write(path, {"v": 3})
     monkeypatch.setattr(builtins, "open", real_open)
     assert safe_json.read(path, {}) == {"v": 3}
+
+
+def test_news_that_waited_too_long_is_skipped_not_posted(monkeypatch):
+    now = time.time()
+    assert mc.stale({"format": "match", "at": now - 49 * 3600}, now)
+    assert not mc.stale({"format": "match", "at": now - 3600}, now)
+    assert mc.stale({"format": "today", "day": "2000-01-01"}, now)
+    assert not mc.stale({"format": "today", "day": mc.today()}, now)
+    assert not mc.stale({"format": "mcq", "at": now - 6 * 86400}, now)            # a quiz keeps
+    ch = mc.add("cricket")
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "old", "status": "done", "format": "match",
+                                                   "at": now - 3 * 86400, "label": "Pak vs SL"}]))
+    monkeypatch.setattr(ya, "status", lambda: {"connected": True})
+    monkeypatch.setattr(ya, "upload", lambda *a, **k: __import__("pytest").fail("a stale result went up"))
+    mc.upload_waiting(mc.get(ch["id"]), lambda job: ("completed", [{"path": "p"}]), log=lambda *a: None)
+    job = mc.get(ch["id"])["jobs"][0]
+    assert job["status"] == "skipped" and "too old" in job["error"]

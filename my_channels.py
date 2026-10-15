@@ -1052,6 +1052,21 @@ def upload_due(ch, now=None):
             and now >= ch.get("upload_paused_until", 0) and now - ch.get("last_upload", 0) >= UPLOAD_EVERY)
 
 
+# News goes stale while it waits (a channel connected days later, the upload
+# limit, a review hold): a match result is skipped after two days, and an
+# "Aaj ki tareekh" Short ("on this day") goes up on its own date or never.
+# Everything else (quizzes, facts, history, songs) keeps.
+STALE_HOURS = {"match": 48}
+
+
+def stale(j, now=None):
+    now = now or time.time()
+    if j.get("format") == "today":
+        return bool(j.get("day")) and j["day"] != today(datetime.fromtimestamp(now))
+    hours = STALE_HOURS.get(j.get("format"))
+    return bool(hours) and now - j.get("at", now) > hours * 3600
+
+
 def upload_waiting(ch, job_clips, log=print):
     """Upload the channel's finished Shorts, each into its next free posting
     time. Stops at YouTube's daily limit and pauses the channel 3 h."""
@@ -1062,6 +1077,10 @@ def upload_waiting(ch, job_clips, log=print):
         if not youtube_account.status()["connected"]:
             return {"done": 0, "limit": False}
         for j in sorted(waiting(ch), key=lambda j: j.get("at", 0)):
+            if stale(j):
+                _set_job(ch["id"], j["job_id"], status="skipped", error="too old to post now (news of an earlier day)")
+                log(f"⏭️ {ch['name']}: not uploading '{(j.get('label') or j.get('topic') or '')[:60]}': too old now.")
+                continue
             if held_for_review(ch, j) and not j.get("urgent"):   # a match result is news for hours only
                 continue
             _state, clips = job_clips(j["job_id"])
