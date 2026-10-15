@@ -686,6 +686,10 @@ never finished:
   track (`captions_extra`, row key `captions_en`). The note filter (`_META`)
   matches only note-shaped text: narration says "translated" and "cut off
   the water" too.
+- **Stale news is skipped** (`my_channels.stale`): a waiting "match" video
+  older than 48 h, or a "today" Short past its own date, is marked skipped
+  instead of uploaded (samples made days before a channel is connected,
+  the upload limit, a review hold). Quizzes, facts, history and songs keep.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
   player born today; `cricket_shorts.birthday_ok` keeps it only when the
   Wikipedia intro's "(born 15 October 1994)" matches (`player_photo.born`).
