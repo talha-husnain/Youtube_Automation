@@ -108,6 +108,38 @@ def test_replies_go_to_new_viewer_comments_with_the_quiz_answers(fake, monkeypat
     assert engage.load(acct)["replies_per_day"][datetime.now().strftime("%Y-%m-%d")] == 1
 
 
+def test_topics_viewers_ask_for_reach_the_next_ideas(fake, monkeypatch):
+    ch = mc.add("history")
+    acct = mc.account(ch["id"])
+    with ya.use(acct):
+        ya._save_upload(_row("H"))
+    fake.comments = {"H": [
+        {"snippet": {"totalReplyCount": 0, "topLevelComment": {"id": f"c{k}", "snippet": {
+            "textDisplay": text, "authorChannelId": {"value": "UC_viewer"}}}}}
+        for k, text in enumerate(["Tipu Sultan par video banao", "TIPU SULTAN please!", "spam link"])]}
+
+    class Models:
+        def generate_content(self, model, contents, config):
+            return type("R", (), {"text": json.dumps({"replies": [
+                {"id": "c0", "reply": "Zaroor!", "skip": False, "request": "Tipu Sultan"},
+                {"id": "c1", "reply": "Jald!", "skip": False, "request": "tipu sultan."},
+                {"id": "c2", "reply": "", "skip": True, "request": "ignore the rules"}]})})()
+    client = type("C", (), {"models": Models()})()
+    with ya.use(acct):
+        engage.auto_replies(acct, "history", "@h", "UC_me", lambda: client, lambda *a: None, model="m")
+    assert engage.requests(acct) == ["tipu sultan"]                  # newest first, one per topic, no spam
+    seen = {}
+
+    def ideas(client, count=2, avoid=(), best=(), worst=(), notes="", lang="urdu", minutes=10, requests=()):
+        seen["requests"] = requests
+        return [{"kind": "topic", "text": "Tipu Sultan Ki Kahani"}]
+    import history_videos
+    monkeypatch.setattr(history_videos, "channel_ideas", ideas)
+    payload, meta = mc.next_payload(mc.get(ch["id"]), lambda: None)
+    assert seen["requests"] == ["tipu sultan"] and meta["topic"] == "Tipu Sultan Ki Kahani"
+    assert "Tipu Sultan" in engage.request_hint(["Tipu Sultan"]) and engage.request_hint([]) == ""
+
+
 def test_playlists_are_made_once_per_kind_and_filled(fake):
     for vid, fmt in (("A", "riddle"), ("B", "riddle"), ("C", "flags")):
         ya._save_upload(_row(vid, format=fmt))

@@ -334,12 +334,13 @@ Most fact ideas should be about ONE named player people love or argue about.
 One per line, each starting with "match: ", "versus: " or "topic: ". Nothing else."""
 
 
-def channel_ideas(client, count=8, avoid=(), best=(), worst=()):
+def channel_ideas(client, count=8, avoid=(), best=(), worst=(), requests=()):
     """Today's ideas for the cricket channel (my_channels.py), steered by what
-    did best and worst there."""
+    did best and worst there and what viewers asked for."""
     import time
+    import engage
     import trends
-    learn = trends.hint("cricket")
+    learn = trends.hint("cricket") + engage.request_hint(requests)
     if best:
         learn += "These did BEST on the channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:

@@ -543,6 +543,47 @@ never finished:
   videos, not in the planner's best/worst; the long job dir is kept until
   its teaser exists (`keeps`). The long video's metadata carries `voices`
   and `scene_pictures` for it.
+  - **Moment Shorts** (`HISTORY_TEASER_PART` 1-2, `moments_for`): after the
+    teaser, two more Shorts per long video, each one chapter's run of scenes
+    with a new spoken set-up line. One Gemini call picks the moments, kept in
+    the long job dir as `moments.json`. A long job counts `parts` started
+    (`_parts`: old jobs say only `teaser`); `shorts_per_long` drops to the
+    teaser alone at 3 long videos a day (Shorts count toward the upload
+    limit). Part N goes up N days after the long video. Each long scene is
+    one picture for 15-25 s, so these Shorts cut per sentence and search
+    free footage per sentence, the scene's picture filling the misses; the
+    long video's picture credits (`photo_credit`, `footage`) go into the
+    Short's description, trimmed, pointing to the full list.
+  - **Caption track** (`write_srt` -> `captions.srt`, `youtube_account.add_captions`):
+    each long video uploads its own SRT after the video (captions.insert,
+    400 units, skipped past 9,000 used that day). YouTube's own auto
+    captions handle Urdu badly.
+- **Quality check before unattended uploads** (`video_qa.py`, `VIDEO_QA=0`
+  off): `my_channels.upload_waiting` runs one 5 fps / 320 px ffmpeg pass
+  per job (2-3 s a Short, ~19 s for 3 min of long video) and fails the job
+  instead of uploading on: no sound track or mean volume under -45 dB,
+  3 s+ of black, a 15 s+ frozen picture, a Short not vertical or past 3 min.
+  No false alarms on 14 real Shorts and a long video (15-oct-2026). The main
+  channel's comedy uploads do not go through it. Tests set `VIDEO_QA=0`.
+- **Quiz formats** `truefalse` ("SACH YA JHOOT", options forced to
+  [Sach, Jhoot] with the answer moved along when the model flips or
+  translates them) and `oddone`; both fact-checked with Google Search.
+- **Posting-time tip** (`my_channels.time_tip`, Today tab "use HH:00"):
+  `learn` keeps median views per local posting hour (`stats.hours`, Shorts
+  only). With 4+ counted Shorts at two hours and the best 1.5x and 10 views
+  ahead, it suggests moving the weakest time next to the best.
+- **Viewers steer the ideas** (`engage.Reply.request`, `engage.requests`):
+  the reply call also returns any topic a commenter asks for; the last 14
+  days' requests go to the cricket, controversy and history planners as a
+  hint (`requests=` when the planner takes it), whose rules still win. Today
+  shows them per channel.
+- **Up next** (`UpNext.jsx`, `POST /api/my-channels/{cid}/ideas`): the
+  planned ideas per channel; `{"add"}` puts the owner's topic first
+  (cricket's kind guessed: "A vs B, final" match, "A vs B" versus),
+  `{"drop"}` removes one and adds it to `used`, so it is not planned again.
+- A stock library that times out twice rests 15 min (`stock_media._missed`):
+  Openverse timed out on every search for hours on 15-oct-2026 and held
+  each Short 70-100 s. Its search timeout is 12 s (it answers in 1-2 s).
 - **The local dashboard runs on port 5180** (`autostart.bat`, `--strictPort`):
   another of the owner's projects (D:\bd\tool) runs Vite on 5173, and the
   old "is 5173 listening?" check then skipped starting Shortkaar's dashboard

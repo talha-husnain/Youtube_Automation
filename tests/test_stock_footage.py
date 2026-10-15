@@ -224,6 +224,8 @@ def test_footage_credits_name_the_people_and_a_busy_library_rests(keys, monkeypa
 
 
 def test_a_library_that_does_not_answer_rests_after_two_timeouts(keys, monkeypatch):
+    monkeypatch.setattr(sm, "_misses", {})
+    monkeypatch.setattr(sm, "_down_at", {})
     calls = []
 
     def get(url, headers=None, timeout=None):

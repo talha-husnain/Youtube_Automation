@@ -109,7 +109,7 @@ def _rest(provider, seconds=REST_SECONDS, why="says too many requests"):
 # quiz Short for 100 s before it went on without footage.
 DOWN_AFTER = 2
 DOWN_REST = 900
-_misses = {}
+_misses, _down_at = {}, {}
 
 
 def _missed(provider, error):
@@ -117,9 +117,11 @@ def _missed(provider, error):
         return
     with _lock:
         _misses[provider] = _misses.get(provider, 0) + 1
-        down = _misses[provider] >= DOWN_AFTER
+        # Searches already in flight time out too: one rest per DOWN_REST.
+        down = _misses[provider] >= DOWN_AFTER and time.time() - _down_at.get(provider, 0) > DOWN_REST
         if down:
             _misses[provider] = 0
+            _down_at[provider] = time.time()
     if down:
         _rest(provider, DOWN_REST, "is not answering")
 
@@ -218,7 +220,8 @@ def _openverse_photos(term, portrait, key=None):
     query = {"q": term[:100], "license": "cc0,pdm", "size": "large", "mature": "false", "page_size": 20}
     if not portrait:
         query["aspect_ratio"] = "wide"
-    r = _get("https://api.openverse.org/v1/images/?" + urlencode(query), headers={"User-Agent": UA}, timeout=30)
+    # Openverse answers in 1-2 s when it is up; 30 s per search held a Short 68 s when it was down.
+    r = _get("https://api.openverse.org/v1/images/?" + urlencode(query), headers={"User-Agent": UA}, timeout=12)
     out = []
     for p in (r.json() or {}).get("results") or [] if r.status_code == 200 else []:
         w, h = int(p.get("width") or 0), int(p.get("height") or 0)

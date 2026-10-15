@@ -17,6 +17,7 @@ os.environ["AUTOPILOT_LOCAL"] = "0"
 os.environ["STOCK_FOOTAGE"] = "0"
 os.environ["OPENVERSE"] = "0"      # keyless, so it would answer from a test for real
 os.environ["TRENDS"] = "0"         # trends.py searches YouTube for real
+os.environ["VIDEO_QA"] = "0"       # upload tests pass fake paths; test_video_qa turns it on
 # Caption timing from the voice's pauses only: no Whisper model load per test.
 os.environ["EXACT_CAPTIONS"] = "pauses"
 os.environ["VOICE_ENGINE"] = "gemini"   # the free voice is a network service: tests fake ai_take.speak

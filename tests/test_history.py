@@ -389,12 +389,92 @@ def test_an_uploaded_long_video_gets_its_teaser_short_next(monkeypatch):
     payload, meta = mc.next_payload(ch, lambda: None)
     assert payload["history_teaser_of"] == "long1" and payload["history_video_id"] == "AbCdEfGhIjK"
     assert meta["format"] == "teaser" and meta["publish_after"] == "2026-10-15T18:00:00+05:00"
+    assert payload["history_teaser_part"] == 0 and meta["label"].startswith("Teaser")
+    # Then its two best moments, one Short each.
+    for part in (1, 2):
+        ch = mc.get(ch["id"])
+        assert mc.keeps("long1", ch["id"], 3600) is True
+        payload, meta = mc.next_payload(ch, lambda: None)
+        assert payload["history_teaser_part"] == part and meta["part"] == part
+        assert meta["label"].startswith(f"Moment {part}")
     ch = mc.get(ch["id"])
-    assert mc.teaser_due(ch) is None                                # started: not asked twice
-    assert mc.keeps("long1", ch["id"], 3600) is False               # its teaser is under way
+    assert mc.teaser_due(ch) is None                                # all started: not asked again
+    assert mc.keeps("long1", ch["id"], 3600) is False               # its Shorts are under way
     mc._change(ch["id"], lambda c: c["jobs"].append({"job_id": "t1", "status": "done", "day": mc.today(),
                                                      "format": "teaser", "at": now}))
     assert len(mc._jobs_on(mc.get(ch["id"]), mc.today(), ("done", "uploaded"))) == 1    # teasers are extra
+
+
+def test_three_long_videos_a_day_get_only_their_teaser_to_stay_under_the_upload_limit():
+    assert [mc.shorts_per_long({"per_day": n}) for n in (1, 2, 3)] == [3, 3, 1]
+    assert mc._parts({"teaser": "started"}) == 1 and mc._parts({}) == 0    # jobs from before moment Shorts
+
+
+def _wavs(tmp_path, seconds):
+    import struct
+    import wave
+    names = []
+    for k, secs in enumerate(seconds):
+        name = f".hv_{k + 1}.wav"
+        with wave.open(str(tmp_path / name), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(8000)
+            w.writeframes(struct.pack("<h", 0) * int(secs * 8000))
+        names.append(name)
+    return names
+
+
+def test_moments_are_picked_once_kept_in_the_folder_and_checked(tmp_path, monkeypatch):
+    script = _script(chapters=[hv.Chapter(title=f"C{c}", scenes=[S(line=f"Line {c}.{k}", picture="p", wiki="", label="")
+                                                                 for k in range(1, 4)]) for c in range(1, 5)])
+    asked = []
+
+    def ask(client, schema, prompt, **kw):
+        asked.append(prompt)
+        return hv.Moments(moments=[
+            hv.Moment(chapter=1, first_scene=1, hook="Opening again", title="A"),        # inside the teaser
+            hv.Moment(chapter=9, first_scene=1, hook="No such chapter", title="B"),
+            hv.Moment(chapter=3, first_scene=2, hook="Phir Yazid I ne faisla kiya", title="The choice"),
+            hv.Moment(chapter=3, first_scene=1, hook="Same chapter again", title="C"),
+            hv.Moment(chapter=4, first_scene=1, hook="Aakhri din", title="The end")])
+    monkeypatch.setattr(hv.kit, "ask_json", ask)
+    got = hv.moments_for(None, script, str(tmp_path), "urdu", teaser_end=3)
+    assert [(m.chapter, m.first_scene) for m in got] == [(3, 2), (4, 1)]
+    assert got[0].hook == "Phir Yazid ne faisla kiya"                       # no regnal numbers read aloud
+    assert "[Chapter 3] C3" in asked[0] and "  2. Line" in asked[0]
+    assert hv.moment_start(script, got[0]) == 1 + 3 + 3 + 1
+    again = hv.moments_for(None, script, str(tmp_path), "urdu", teaser_end=3)
+    assert len(asked) == 1 and [m.title for m in again] == ["The choice", "The end"]
+
+
+def test_a_moment_stays_in_its_chapter_under_the_minute(tmp_path):
+    script = _script(chapters=[hv.Chapter(title=f"C{c}", scenes=[S(line=f"L{c}", picture="p", wiki="", label="")] * 2)
+                               for c in range(1, 4)])
+    # hook, then chapters of 2 scenes: indices 1-2, 3-4, 5-6
+    names = _wavs(tmp_path, [5, 5, 5, 9, 9, 20, 30])
+    assert [p[0] for p in hv.moment_plan(script, names, str(tmp_path), 3)] == [3, 4]     # 18 s: stops at the chapter end
+    assert [p[0] for p in hv.moment_plan(script, names, str(tmp_path), 1)] == [1, 2, 3, 4]   # 10 s is short: goes on
+    assert [p[0] for p in hv.moment_plan(script, names, str(tmp_path), 5)] == [5]        # 20 + 30 > MOMENT_MAX
+
+
+def test_a_moment_short_goes_up_a_day_per_part_after_its_long_video(monkeypatch):
+    from datetime import datetime, timedelta
+    import youtube_account
+    ch = mc.add("history")
+    after = (datetime.now().astimezone() + timedelta(hours=5)).replace(microsecond=0)
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "m2", "status": "done", "format": "teaser", "part": 2,
+                                                   "at": 1, "publish_after": after.isoformat()}]))
+    monkeypatch.setattr(youtube_account, "status", lambda: {"connected": True})
+    sent = {}
+
+    def upload(path, title, desc, tags, genre, publish_at=None, ai_made=False, meta=None):
+        sent.update(at=publish_at)
+        return {"status": "done", "video_id": "MoMeNt00002", "title": title}
+    monkeypatch.setattr(youtube_account, "upload", upload)
+    clip = {"index": 0, "path": "p.mp4", "title": "T", "description": "D", "tags": []}
+    mc.upload_waiting(mc.get(ch["id"]), lambda job: ("completed", [clip]), log=lambda *a: None)
+    assert sent["at"] == after + timedelta(days=2, minutes=15)
 
 
 def test_a_long_video_waiting_for_its_teaser_is_kept_and_an_old_one_is_not(monkeypatch):
@@ -539,3 +619,43 @@ def test_gemini_blips_are_retried_and_real_errors_are_not(monkeypatch):
     with pytest.raises(ValueError):
         kit.ask_json(types.SimpleNamespace(models=Bad()), hv.Check, "x")
     assert len(calls) == 1
+
+
+def test_a_short_cut_from_a_long_video_gets_a_shot_per_sentence():
+    pic = {"kind": "photo", "path": "c1.jpg", "seconds": 0.0}
+    w, items = hv._sentence_windows([(0.0, 3.0, "Short line."), (3.0, 13.0, "Ek do teen. Char paanch chhe saat aath.")],
+                                    [pic, pic])
+    assert [x[2] for x in w] == ["Short line.", "Ek do teen.", "Char paanch chhe saat aath."]
+    assert w[1][0] == 3.0 and w[-1][1] == 13.0 and abs(w[1][1] - (3.0 + 10 * 3 / 8)) < 1e-9
+    assert items == [pic, pic, pic]
+
+
+def test_footage_fills_the_sentences_it_fits_and_pictures_keep_the_rest(monkeypatch):
+    import broll
+    import stock_media
+    monkeypatch.setenv("STOCK_FOOTAGE", "1")
+    monkeypatch.setattr(stock_media, "available", lambda: True)
+    monkeypatch.setattr(broll, "terms_for", lambda client, topic, lines, rule="": ["t"] * len(lines))
+    clip = {"kind": "video", "path": "rain.mp4", "seconds": 9, "provider": "Pexels", "author": "Ann"}
+    seen = {}
+
+    def for_scenes(client, topic, scenes, terms, portrait=True, rule="", **kw):
+        seen["rule"], seen["portrait"] = rule, portrait
+        return [None, clip]
+    monkeypatch.setattr(stock_media, "for_scenes", for_scenes)
+    pic = {"kind": "photo", "path": "c1.jpg", "seconds": 0.0}
+    w, items, stock = hv._short_footage(None, _script(sacred=True), [(0.0, 9.0, "Pehla jumla. Doosra jumla.")], [pic])
+    assert items == [pic, clip] and stock == [clip] and seen["portrait"] is True
+    assert "NO people" in seen["rule"] and "modern" in seen["rule"]
+    monkeypatch.setenv("STOCK_FOOTAGE", "0")
+    assert hv._short_footage(None, _script(), [(0.0, 9.0, "A. B.")], [pic])[2] == []
+
+
+def test_a_short_credits_the_long_videos_pictures_within_its_room():
+    long_clip = {"photo_credit": "\n".join(f"File{k}.jpg: Someone, CC BY-SA 4.0 (https://commons/{k})" for k in range(40)),
+                 "footage": [{"provider": "Pexels", "author": "Ann"}]}
+    text = hv._reused_credits(long_clip, "https://youtu.be/AbCdEfGhIjK")
+    assert text.startswith("Pictures: free-licence pictures from Wikimedia Commons\n- File0.jpg")
+    assert "more, credited in the full video's description (https://youtu.be/AbCdEfGhIjK)" in text
+    assert text.endswith("Pexels (Ann).") and len(text) < 1500
+    assert hv._reused_credits({}, "") == ""

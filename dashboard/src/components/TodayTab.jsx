@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     Loader2, CheckCircle2, Circle, Copy, Check, AlertTriangle, Rocket, Trophy, HelpCircle, Music, Layers,
-    Bell, CalendarClock, Eye, Users, Upload, Clapperboard, ExternalLink, Flame, Landmark,
+    Bell, CalendarClock, Clock, Eye, Users, Upload, Clapperboard, ExternalLink, Flame, Landmark,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
@@ -57,6 +57,18 @@ export default function TodayTab({ onOpenTab }) {
             }));
         } catch (e) {
             setError(e.detail || 'Could not save.');
+        }
+    };
+
+    // The posting-time tip (my_channels.time_tip): one click swaps the weakest time.
+    const applyTimes = async (cid, times) => {
+        try {
+            await apiJson(`/api/my-channels/${cid}`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ post_times: times }),
+            });
+            load();
+        } catch (e) {
+            setError(e.detail || 'Could not change the posting times.');
         }
     };
 
@@ -125,7 +137,8 @@ export default function TodayTab({ onOpenTab }) {
                     const Icon = KIND_ICON[c.kind] || Layers;
                     const ok = c.problems.length === 0;
                     return (
-                        <button key={c.id} onClick={() => onOpenTab('channels')}
+                        <div key={c.id} className="space-y-1">
+                        <button onClick={() => onOpenTab('channels')}
                             className="w-full text-left flex flex-wrap items-center gap-x-3 gap-y-1 rounded-input border border-rule hover:border-rule2 p-3">
                             {c.thumbnail ? <img src={c.thumbnail} alt="" className="h-8 w-8 rounded-full shrink-0" />
                                 : <span className="h-8 w-8 rounded-full bg-paper flex items-center justify-center shrink-0"><Icon size={15} /></span>}
@@ -140,6 +153,18 @@ export default function TodayTab({ onOpenTab }) {
                                 {c.subscribers != null ? ` · ${c.subscribers} subs` : ''}
                             </span>
                         </button>
+                        {c.asked?.length > 0 && (
+                            <p className="px-3 text-xs text-muted">Viewers asked for: {c.asked.join(' · ')} (the next ideas hear this)</p>
+                        )}
+                        {c.time_tip && (
+                            <div className="flex flex-wrap items-center gap-2 px-3 text-xs text-ink2">
+                                <Clock size={12} className="text-brass" /> <span className="flex-1 min-w-0">{c.time_tip.text}</span>
+                                <button onClick={() => applyTimes(c.id, c.time_tip.post_times)} className="btn-ghost px-2 py-1 text-xs">
+                                    use {c.time_tip.new}
+                                </button>
+                            </div>
+                        )}
+                        </div>
                     );
                 })}
             </div>

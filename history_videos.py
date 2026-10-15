@@ -309,9 +309,11 @@ def trending(lang, limit=8):
     return [f"{v['title'][:90]} ({v['views']:,} views)" for v in rows[:25]]
 
 
-def channel_ideas(client, count=2, avoid=(), best=(), worst=(), notes="", lang="urdu", minutes=DEFAULT_MINUTES):
+def channel_ideas(client, count=2, avoid=(), best=(), worst=(), notes="", lang="urdu", minutes=DEFAULT_MINUTES,
+                  requests=()):
     import cricket_shorts as cs
-    learn = ""
+    import engage
+    learn = engage.request_hint(requests)
     if best:
         learn += "These did BEST on the channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:
@@ -1354,6 +1356,179 @@ def teaser_plan(script, voices, src):
     return out
 
 
+# More Shorts from one long video: its best moments, each a run of one
+# chapter's scenes with a new spoken line that sets it up for a stranger.
+MOMENT_MAX = 44.0           # the chapter scenes; the set-up and closing lines take the rest of the minute
+MOMENT_MIN = 15.0
+
+
+class Moment(BaseModel):
+    chapter: int
+    first_scene: int
+    hook: str
+    title: str
+
+
+class Moments(BaseModel):
+    moments: List[Moment]
+
+
+MOMENTS_PROMPT = """This is the script of our long history video "{title}". We cut its best
+moments into separate YouTube Shorts that people who have NOT seen the video will
+swipe to. Pick the {n} best moments: each a run of consecutive scenes from one
+chapter that makes sense on its own and grips a stranger (a turning point, a
+surprising fact, a dramatic scene, a decision that changed everything). Not the
+opening hook (it has its own Short), and each moment from a different chapter.
+
+For each moment:
+- chapter: the chapter number as listed below
+- first_scene: the scene number within that chapter where the moment starts
+- hook: ONE spoken sentence of 8 to 16 words, said before the moment, that sets it up
+  for a stranger (who, where, when) and makes them want to hear what happened. It is
+  read aloud by a voice: no Roman numerals, no brackets. Language: {lang_rule}. {honour}
+- title: a Short title under 70 characters about this moment (not the whole video),
+  same language, no clickbait lies.
+
+Script:
+{script}"""
+
+
+def _moment_script(script):
+    out = []
+    for c, ch in enumerate(script.chapters, 1):
+        out.append(f"[Chapter {c}] {ch.title}")
+        out += [f"  {k}. {s.line}" for k, s in enumerate(ch.scenes, 1)]
+    return "\n".join(out)
+
+
+def moment_start(script, m):
+    """The moment's first scene as an index into scenes_of(script), or None."""
+    if not 1 <= m.chapter <= len(script.chapters):
+        return None
+    if not 1 <= m.first_scene <= len(script.chapters[m.chapter - 1].scenes):
+        return None
+    return len(script.hook) + sum(len(c.scenes) for c in script.chapters[:m.chapter - 1]) + m.first_scene - 1
+
+
+def moments_for(client, script, src, lang, teaser_end, n=2):
+    """The long video's best moments, asked for once and kept in its folder
+    (moments.json) so each moment Short reads the same list. Moments that
+    start inside the teaser's opening, or twice in one chapter, are dropped."""
+    path = os.path.join(src, "moments.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return [Moment(**m) for m in json.load(f)]
+    except (OSError, ValueError, TypeError):
+        pass
+    from quiz_shorts import quiz_model
+    got = kit.ask_json(client, Moments, MOMENTS_PROMPT.format(
+        title=script.title, n=n, lang_rule=LANG_RULE.get(lang, LANG_RULE["urdu"]),
+        honour=HONOUR.get(lang, HONOUR["urdu"]), script=_moment_script(script)), model=quiz_model())
+    keep, chapters = [], set()
+    for m in got.moments:
+        start = moment_start(script, m)
+        if start is None or start < teaser_end or m.chapter in chapters or not m.hook.strip():
+            continue
+        m.hook = _no_roman(m.hook.strip())
+        m.title = m.title.strip()[:90] or script.title
+        chapters.add(m.chapter)
+        keep.append(m)
+    keep = keep[:n]
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump([m.model_dump() for m in keep], f, ensure_ascii=False)
+    return keep
+
+
+def _no_roman(text):
+    """'Yazid I' was read as 'Yazid one'; a set-up line has no regnal numbers."""
+    return re.sub(r"\b([A-Z][a-z]+) (?:I{1,3}|IV|V|VI{0,3})\b", r"\1", text)
+
+
+def moment_plan(script, voices, src, start):
+    """[(scene index, text, wav, seconds)] from ``start`` while the total stays
+    under MOMENT_MAX; into the next chapter only when the moment is short."""
+    scenes = scenes_of(script)
+    ends, n = set(), len(script.hook)
+    for c in script.chapters:
+        n += len(c.scenes)
+        ends.add(n)
+    out, total = [], 0.0
+    for k in range(start, len(scenes)):
+        name = voices[k] if k < len(voices) else None
+        wav = os.path.join(src, name) if name else None
+        if not wav or not os.path.isfile(wav):
+            break
+        secs = kit.wav_seconds(wav)
+        if out and total + secs > MOMENT_MAX:
+            break
+        if k in ends and total >= MOMENT_MIN:
+            break
+        out.append((k, scenes[k].line, wav, secs))
+        total += secs + GAP
+    return out
+
+
+def _reused_credits(long_clip, link, budget=1200):
+    """The long video's picture and footage credits for a Short cut from it,
+    trimmed to fit a Short's description; the full list is in the long video's."""
+    import stock_media
+    lines = [c for c in (long_clip.get("photo_credit") or "").split("\n") if c.strip()]
+    keep, used = [], 0
+    for c in lines:
+        if used + len(c) + 3 > budget:
+            break
+        keep.append(f"- {c}")
+        used += len(c) + 3
+    out = ["Pictures: free-licence pictures from Wikimedia Commons"] + keep if lines else []
+    if len(keep) < len(lines):
+        out.append(f"- and {len(lines) - len(keep)} more, credited in the full video's description"
+                   + (f" ({link})" if link else ""))
+    footage = stock_media.credit_line(long_clip.get("footage") or [])
+    return "\n".join(out + ([footage] if footage else []))
+
+
+def _sentence_windows(windows, items):
+    """Each voice line's window split at its sentences, time shared by words:
+    a long-video scene is one picture for 15-25 s, too slow for a Short."""
+    out_w, out_i = [], []
+    for (a, b, text), item in zip(windows, items):
+        parts = [p for p in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if p]
+        if len(parts) < 2 or b - a < 6:
+            out_w.append((a, b, text))
+            out_i.append(item)
+            continue
+        weights = [len(p.split()) for p in parts]
+        t = a
+        for k, (p, wt) in enumerate(zip(parts, weights)):
+            end = b if k == len(parts) - 1 else t + (b - a) * wt / sum(weights)
+            out_w.append((t, end, p))
+            out_i.append(item)
+            t = end
+    return out_w, out_i
+
+
+def _short_footage(client, script, windows, items):
+    """(windows, items) for a teaser or moment Short: one shot per sentence,
+    free footage where a search finds a fit, the long video's own picture
+    for the scene everywhere else. No keys or no matches: the pictures only."""
+    import broll
+    import stock_media
+    windows, fallback = _sentence_windows(windows, items)
+    if os.environ.get("STOCK_FOOTAGE", "1") == "0" or not stock_media.available():
+        return windows, fallback, []
+    rule = FOOTAGE_RULE + ((NO_PEOPLE + " ") if script.sacred else "")
+    try:
+        lines = [w[2] for w in windows]
+        terms = broll.terms_for(client, script.title, lines, rule)
+        found = stock_media.for_scenes(client, script.title, lines, terms, portrait=True, rule=rule)
+    except Exception as e:  # noqa: BLE001 — footage is a bonus over the pictures
+        print(f"   ℹ️ No stock footage for this Short ({type(e).__name__}).")
+        return windows, fallback, []
+    print(f"   🎞️ Footage for {sum(1 for f in found if f)} of {len(windows)} sentences.")
+    found = list(found) + [None] * len(windows)
+    return windows, [f or fb for f, fb in zip(found, fallback)], [f for f in found if f]
+
+
 def run_teaser(output_dir, pipeline):
     """A 9:16 teaser Short of a finished long video: its opening narration (the
     voice files are reused, no new voice cost but one closing line), its
@@ -1381,9 +1556,29 @@ def run_teaser(output_dir, pipeline):
     cfg = fl.settings()
     handle = cfg["handle"] or ""
     client = kit.gemini()
-    print(f"🎬 Teaser Short for \"{script.title}\": {len(plan_)} opening lines.")
-    closing = kit.voice_lines(client, [{"text": TEASER_LINE[lang], "voice": os.environ.get("HISTORY_VOICE") or "Charon",
-                                        "style": VOICE_STYLE[lang], "language": LANG_NAME[lang]}], output_dir, "tz")
+    try:
+        part = max(0, int(os.environ.get("HISTORY_TEASER_PART") or 0))
+    except ValueError:
+        part = 0
+    title, setup = script.title, None
+    if part:
+        # A moment Short: one of the long video's best chapters, set up in one new line.
+        moments = moments_for(client, script, src, lang, plan_[-1][0] + 1)
+        if part > len(moments):
+            raise RuntimeError("This long video has no more moments for a Short.")
+        m = moments[part - 1]
+        plan_ = moment_plan(script, h["voices"], src, moment_start(script, m))
+        if not plan_:
+            raise RuntimeError("The long video's voice files are gone; no Short this time.")
+        title, setup = m.title, m.hook
+        print(f"🎬 Moment Short {part} for \"{script.title}\": {len(plan_)} lines of chapter {m.chapter}.")
+    else:
+        print(f"🎬 Teaser Short for \"{script.title}\": {len(plan_)} opening lines.")
+    voice = {"voice": os.environ.get("HISTORY_VOICE") or "Charon", "style": VOICE_STYLE[lang],
+             "language": LANG_NAME[lang]}
+    said = kit.voice_lines(client, ([{"text": setup, **voice}] if setup else [])
+                           + [{"text": TEASER_LINE[lang], **voice}], output_dir, "tz")
+    closing = said[-1:]
     pics = h.get("scene_pictures") or {}
 
     def item(k):
@@ -1394,6 +1589,13 @@ def run_teaser(output_dir, pipeline):
         return {"kind": "photo", "path": os.path.join(src, full), "seconds": 0.0} if full and os.path.isfile(
             os.path.join(src, full)) else None
     t, voices, caps, windows, items, sfx = 0.4, [], [], [], [], []
+    if setup and said[0][0]:
+        wav, secs = said[0]
+        voices.append((wav, t))
+        caps.append((setup, t, t + secs, wav))
+        windows.append((0.0, t + secs + GAP, setup))
+        items.append(item(plan_[0][0]))
+        t += secs + GAP
     for k, text, wav, secs in plan_:
         voices.append((wav, t))
         caps.append((text, t, t + secs, wav))
@@ -1414,10 +1616,11 @@ def run_teaser(output_dir, pipeline):
     total = body_end + (outro_s if card_ev else 0.0)
     windows[-1] = (windows[-1][0], total, windows[-1][2])
     bg = None
+    windows, items, stock = _short_footage(client, script, windows, items)
     shots = broll.plan_shots(windows, items)
     if shots:
         bg = broll.build(output_dir, shots)
-    frame = SimpleNamespace(kicker=TEASER_KICKER[lang], title=script.title)
+    frame = SimpleNamespace(kicker=TEASER_KICKER[lang], title=title)
     events = cs.topic_frame_events(frame, body_end, handle)
     events.append(cs._flash(c0))
     events += cs._pill(c0 + 0.2, body_end, 1000, TEASER_PILL[lang])
@@ -1427,22 +1630,30 @@ def run_teaser(output_dir, pipeline):
         track = kit.music_track("history")
     stem = kit.neutral_stem("Teaser")
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
-    print(f"🎬 Rendering the teaser ({total:.0f}s)...")
+    print(f"🎬 Rendering the {'moment' if part else 'teaser'} Short ({total:.0f}s)...")
     kit.render(final, total, [cfg["bg"], kit.blend("#7C5A2A", cfg["bg"], 0.3)],
                ([] if bg else kit.ambient_events(total)) + events + card_ev, cs.STYLES, voices=voices,
                sfx=sfx + card_sfx, bed=(track, body_end) if track else None, bg_video=bg, fast=True)
     word = WORDS.get(lang, WORDS["urdu"])
     link = f"https://youtu.be/{vid}" if re.fullmatch(r"[A-Za-z0-9_-]{11}", vid) else ""
-    desc = "\n".join(x for x in [script.summary.strip(), "",
+    desc = "\n".join(x for x in [((setup + " ") if setup else "") + script.summary.strip(), "",
                                  (("Poori video: " if lang == "urdu" else "Full video: ") + link) if link else "",
-                                 "", f"{word['follow']}{(' ' + handle) if handle else ''}",
+                                 "", f"{word['follow']}{(' ' + handle) if handle else ''}", "",
                                  "#shorts #history " + ("#urdu" if lang == "urdu" else "#documentary")] if x is not None)
+    import credits
+    import stock_media
+    if any(it and not any(it is s for s in stock) for it in items):
+        # The long video's pictures are in it too, and their licences ask for credit.
+        desc = credits.insert(desc, _reused_credits(long_clip, link))
+    if stock:
+        desc = credits.insert(desc, stock_media.credit_line(stock))
     transcript = kit.timed_transcript(caps)
     clip = {"start": 0.0, "end": round(total, 3), "seconds": round(total, 3), "file": final,
-            "video_title_for_youtube_short": script.title, "seo_title": script.title[:100],
+            "video_title_for_youtube_short": title, "seo_title": title[:100],
             "seo_description": re.sub(r"\n{3,}", "\n\n", desc), "seo_tags": [x[:40] for x in script.tags][:15],
-            "viral_hook_text": plan_[0][1][:200], "why": f"Teaser of: {script.title}", "predicted_score": 80,
+            "viral_hook_text": (setup or plan_[0][1])[:200], "why": f"Teaser of: {script.title}", "predicted_score": 80,
             "genre": "history", "comment_question": script.question, "ai_voice": "AI voice",
             "captions": transcript, "teaser_of": vid or None,
-            "history": {"teaser": True, "lang": lang, "of_job": os.path.basename(os.path.normpath(src))}}
+            "history": {"teaser": True, "part": part, "lang": lang,
+                        "of_job": os.path.basename(os.path.normpath(src))}}
     kit.finish(output_dir, stem, [clip], transcript, pipeline, extra={"genre": "history", "format": "9:16"})

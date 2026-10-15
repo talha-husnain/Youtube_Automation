@@ -6,6 +6,7 @@ import {
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
 import ChannelKit from './ChannelKit';
+import UpNext from './UpNext';
 
 // Every YouTube channel Shortkaar runs (GET /api/my-channels, my_channels.py):
 // the main one (comedy, set up in Autopilot) and the others, each with its
@@ -248,6 +249,7 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                     </div>
                     <EngageSwitches ch={ch} save={save} />
                     <ChannelKit ch={ch} />
+                    <UpNext ch={ch} onChanged={onChanged} />
 
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-input border border-rule p-3">
                         <p className="text-xs text-ink2">

@@ -414,3 +414,49 @@ def test_samples_are_made_one_after_another_even_before_connecting(monkeypatch):
     assert made == [a["id"]] and "sample_wanted" not in mc.get(a["id"]) and mc.get(b["id"])["sample_wanted"]
     asyncio.run(mc.tick(None, lambda j: ("running", []), "out", lambda: None, log=lambda *x: None))
     assert made == [a["id"]]                    # one at a time: the first is still being made
+
+
+def test_views_by_posting_hour_leave_long_videos_out():
+    from datetime import datetime, timedelta, timezone
+    at = lambda h: datetime.now().astimezone().replace(hour=h, minute=0, second=0, microsecond=0).astimezone(
+        timezone.utc).isoformat()
+    rows = [{"publish_at": at(11), "views": 10, "genre": "quiz"}, {"publish_at": at(11), "views": 30, "genre": "quiz"},
+            {"publish_at": at(19), "views": 99, "genre": "quiz"}, {"publish_at": at(19), "views": 5000, "genre": "history"},
+            {"publish_at": None, "views": 1, "genre": "quiz"}]
+    assert mc._by_hour(rows) == {"11": {"shorts": 2, "median": 20}, "19": {"shorts": 1, "median": 99}}
+
+
+def test_a_posting_time_tip_needs_enough_shorts_and_a_clear_gap():
+    ch = {"post_times": ["11:00", "15:00", "19:00"],
+          "stats": {"hours": {"11": {"shorts": 5, "median": 40}, "15": {"shorts": 5, "median": 90},
+                              "19": {"shorts": 5, "median": 300}}}}
+    tip = mc.time_tip(ch)
+    assert tip["best"] == "19:00" and tip["worst"] == "11:00" and tip["new"] == "20:00"
+    assert tip["post_times"] == ["15:00", "19:00", "20:00"] and "Move the 11:00 time to 20:00" in tip["text"]
+    ch["stats"]["hours"]["19"]["shorts"] = 3                          # too few at 19:00 to trust
+    assert mc.time_tip(ch)["best"] == "15:00"
+    ch["stats"]["hours"] = {"11": {"shorts": 9, "median": 3}, "15": {"shorts": 9, "median": 9}}
+    assert mc.time_tip(ch) is None                                    # 3x, but only 6 views apart
+    assert mc.time_tip({"post_times": ["11:00"], "stats": {}}) is None
+
+
+def test_the_owner_puts_a_topic_first_or_drops_one_for_good(monkeypatch):
+    app_module = pytest.importorskip("app")
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    ch = mc.add("cricket")
+    mc._change(ch["id"], lambda c: c.update(ideas=[{"kind": "topic", "text": "Fastest fifties"},
+                                                    {"kind": "topic", "text": "Longest sixes"}]))
+    client = TestClient(app_module.app)
+    r = client.post(f"/api/my-channels/{ch['id']}/ideas", json={"add": "Babar Azam  vs Virat Kohli"})
+    assert r.status_code == 200, r.text
+    assert r.json()["up_next"] == ["Babar Azam vs Virat Kohli", "Fastest fifties", "Longest sixes"]
+    assert mc.get(ch["id"])["ideas"][0] == {"kind": "versus", "text": "Babar Azam vs Virat Kohli", "owner": True}
+    r = client.post(f"/api/my-channels/{ch['id']}/ideas", json={"drop": "Longest sixes"})
+    assert r.json()["up_next"] == ["Babar Azam vs Virat Kohli", "Fastest fifties"]
+    assert "Longest sixes" in mc.get(ch["id"])["used"]              # the planner avoids it from now on
+    assert mc._owner_idea("cricket", "India vs Pakistan, Asia Cup final")["kind"] == "match"
+    assert mc._owner_idea("history", "Tipu Sultan vs the British")["kind"] == "topic"
+    quiz = mc.add("quiz")
+    assert client.post(f"/api/my-channels/{quiz['id']}/ideas", json={"add": "x"}).status_code == 400
+    assert client.post(f"/api/my-channels/{ch['id']}/ideas", json={"add": "   "}).status_code == 400

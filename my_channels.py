@@ -314,17 +314,32 @@ def _jobs_on(ch, day, statuses=("running", "done", "uploaded")):
             and j.get("format") != "teaser"]
 
 
-TEASER_WINDOW = 20 * 3600     # a long video's files are kept this long for its teaser
+TEASER_WINDOW = 20 * 3600     # a long video's files are kept this long for its Shorts
+MOMENT_SHORTS = 2             # Shorts of a long video's best moments, after its opening teaser
+
+
+def shorts_per_long(ch):
+    """The teaser plus moment Shorts each long video gets. Fewer at 3 long
+    videos a day: Shorts count toward the channel's daily upload limit (the
+    main channel refused its 11th upload on 14-oct-2026)."""
+    per_day = max(1, int(ch.get("per_day") or 1))
+    return max(1, min(1 + MOMENT_SHORTS, 8 // per_day - 1))
+
+
+def _parts(j):
+    """Shorts started from this long video (a job from before moment Shorts says only 'teaser')."""
+    return int(j.get("parts", 1 if j.get("teaser") else 0))
 
 
 def teaser_due(ch, now=None):
-    """The history channel's uploaded long video still waiting for its teaser Short, or None."""
+    """The history channel's uploaded long video still owed a Short (its
+    teaser, then its best moments), or None."""
     if not KINDS.get(ch.get("kind"), {}).get("long"):
         return None
     now = now or time.time()
     for j in sorted(ch.get("jobs") or [], key=lambda j: j.get("at", 0)):
         if (j.get("status") == "uploaded" and j.get("format") != "teaser" and j.get("video_id")
-                and not j.get("teaser") and now - j.get("at", 0) < TEASER_WINDOW):
+                and _parts(j) < shorts_per_long(ch) and now - j.get("at", 0) < TEASER_WINDOW):
             return j
     return None
 
@@ -344,8 +359,9 @@ def keeps(job_id, cid, age_seconds):
     ch = get(cid)
     return bool(ch) and any(j.get("job_id") == job_id and (
         j.get("status") in ("running", "done")
-        # An uploaded long video stays until its teaser Short is made from it.
-        or (j.get("status") == "uploaded" and KINDS.get(ch.get("kind"), {}).get("long") and not j.get("teaser")))
+        # An uploaded long video stays until its Shorts are made from it.
+        or (j.get("status") == "uploaded" and KINDS.get(ch.get("kind"), {}).get("long")
+            and _parts(j) < shorts_per_long(ch)))
         for j in ch.get("jobs") or [])
 
 
@@ -375,8 +391,47 @@ def summary(ch):
         "waiting": len(waiting(ch)), "running": [j.get("label") for j in running(ch)],
         "jobs": sorted(ch.get("jobs") or [], key=lambda j: j.get("at", 0), reverse=True)[:12],
         "uploads": rows[:12], "ideas_left": len(ch.get("ideas") or []),
+        "plans_ideas": ch["kind"] in PLANNERS,
+        "up_next": [i.get("text", "") for i in (ch.get("ideas") or [])[:UP_NEXT_SHOWN]],
     })
     return out
+
+
+UP_NEXT_SHOWN = 8
+
+
+def _owner_idea(kind, text):
+    """An idea the owner typed, in the planner's shape. Cricket needs its
+    kind: "India vs Pakistan, Asia Cup final" is a match, "Babar vs Kohli" a
+    player fight, anything else a topic."""
+    if kind == "cricket" and re.search(r"\bvs\.?\b|\bversus\b", text, re.I):
+        return {"kind": "match" if re.search(r",|\b(final|semi|cup|trophy|series|test|odi|t20|league|psl|ipl)\b",
+                                             text, re.I) else "versus", "text": text, "owner": True}
+    return {"kind": "topic", "text": text, "owner": True}
+
+
+def add_idea(cid, text):
+    """The owner's own topic, made next."""
+    text = re.sub(r"\s+", " ", str(text or "")).strip()[:140]
+    ch = get(cid)
+    if not ch or ch["kind"] not in PLANNERS:
+        raise ValueError("This channel picks its own topics.")
+    if not text:
+        raise ValueError("Write a topic first.")
+    idea = _owner_idea(ch["kind"], text)
+    return _change(cid, lambda c: c.update(
+        ideas=[idea] + [i for i in c.get("ideas") or [] if i.get("text", "").lower() != text.lower()]))
+
+
+def drop_idea(cid, text):
+    """Take an idea out of the queue; it goes on the avoid list, so the planner
+    does not bring it back."""
+    text = str(text or "")
+
+    def fn(c):
+        c["ideas"] = [i for i in c.get("ideas") or [] if i.get("text") != text]
+        c["used"] = ((c.get("used") or []) + [text[:140]])[-300:]
+    return _change(cid, fn)
 
 
 # ------------------------------------------------------------------ learning
@@ -442,12 +497,59 @@ def learn(ch, log=print):
         if r.get("outro") is not None and r.get("format") != "teaser":
             arms.setdefault(str(bool(r["outro"])).lower(), []).append(r["views"])
     stats["ab"] = {"outro": {k: {"shorts": len(v), "median": _median(v)} for k, v in arms.items()}}
+    stats["hours"] = _by_hour(mature)
 
     def fn(c):
         c["stats"] = stats
         c["last_learn"] = int(time.time())
     log(f"📈 {ch['name']}: {stats['counted']} Shorts counted, median {stats['median']} views.")
     return _change(ch["id"], fn)
+
+
+TIP_MIN = 4           # Shorts counted at an hour before that hour is compared
+TIP_LEAD = 1.5        # the best hour's median must beat the worst's by this much...
+TIP_GAP = 10          # ...and by this many views, so 3 against 1 is not "3x better"
+
+
+def _by_hour(rows):
+    """{"HH": {"shorts", "median"}} of counted Shorts by the local hour they went
+    public. Long videos are left out: their views are not comparable."""
+    import youtube_account
+    out = {}
+    for r in rows:
+        if r.get("genre") in youtube_account.LONG_GENRES or not r.get("publish_at"):
+            continue
+        try:
+            hour = datetime.fromisoformat(r["publish_at"]).astimezone().hour
+        except ValueError:
+            continue
+        out.setdefault(f"{hour:02d}", []).append(r["views"])
+    return {h: {"shorts": len(v), "median": _median(v)} for h, v in sorted(out.items())}
+
+
+def time_tip(ch):
+    """A posting-time suggestion from the channel's own numbers, or None:
+    the weakest posting hour moves next to the strongest one. Only says
+    something once both hours have TIP_MIN Shorts and a clear gap."""
+    hours = {int(h): v for h, v in ((ch.get("stats") or {}).get("hours") or {}).items()
+             if v.get("shorts", 0) >= TIP_MIN}
+    if len(hours) < 2:
+        return None
+    best = max(hours, key=lambda h: hours[h]["median"])
+    worst = min(hours, key=lambda h: hours[h]["median"])
+    hi, lo = hours[best]["median"], hours[worst]["median"]
+    if hi < max(lo, 1) * TIP_LEAD or hi - lo < TIP_GAP:
+        return None
+    taken = {int(t.split(":")[0]) for t in ch.get("post_times") or []}
+    new = next((h % 24 for h in (best + 1, best - 1, best + 2, best - 2) if h % 24 not in taken), None)
+    if new is None:
+        return None
+    old = next((t for t in ch.get("post_times") or [] if int(t.split(":")[0]) == worst), f"{worst:02d}:00")
+    times = sorted({t for t in ch.get("post_times") or [] if t != old} | {f"{new:02d}:00"})
+    return {"best": f"{best:02d}:00", "best_median": hi, "worst": old, "worst_median": lo,
+            "new": f"{new:02d}:00", "post_times": times,
+            "text": (f"Shorts posted at {best:02d}:00 get a median of {hi} views, at {old} only {lo}. "
+                     f"Move the {old} time to {new:02d}:00?")}
 
 
 AB_MIN = 6            # Shorts counted per side before a side can win
@@ -519,14 +621,16 @@ def _next_payload(ch, client_fn, log=print):
     stats = ch.get("stats") or {}
     long_video = teaser_due(ch)
     if long_video:
-        # The uploaded long video's teaser Short comes before the next long video.
-        _set_job(ch["id"], long_video["job_id"], teaser="started")
+        # The uploaded long video's Shorts come before the next long video:
+        # part 0 is its opening, parts 1-2 its best moments (history_videos.moments_for).
+        part = _parts(long_video)
+        _set_job(ch["id"], long_video["job_id"], teaser="started", parts=part + 1)
         return ({**look, "genre": "history", "history_teaser_of": long_video["job_id"],
                  "history_video_id": long_video["video_id"], "history_lang": ch.get("lang", "urdu"),
-                 "bg_music": True},
-                {"label": f"Teaser: {long_video.get('label', '')}"[:120], "format": "teaser",
-                 "topic": long_video.get("topic"), "teaser_of": long_video["job_id"],
-                 "publish_after": long_video.get("slot")})
+                 "history_teaser_part": part, "bg_music": True},
+                {"label": f"{'Moment ' + str(part) if part else 'Teaser'}: {long_video.get('label', '')}"[:120],
+                 "format": "teaser", "part": part, "topic": long_video.get("topic"),
+                 "teaser_of": long_video["job_id"], "publish_after": long_video.get("slot")})
     if kind in PLANNERS:
         if not ch.get("ideas"):
             if time.time() - _ideas_failed.get(ch["id"], 0) < IDEAS_RETRY:
@@ -536,6 +640,13 @@ def _next_payload(ch, client_fn, log=print):
             # The history channel also hears the owner's topic wishes, its language and length.
             extra = ({"notes": ch.get("notes") or "", "lang": ch.get("lang", "urdu"),
                       "minutes": ch.get("minutes", DEFAULT_MINUTES)} if kind == "history" else {})
+            # Topics viewers asked for in comments (engage.auto_replies); the
+            # planner's own rules still decide whether any of them is made.
+            import engage
+            import inspect
+            asked = engage.requests(account(ch["id"]))
+            if asked and "requests" in inspect.signature(planner.channel_ideas).parameters:
+                extra["requests"] = asked
             try:
                 got = planner.channel_ideas(client_fn(), ch["per_day"], avoid=ch.get("used") or [],
                                             best=stats.get("best") or [], worst=stats.get("worst") or [], **extra)
@@ -726,13 +837,25 @@ def upload_waiting(ch, job_clips, log=print):
                 _set_job(ch["id"], j["job_id"], status="failed", error="no longer on this computer")
                 continue
             clip = clips[0]
+            if not j.get("qa") and os.environ.get("VIDEO_QA", "1") != "0":
+                # Nobody watches these go up: a silent, black or frozen render stops here.
+                import video_qa
+                long = bool(KINDS.get(ch["kind"], {}).get("long")) and j.get("format") != "teaser"
+                problems = video_qa.check(clip["path"], long=long)
+                if problems:
+                    _set_job(ch["id"], j["job_id"], status="failed", error="quality check: " + "; ".join(problems))
+                    log(f"🚫 {ch['name']}: not uploading '{clip['title'][:60]}': {'; '.join(problems)}.")
+                    continue
+                _set_job(ch["id"], j["job_id"], qa="ok")
             if j.get("urgent"):
                 slot = datetime.now().astimezone() + timedelta(minutes=URGENT_AFTER_MINUTES)
             elif j.get("format") == "teaser":
-                # 15 minutes after its long video goes public, so the link in it works.
+                # 15 minutes after its long video goes public, so the link in it works;
+                # a moment Short a day later per part, so the long video gets new viewers for days.
                 soon = datetime.now().astimezone() + timedelta(minutes=URGENT_AFTER_MINUTES)
                 try:
-                    after = datetime.fromisoformat(j.get("publish_after") or "") + timedelta(minutes=15)
+                    after = (datetime.fromisoformat(j.get("publish_after") or "")
+                             + timedelta(minutes=15, days=int(j.get("part") or 0)))
                 except ValueError:
                     after = soon
                 slot = max(after, soon)

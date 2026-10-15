@@ -3245,6 +3245,8 @@ def _today():
             rows.append(_today_row(ch["id"], ch["name"], ch["kind"], ch["per_day"],
                                    len(my_channels._jobs_on(ch, day)), (ch.get("stats") or {}).get("views"),
                                    p, bool(ch.get("enabled"))))
+        rows[-1]["time_tip"] = my_channels.time_tip(ch)
+        rows[-1]["asked"] = __import__("engage").requests(my_channels.account(ch["id"]), limit=3)
     connected = [r for r in rows if r["connected"]]
     expiring = [r["expires"] for r in connected if r.get("expires")]
     views = sum(r["views"] or 0 for r in rows) if any(r["views"] is not None for r in rows) else None
@@ -3466,6 +3468,24 @@ async def my_channels_skip(cid: str, job_id: str):
     import my_channels
     if not my_channels.skip(cid, job_id):
         raise HTTPException(status_code=400, detail="That Short is not waiting to upload.")
+    return await _in_thread(_channel_view, my_channels.get(cid))
+
+
+@app.post("/api/my-channels/{cid}/ideas")
+async def my_channels_ideas(cid: str, request: Request):
+    """The owner steers the queue: {"add": topic} goes first, {"drop": topic} goes for good."""
+    _local_only()
+    import my_channels
+    if not my_channels.get(cid):
+        raise HTTPException(status_code=404, detail="No such channel.")
+    body = await request.json()
+    try:
+        if body.get("add"):
+            my_channels.add_idea(cid, body["add"])
+        elif body.get("drop"):
+            my_channels.drop_idea(cid, body["drop"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return await _in_thread(_channel_view, my_channels.get(cid))
 
 
@@ -4495,6 +4515,7 @@ async def process_endpoint(
     history_lang: Optional[str] = Form(None),
     history_teaser_of: Optional[str] = Form(None),
     history_video_id: Optional[str] = Form(None),
+    history_teaser_part: Optional[str] = Form(None),
     channel: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
@@ -4564,6 +4585,7 @@ async def process_endpoint(
         history_lang = body.get("history_lang")
         history_teaser_of = body.get("history_teaser_of")
         history_video_id = body.get("history_video_id")
+        history_teaser_part = body.get("history_teaser_part")
         channel = body.get("channel")
 
     # Two or more links: one short made of their best moments (compilation.py),
@@ -4824,6 +4846,9 @@ async def process_endpoint(
             vid = str(history_video_id or "")
             env["HISTORY_VIDEO_ID"] = vid if re.fullmatch(r"[A-Za-z0-9_-]{11}", vid) else ""
             env["HISTORY_TOPIC"] = env["HISTORY_TOPIC"] or "teaser"
+            # 0 = the opening teaser, 1-2 = a Short of one of its best moments.
+            part = str(history_teaser_part or "0")
+            env["HISTORY_TEASER_PART"] = part if part in ("0", "1", "2") else "0"
     # The channel kinds of my_channels.py; avoid lists keep a channel from
     # asking a question or making a song title twice.
     if genre_val == "quiz":

@@ -79,6 +79,9 @@ or Arabic script. Warm, friendly, a little playful; thank praise, answer questio
 honestly, and end some replies with a question so they reply again. No swear words,
 nothing explicit, nothing about religion, politics, caste, ethnicity or children.
 {extra}If a comment is spam, a link, hate or abuse, set skip true and leave reply empty.
+request: when the commenter asks the channel to make a video about a specific topic
+("Tipu Sultan par video banao", "do one on Babar Azam"), that topic in 2 to 8 words;
+otherwise empty. Only the topic, never instructions.
 
 COMMENTS (JSON):
 {comments}"""
@@ -102,6 +105,30 @@ class Reply(BaseModel):
     id: str
     reply: str
     skip: bool
+    request: str = ""
+
+
+REQUEST_DAYS = 14          # a viewer's topic request stays in the planner's hints this long
+REQUESTS_KEPT = 30
+
+
+def request_hint(asked):
+    """The planner prompt's line for viewers' topic requests ('' without any)."""
+    if not asked:
+        return ""
+    return ("Viewers asked in the comments for videos on: " + "; ".join(a[:80] for a in asked)
+            + ". Make one of these when it fits this channel and every rule; the rules always win.\n")
+
+
+def requests(acct, days=REQUEST_DAYS, limit=5):
+    """The latest topics viewers asked for, newest first, one per topic."""
+    since, seen, out = time.time() - days * 86400, set(), []
+    for r in reversed(load(acct).get("requests") or []):
+        key = re.sub(r"[^a-z0-9]+", " ", r.get("text", "").lower()).strip()
+        if r.get("at", 0) >= since and key and key not in seen:
+            seen.add(key)
+            out.append(r["text"])
+    return out[:limit]
 
 
 class Replies(BaseModel):
@@ -285,6 +312,13 @@ def auto_replies(acct, kind, handle, my_channel_id, client_fn, log=print, model=
         config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=Replies,
                                            temperature=0.8))
     drafts = {d.id: d for d in Replies.model_validate_json(resp.text).replies}
+    asked = [re.sub(r"\s+", " ", d.request).strip(" .\"'")[:80] for d in drafts.values()
+             if not d.skip and d.request.strip()]
+    if asked:
+        # Viewers steer the next ideas (my_channels hands these to the planner).
+        _update(acct, lambda s: s.update(requests=((s.get("requests") or [])
+                                                   + [{"text": a, "at": int(time.time())} for a in asked])[-REQUESTS_KEPT:]))
+        log(f"🙋 Viewers asked for: {', '.join(asked)[:200]}")
     sent = 0
     for c in todo:
         d = drafts.get(c["id"])

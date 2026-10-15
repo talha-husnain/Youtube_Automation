@@ -133,9 +133,10 @@ Never any of: {rules}.
 One per line, each starting with "topic: ". Nothing else."""
 
 
-def channel_ideas(client, count=8, avoid=(), best=(), worst=()):
+def channel_ideas(client, count=8, avoid=(), best=(), worst=(), requests=()):
+    import engage
     import trends
-    learn = trends.hint("controversy")
+    learn = trends.hint("controversy") + engage.request_hint(requests)
     if best:
         learn += "These did BEST on the channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:
