@@ -4408,6 +4408,8 @@ async def process_endpoint(
     history_topic: Optional[str] = Form(None),
     history_minutes: Optional[str] = Form(None),
     history_lang: Optional[str] = Form(None),
+    history_teaser_of: Optional[str] = Form(None),
+    history_video_id: Optional[str] = Form(None),
     channel: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
@@ -4475,6 +4477,8 @@ async def process_endpoint(
         history_topic = body.get("history_topic")
         history_minutes = body.get("history_minutes")
         history_lang = body.get("history_lang")
+        history_teaser_of = body.get("history_teaser_of")
+        history_video_id = body.get("history_video_id")
         channel = body.get("channel")
 
     # Two or more links: one short made of their best moments (compilation.py),
@@ -4726,6 +4730,15 @@ async def process_endpoint(
         except (TypeError, ValueError):
             env["HISTORY_MINUTES"] = "10"
         env["HISTORY_LANG"] = "english" if str(history_lang or "").lower() == "english" else "urdu"
+        if history_teaser_of:
+            # The teaser Short of a finished long video: its job dir, and its YouTube id for the link.
+            src = str(history_teaser_of)
+            if not re.fullmatch(r"[A-Za-z0-9-]{8,64}", src) or not os.path.isdir(os.path.join(OUTPUT_DIR, src)):
+                raise HTTPException(status_code=400, detail="That long video is no longer on this computer.")
+            env["HISTORY_TEASER_OF"] = os.path.join(OUTPUT_DIR, src)
+            vid = str(history_video_id or "")
+            env["HISTORY_VIDEO_ID"] = vid if re.fullmatch(r"[A-Za-z0-9_-]{11}", vid) else ""
+            env["HISTORY_TOPIC"] = env["HISTORY_TOPIC"] or "teaser"
     # The channel kinds of my_channels.py; avoid lists keep a channel from
     # asking a question or making a song title twice.
     if genre_val == "quiz":

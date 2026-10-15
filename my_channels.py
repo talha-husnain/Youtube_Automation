@@ -296,7 +296,24 @@ def today(now=None):
 
 
 def _jobs_on(ch, day, statuses=("running", "done", "uploaded")):
-    return [j for j in ch.get("jobs") or [] if j.get("day") == day and j.get("status") in statuses]
+    """The day's jobs; a long video's teaser Short is extra, not one of the day's videos."""
+    return [j for j in ch.get("jobs") or [] if j.get("day") == day and j.get("status") in statuses
+            and j.get("format") != "teaser"]
+
+
+TEASER_WINDOW = 20 * 3600     # a long video's files are kept this long for its teaser
+
+
+def teaser_due(ch, now=None):
+    """The history channel's uploaded long video still waiting for its teaser Short, or None."""
+    if not KINDS.get(ch.get("kind"), {}).get("long"):
+        return None
+    now = now or time.time()
+    for j in sorted(ch.get("jobs") or [], key=lambda j: j.get("at", 0)):
+        if (j.get("status") == "uploaded" and j.get("format") != "teaser" and j.get("video_id")
+                and not j.get("teaser") and now - j.get("at", 0) < TEASER_WINDOW):
+            return j
+    return None
 
 
 def waiting(ch):
@@ -312,8 +329,11 @@ def keeps(job_id, cid, age_seconds):
     if age_seconds > KEEP_DAYS * 86400:
         return False
     ch = get(cid)
-    return bool(ch) and any(j.get("job_id") == job_id and j.get("status") in ("running", "done")
-                            for j in ch.get("jobs") or [])
+    return bool(ch) and any(j.get("job_id") == job_id and (
+        j.get("status") in ("running", "done")
+        # An uploaded long video stays until its teaser Short is made from it.
+        or (j.get("status") == "uploaded" and KINDS.get(ch.get("kind"), {}).get("long") and not j.get("teaser")))
+        for j in ch.get("jobs") or [])
 
 
 def connected(ch):
@@ -393,7 +413,9 @@ def learn(ch, log=print):
     by_format = {}
     for r in mature:
         by_format.setdefault(r.get("format") or "other", []).append(r["views"])
-    ranked = sorted(mature, key=lambda r: r["views"], reverse=True)
+    # Teaser Shorts get Shorts-sized views: the best and worst lists that steer
+    # the next long videos compare long videos only.
+    ranked = sorted([r for r in mature if r.get("format") != "teaser"], key=lambda r: r["views"], reverse=True)
     stats = {"at": int(time.time()), "tracked": len(rows), "counted": len(mature),
              "views": sum((numbers.get(r["video_id"]) or {}).get("views", 0) for r in rows),
              "median": _median([r["views"] for r in mature]),
@@ -442,6 +464,16 @@ def next_payload(ch, client_fn, log=print):
     kind = ch["kind"]
     look = _look(ch)
     stats = ch.get("stats") or {}
+    long_video = teaser_due(ch)
+    if long_video:
+        # The uploaded long video's teaser Short comes before the next long video.
+        _set_job(ch["id"], long_video["job_id"], teaser="started")
+        return ({**look, "genre": "history", "history_teaser_of": long_video["job_id"],
+                 "history_video_id": long_video["video_id"], "history_lang": ch.get("lang", "urdu"),
+                 "bg_music": True},
+                {"label": f"Teaser: {long_video.get('label', '')}"[:120], "format": "teaser",
+                 "topic": long_video.get("topic"), "teaser_of": long_video["job_id"],
+                 "publish_after": long_video.get("slot")})
     if kind in PLANNERS:
         if not ch.get("ideas"):
             if time.time() - _ideas_failed.get(ch["id"], 0) < IDEAS_RETRY:
@@ -504,6 +536,8 @@ def wants_more(ch, now=None):
     day = today(now)
     if not ch.get("enabled") or running(ch):
         return False
+    if teaser_due(ch):
+        return True
     made = len(_jobs_on(ch, day))
     tries = len(_jobs_on(ch, day, ("running", "done", "uploaded", "failed")))
     if (ch.get("ideas") or [{}])[0].get("urgent"):
@@ -607,8 +641,9 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
                     j["status"] = status
                     if err:
                         j["error"] = err
-            topic = next((j.get("topic") for j in c["jobs"] if j.get("job_id") == job_id), None)
-            if status == "done":
+            job = next((j for j in c["jobs"] if j.get("job_id") == job_id), {})
+            topic = job.get("topic")
+            if status == "done" and job.get("format") != "teaser":   # a teaser's topic is already used
                 adds = used or ([topic] if c["kind"] in PLANNERS and topic else [])
                 c["used"] = ((c.get("used") or []) + [str(u)[:140] for u in adds if u])[-300:]
     return _change(ch["id"], fn)
@@ -639,11 +674,20 @@ def upload_waiting(ch, job_clips, log=print):
             clip = clips[0]
             if j.get("urgent"):
                 slot = datetime.now().astimezone() + timedelta(minutes=URGENT_AFTER_MINUTES)
+            elif j.get("format") == "teaser":
+                # 15 minutes after its long video goes public, so the link in it works.
+                soon = datetime.now().astimezone() + timedelta(minutes=URGENT_AFTER_MINUTES)
+                try:
+                    after = datetime.fromisoformat(j.get("publish_after") or "") + timedelta(minutes=15)
+                except ValueError:
+                    after = soon
+                slot = max(after, soon)
             else:
                 slot = youtube_account.next_slots(ch["post_times"], 1)[0]
             row = youtube_account.upload(
                 clip["path"], clip["title"], promote(clip["description"], ch["id"]), clip["tags"],
-                KINDS[ch["kind"]]["genre"], publish_at=slot, ai_made=clip.get("ai_made", False),
+                "history_teaser" if j.get("format") == "teaser" else KINDS[ch["kind"]]["genre"],
+                publish_at=slot, ai_made=clip.get("ai_made", False),
                 meta={"job_id": j["job_id"], "clip_index": clip["index"], "channel": ch["id"],
                       "format": j.get("format"), "topic": j.get("topic"), "seconds": clip.get("seconds"),
                       "question": clip.get("question") or "", "answers": clip.get("answers") or []})

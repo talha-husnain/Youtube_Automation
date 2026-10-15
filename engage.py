@@ -68,7 +68,7 @@ PLAYLISTS = {
     ("quiz", "riddle"): "Paheliyan", ("quiz", "math"): "Dimagh lagao: maths puzzles",
     ("quiz", "flags"): "Flag quiz: guess the country", ("music", None): "New AI songs",
     ("comedy", None): "Comedy Shorts", ("controversy", None): "Controversies explained",
-    ("history", None): "History and stories",
+    ("history", None): "History and stories", ("history", "teaser"): "History in 60 seconds",
 }
 
 REPLY_PROMPT = """You reply to viewer comments for {who} ({handle}).

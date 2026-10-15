@@ -40,8 +40,10 @@ or revered figure is dropped on every video unless it is a place or object
 
 Env: HISTORY_TOPIC, HISTORY_MINUTES (2-30), HISTORY_LANG (urdu | english),
 HISTORY_VOICE, BG_MUSIC, HISTORY_AI_IMAGES, HISTORY_IMAGE_SIZE,
-HISTORY_CAPTIONS (default on).
+HISTORY_CAPTIONS (default on). HISTORY_TEASER_OF (a finished long video's job
+dir) + HISTORY_VIDEO_ID make its teaser Short instead (run_teaser).
 """
+import glob
 import io
 import json
 import os
@@ -1216,6 +1218,8 @@ def frame_of(video, out, at=1.0):
 
 def run(output_dir, pipeline):
     from controversy_shorts import _real_url
+    if os.environ.get("HISTORY_TEASER_OF"):
+        return run_teaser(output_dir, pipeline)
     topic = re.sub(r"\s+", " ", os.environ.get("HISTORY_TOPIC") or "").strip()[:200]
     if len(topic) < 3:
         raise RuntimeError("Write the story or topic of the video.")
@@ -1269,6 +1273,131 @@ def run(output_dir, pipeline):
             "history": {"topic": topic, "minutes": minutes, "lang": lang, "sacred": script.sacred,
                         "pictures": {"free": len(credits), "stock": len(stock), "ai": ai_used},
                         "background_music": bool(tracks),
+                        # The teaser Short (run_teaser) reuses the opening's voice and pictures.
+                        "voices": [os.path.basename(p) if p else None for p, _s in said],
+                        "scene_pictures": {str(k): v for k, v in pics.items()},
                         "script": script.model_dump()}}
     kit.finish(output_dir, stem, [clip], None, pipeline, extra={"genre": "history", "format": "16:9"})
     print(f"   ⏱️ Made in {(time.time() - started) / 60:.1f} min.")
+
+
+# ------------------------------------------------------------------ teaser Short
+
+TEASER_MAX = 50.0           # seconds of the long video's opening, so the Short stays under a minute
+TEASER_LINE = {"urdu": "Poori kahani hamare channel par dekhein, link description mein hai.",
+               "english": "Watch the full story on our channel, the link is in the description."}
+TEASER_PILL = {"urdu": "POORI VIDEO CHANNEL PAR", "english": "FULL VIDEO ON THE CHANNEL"}
+TEASER_KICKER = {"urdu": "POORI KAHANI", "english": "THE FULL STORY"}
+
+
+def teaser_plan(script, voices, src):
+    """[(scene index, text, wav, seconds)]: the hook, plus the first chapter
+    scenes while the total stays under TEASER_MAX."""
+    out, total = [], 0.0
+    for k, s in enumerate(scenes_of(script)):
+        name = voices[k] if k < len(voices) else None
+        wav = os.path.join(src, name) if name else None
+        if not wav or not os.path.isfile(wav):
+            break
+        secs = kit.wav_seconds(wav)
+        if k >= len(script.hook) and (total + secs > TEASER_MAX or total >= 25):
+            break
+        if total + secs > TEASER_MAX and out:
+            break
+        out.append((k, s.line, wav, secs))
+        total += secs + GAP
+    return out
+
+
+def run_teaser(output_dir, pipeline):
+    """A 9:16 teaser Short of a finished long video: its opening narration (the
+    voice files are reused, no new voice cost but one closing line), its
+    pictures and footage cut for a phone, and a closing line pointing to the
+    full video, linked in the description. Long videos are found slowly;
+    Shorts are pushed to new viewers, so each long video gets one."""
+    import broll
+    import cricket_shorts as cs
+    from types import SimpleNamespace
+    src = os.environ["HISTORY_TEASER_OF"]
+    vid = (os.environ.get("HISTORY_VIDEO_ID") or "").strip()
+    metas = glob.glob(os.path.join(src, "*_metadata.json"))
+    if not metas:
+        raise RuntimeError("The long video's files are gone; no teaser this time.")
+    with open(metas[0], encoding="utf-8") as f:
+        long_clip = (json.load(f).get("shorts") or [{}])[0]
+    h = long_clip.get("history") or {}
+    if not h.get("script") or not h.get("voices"):
+        raise RuntimeError("This long video was made before teasers existed.")
+    script = Script(**h["script"])
+    lang = h.get("lang") if h.get("lang") in LANGS else "urdu"
+    plan_ = teaser_plan(script, h["voices"], src)
+    if not plan_:
+        raise RuntimeError("The long video's voice files are gone; no teaser this time.")
+    cfg = fl.settings()
+    handle = cfg["handle"] or ""
+    client = kit.gemini()
+    print(f"🎬 Teaser Short for \"{script.title}\": {len(plan_)} opening lines.")
+    closing = kit.voice_lines(client, [{"text": TEASER_LINE[lang], "voice": os.environ.get("HISTORY_VOICE") or "Charon",
+                                        "style": VOICE_STYLE[lang], "language": LANG_NAME[lang]}], output_dir, "tz")
+    pics = h.get("scene_pictures") or {}
+
+    def item(k):
+        entry = pics.get(str(k)) or {}
+        if entry.get("video") and os.path.isfile(entry["video"]):
+            return {"kind": "video", "path": entry["video"], "seconds": entry.get("seconds") or 0}
+        full = entry.get("full")
+        return {"kind": "photo", "path": os.path.join(src, full), "seconds": 0.0} if full and os.path.isfile(
+            os.path.join(src, full)) else None
+    t, voices, caps, windows, items, sfx = 0.4, [], [], [], [], []
+    for k, text, wav, secs in plan_:
+        voices.append((wav, t))
+        caps.append((text, t, t + secs, wav))
+        windows.append((t if windows else 0.0, t + secs + GAP, text))
+        items.append(item(k))
+        t += secs + GAP
+    close_wav, close_secs = closing[0]
+    close_secs = close_secs or 3.5
+    c0 = t
+    if close_wav:
+        voices.append((close_wav, c0))
+        caps.append((TEASER_LINE[lang], c0, c0 + close_secs, close_wav))
+    body_end = c0 + close_secs + 0.6
+    windows.append((c0, body_end, TEASER_LINE[lang]))
+    items.append(item(plan_[0][0]))
+    outro_s = cfg["outro_seconds"]
+    card_ev, card_sfx = kit.end_card(body_end, outro_s)
+    total = body_end + (outro_s if card_ev else 0.0)
+    windows[-1] = (windows[-1][0], total, windows[-1][2])
+    bg = None
+    shots = broll.plan_shots(windows, items)
+    if shots:
+        bg = broll.build(output_dir, shots)
+    frame = SimpleNamespace(kicker=TEASER_KICKER[lang], title=script.title)
+    events = cs.topic_frame_events(frame, body_end, handle)
+    events.append(cs._flash(c0))
+    events += cs._pill(c0 + 0.2, body_end, 1000, TEASER_PILL[lang])
+    sfx.append((kit.WHOOSH, 0.3, max(0.0, c0 - 0.15)))
+    track = None
+    if not script.sacred and os.environ.get("BG_MUSIC", "0") == "1":
+        track = kit.music_track("history")
+    stem = kit.neutral_stem("Teaser")
+    final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
+    print(f"🎬 Rendering the teaser ({total:.0f}s)...")
+    kit.render(final, total, [cfg["bg"], kit.blend("#7C5A2A", cfg["bg"], 0.3)],
+               ([] if bg else kit.ambient_events(total)) + events + card_ev, cs.STYLES, voices=voices,
+               sfx=sfx + card_sfx, bed=(track, body_end) if track else None, bg_video=bg, fast=True)
+    word = WORDS.get(lang, WORDS["urdu"])
+    link = f"https://youtu.be/{vid}" if re.fullmatch(r"[A-Za-z0-9_-]{11}", vid) else ""
+    desc = "\n".join(x for x in [script.summary.strip(), "",
+                                 (("Poori video: " if lang == "urdu" else "Full video: ") + link) if link else "",
+                                 "", f"{word['follow']}{(' ' + handle) if handle else ''}",
+                                 "#shorts #history " + ("#urdu" if lang == "urdu" else "#documentary")] if x is not None)
+    transcript = kit.timed_transcript(caps)
+    clip = {"start": 0.0, "end": round(total, 3), "seconds": round(total, 3), "file": final,
+            "video_title_for_youtube_short": script.title, "seo_title": script.title[:100],
+            "seo_description": re.sub(r"\n{3,}", "\n\n", desc), "seo_tags": [x[:40] for x in script.tags][:15],
+            "viral_hook_text": plan_[0][1][:200], "why": f"Teaser of: {script.title}", "predicted_score": 80,
+            "genre": "history", "comment_question": script.question, "ai_voice": "AI voice",
+            "captions": transcript, "teaser_of": vid or None,
+            "history": {"teaser": True, "lang": lang, "of_job": os.path.basename(os.path.normpath(src))}}
+    kit.finish(output_dir, stem, [clip], transcript, pipeline, extra={"genre": "history", "format": "9:16"})

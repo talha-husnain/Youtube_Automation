@@ -518,6 +518,15 @@ never finished:
     (`fast=True`): medium CRF 18 took 57 s of a 61 s Short.
   - `trends.py`: this week's most viewed short videos per niche (yt-dlp
     search, 12 h cache) go into the cricket and controversy planners.
+- **Teaser Shorts for long videos** (`history_videos.run_teaser`,
+  `my_channels.teaser_due`): once a history long video is uploaded, the
+  next job is its 9:16 teaser (the opening narration's own voice files and
+  pictures, one new closing line, "Poori video: youtu.be/<id>" in the
+  description), uploaded 15 min after the long video's slot (genre
+  `history_teaser`, Shorts URL). Teasers are extra: not counted in the day's
+  videos, not in the planner's best/worst; the long job dir is kept until
+  its teaser exists (`keeps`). The long video's metadata carries `voices`
+  and `scene_pictures` for it.
 - **The local dashboard runs on port 5180** (`autostart.bat`, `--strictPort`):
   another of the owner's projects (D:\bd\tool) runs Vite on 5173, and the
   old "is 5173 listening?" check then skipped starting Shortkaar's dashboard

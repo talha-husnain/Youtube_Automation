@@ -329,3 +329,95 @@ def test_a_refused_thumbnail_is_recorded_and_spends_its_units(tmp_path, monkeypa
     row = ya.add_thumbnail({"id": "r1", "video_id": "LONG1", "status": "done"}, str(thumb))
     assert row["thumbnail"] == "failed" and "thumbnails" in row["thumbnail_error"]
     assert ya.quota_used() == before + 50
+
+
+def test_an_uploaded_long_video_gets_its_teaser_short_next(monkeypatch):
+    import time as _t
+    ch = mc.add("history")
+    now = _t.time()
+    mc._change(ch["id"], lambda c: c.update(per_day=1, jobs=[
+        {"job_id": "long1", "status": "uploaded", "at": now - 600, "day": mc.today(), "label": "Rome",
+         "topic": "Rome", "format": "history", "video_id": "AbCdEfGhIjK", "slot": "2026-10-15T18:00:00+05:00"}]))
+    ch = mc.get(ch["id"])
+    assert mc.teaser_due(ch)["job_id"] == "long1"
+    assert mc.wants_more(ch)                                        # past today's 1 long video, still a teaser
+    payload, meta = mc.next_payload(ch, lambda: None)
+    assert payload["history_teaser_of"] == "long1" and payload["history_video_id"] == "AbCdEfGhIjK"
+    assert meta["format"] == "teaser" and meta["publish_after"] == "2026-10-15T18:00:00+05:00"
+    ch = mc.get(ch["id"])
+    assert mc.teaser_due(ch) is None                                # started: not asked twice
+    assert mc.keeps("long1", ch["id"], 3600) is False               # its teaser is under way
+    mc._change(ch["id"], lambda c: c["jobs"].append({"job_id": "t1", "status": "done", "day": mc.today(),
+                                                     "format": "teaser", "at": now}))
+    assert len(mc._jobs_on(mc.get(ch["id"]), mc.today(), ("done", "uploaded"))) == 1    # teasers are extra
+
+
+def test_a_long_video_waiting_for_its_teaser_is_kept_and_an_old_one_is_not(monkeypatch):
+    import time as _t
+    ch = mc.add("history")
+    mc._change(ch["id"], lambda c: c.update(jobs=[
+        {"job_id": "long1", "status": "uploaded", "at": _t.time() - 600, "format": "history", "video_id": "x" * 11}]))
+    assert mc.keeps("long1", ch["id"], 600) is True
+    mc._change(ch["id"], lambda c: c["jobs"][0].update(at=_t.time() - mc.TEASER_WINDOW - 60))
+    assert mc.teaser_due(mc.get(ch["id"])) is None
+    assert mc.teaser_due(mc.get(mc.add("quiz")["id"])) is None       # Shorts channels have no teasers
+
+
+def test_the_teaser_uses_the_opening_under_a_minute(tmp_path):
+    import math
+    import struct
+    import wave
+    names = []
+    for k, secs in enumerate([18.0, 16.0, 20.0, 12.0]):
+        name = f".hv_{k + 1}.wav"
+        with wave.open(str(tmp_path / name), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(8000)
+            w.writeframes(struct.pack("<h", 0) * int(secs * 8000))
+        names.append(name)
+    script = _script()        # 1 hook scene, then chapter scenes
+    plan = hv.teaser_plan(script, names, str(tmp_path))
+    assert [p[0] for p in plan] == [0, 1]                           # hook + one scene, then 25 s reached
+    assert sum(p[3] for p in plan) <= hv.TEASER_MAX
+    assert hv.teaser_plan(script, [None] * 4, str(tmp_path)) == []
+
+
+def test_process_accepts_a_teaser_only_for_a_job_on_this_computer(monkeypatch, tmp_path):
+    app_module = pytest.importorskip("app")
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(app_module, "_enqueue_job", lambda *a, **k: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    client = TestClient(app_module.app)
+    body = {"genre": "history", "history_teaser_of": "longjob-123", "history_video_id": "AbCdEfGhIjK",
+            "acknowledged": True}
+    r = client.post("/api/process", json=body, headers={"X-Shortkaar-Autopilot": "1"})
+    assert r.status_code == 400
+    (tmp_path / "longjob-123").mkdir()
+    r = client.post("/api/process", json=body, headers={"X-Shortkaar-Autopilot": "1"})
+    assert r.status_code == 200, r.text
+    env = app_module.jobs[r.json()["job_id"]]["env"]
+    assert env["HISTORY_TEASER_OF"] == str(tmp_path / "longjob-123") and env["HISTORY_VIDEO_ID"] == "AbCdEfGhIjK"
+
+
+def test_a_teaser_goes_up_15_minutes_after_its_long_video(monkeypatch):
+    from datetime import datetime, timedelta
+    import youtube_account
+    ch = mc.add("history")
+    after = (datetime.now().astimezone() + timedelta(hours=5)).replace(microsecond=0)
+    mc._change(ch["id"], lambda c: c.update(jobs=[{"job_id": "t1", "status": "done", "format": "teaser",
+                                                   "at": 1, "publish_after": after.isoformat()}]))
+    monkeypatch.setattr(youtube_account, "status", lambda: {"connected": True})
+    sent = {}
+
+    def upload(path, title, desc, tags, genre, publish_at=None, ai_made=False, meta=None):
+        sent.update(genre=genre, at=publish_at, meta=meta)
+        return {"status": "done", "video_id": "TeAsEr00001", "title": title}
+    monkeypatch.setattr(youtube_account, "upload", upload)
+    clip = {"index": 0, "path": "p.mp4", "title": "T", "description": "D", "tags": []}
+    got = mc.upload_waiting(mc.get(ch["id"]), lambda job: ("completed", [clip]), log=lambda *a: None)
+    assert got["done"] == 1 and sent["genre"] == "history_teaser"
+    assert sent["at"] == after + timedelta(minutes=15) and sent["meta"]["format"] == "teaser"
+    assert youtube_account.CATEGORY["history_teaser"] == "27" and "history_teaser" not in youtube_account.LONG_GENRES
