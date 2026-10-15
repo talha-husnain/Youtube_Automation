@@ -110,6 +110,7 @@ def test_replies_go_to_new_viewer_comments_with_the_quiz_answers(fake, monkeypat
 
 def test_topics_viewers_ask_for_reach_the_next_ideas(fake, monkeypatch):
     ch = mc.add("history")
+    mc.update(ch["id"], {"daily_short": False})          # else the day's "Aaj ki tareekh" Short comes first
     acct = mc.account(ch["id"])
     with ya.use(acct):
         ya._save_upload(_row("H"))
