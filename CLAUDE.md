@@ -661,6 +661,13 @@ never finished:
   - `safe_json.py`: the channels file and each upload log keep an hourly
     `.bak` and a damaged file reads from it (a damaged file used to read as
     empty and the next write made that permanent). Tokens get no copy.
+    On Windows a PermissionError is a BUSY file (another thread's
+    os.replace), retried ~1 s on read and on replace and never read as
+    damage: the hour-old backup would list uploaded videos as waiting again.
+  - Review hold on the phone: the Telegram note carries a "Skip this video"
+    button (`telegram_notify.poll` -> `my_channels.telegram_press`), polled
+    at the top of the tick, before any upload. getUpdates' allowed_updates
+    is remembered by Telegram, so connect() and poll() name the same list.
   - A failed thumbnail or a skipped/failed caption track is copied to
     `output/channels/<id>/retry/` and tried again with each learn pass
     (`retry_extras`, 4 tries, 7 days); thumbnails wait while YouTube says
@@ -676,7 +683,13 @@ never finished:
   script the English drifted a line late and once carried the model's own
   note ("the line cuts off here"); asked for 60 lines at once the model
   dropped 1-3, so missing numbers are asked again. Uploaded as a second
-  track (`captions_extra`, row key `captions_en`).
+  track (`captions_extra`, row key `captions_en`). The note filter (`_META`)
+  matches only note-shaped text: narration says "translated" and "cut off
+  the water" too.
+- **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
+  player born today; `cricket_shorts.birthday_ok` keeps it only when the
+  Wikipedia intro's "(born 15 October 1994)" matches (`player_photo.born`).
+  First real run: Babar Azam and Umar Gul, both right.
 - Read for real on Punchline Bazaar (15-oct-2026): channels.list
   `longUploadsStatus` answered "eligible" (= not phone-verified yet) and
   Analytics gave averageViewPercentage for 17 Shorts (43-55%).
