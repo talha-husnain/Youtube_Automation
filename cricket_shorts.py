@@ -584,11 +584,20 @@ def topic_frame_events(story, total, handle):
     return ev
 
 
-def _voice_timeline(client, lines, output_dir, stem, voice=None, style=None, broll_rule=""):
+# Stadium pictures of other sports passed as "a stadium at night": a hockey
+# arena under a World Cup line and an American-football ground under Afridi
+# (15-oct-2026, Wikipedia pictures).
+CRICKET_FOOTAGE = ("This is a cricket channel: only cricket grounds, cricket players, bats, balls, stumps and "
+                   "cricket crowds; never another sport's ground, game or gear (football, baseball, ice hockey, "
+                   "American football, basketball, tennis). ")
+
+
+def _voice_timeline(client, lines, output_dir, stem, voice=None, style=None, broll_rule=None):
     """Voice every line; (windows [(k, start, end)], voices, caption lines, end).
     The background footage for the same lines is searched meanwhile (broll)."""
     import broll
     voice = voice or os.environ.get("CRICKET_VOICE") or "Fenrir"
+    broll_rule = CRICKET_FOOTAGE if broll_rule is None else broll_rule
     broll.prefetch(output_dir, lines[0] if lines else "", [t for t in lines if (t or "").strip()], broll_rule, client)
     said = kit.voice_lines(client, [{"text": t, "voice": voice, "style": style or VOICE_STYLE} for t in lines],
                            output_dir, stem)
@@ -632,8 +641,10 @@ def _photo(name, output_dir, kind="cricket"):
 
 
 def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_end, clip, seo,
-            images=(), photos=(), genre="cricket", after_seo=None, broll_rule=""):
+            images=(), photos=(), genre="cricket", after_seo=None, broll_rule=None):
     import broll
+    if broll_rule is None:
+        broll_rule = CRICKET_FOOTAGE if genre == "cricket" else ""
     import seo_copy
     outro_s = cfg["outro_seconds"]
     card_ev, card_sfx = kit.end_card(body_end, outro_s)
