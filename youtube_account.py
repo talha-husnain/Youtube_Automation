@@ -368,6 +368,65 @@ def _save_upload(row):
         _write(uploads_file(), rows[-500:])
 
 
+# A dropped connection mid-upload resumes where YouTube stopped receiving
+# (resumable upload protocol: ask with "Content-Range: bytes */size", get 308
+# and the Range received), instead of sending a 1 GB long video again from
+# the start. This laptop's network drops for minutes at a time (15-oct-2026).
+RESUME_WAITS = (5, 20, 60, 120, 300)
+
+
+def _send_from(location, path, size, offset):
+    with open(path, "rb") as f:
+        f.seek(offset)
+
+        # Streamed in 8 MB pieces: a long video is hundreds of MB. The
+        # explicit Content-Length keeps httpx from switching to chunked.
+        def pieces():
+            while True:
+                block = f.read(8 << 20)
+                if not block:
+                    return
+                yield block
+        headers = {"Content-Type": "video/mp4", "Content-Length": str(size - offset)}
+        if offset:
+            headers["Content-Range"] = f"bytes {offset}-{size - 1}/{size}"
+        return httpx.put(location, content=pieces(), headers=headers, timeout=1800)
+
+
+def _received(location, size):
+    """(bytes YouTube has, or None when the upload is complete, final response)."""
+    r = httpx.put(location, headers={"Content-Range": f"bytes */{size}", "Content-Length": "0"}, timeout=60)
+    if r.status_code in (200, 201):
+        return None, r
+    if r.status_code != 308:
+        raise RuntimeError(_google_error(r))
+    got = r.headers.get("range") or ""
+    return (int(got.rsplit("-", 1)[1]) + 1 if "-" in got else 0), r
+
+
+def _send_resuming(location, path, size, sleep=None):
+    sleep = sleep or time.sleep
+    offset = 0
+    for attempt in range(len(RESUME_WAITS) + 1):
+        try:
+            done = _send_from(location, path, size, offset)
+            if done.status_code in (200, 201) or done.status_code < 500:
+                return done
+        except httpx.TransportError:
+            if attempt == len(RESUME_WAITS):
+                raise
+        if attempt == len(RESUME_WAITS):
+            return done
+        sleep(RESUME_WAITS[attempt])
+        try:
+            offset, final = _received(location, size)
+        except httpx.TransportError:
+            continue                      # still offline: same offset, next wait
+        if offset is None:
+            return final
+    return done
+
+
 def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
            privacy="public", ai_made=False, meta=None):
     """Upload one file. ``publish_at``: aware datetime to schedule it (the video
@@ -395,17 +454,7 @@ def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
                            json=body, timeout=60)
         if start.status_code != 200 or "location" not in start.headers:
             raise RuntimeError(_google_error(start))
-        with open(path, "rb") as f:
-            # Streamed in 8 MB pieces: a long video is hundreds of MB. The
-            # explicit Content-Length keeps httpx from switching to chunked.
-            def pieces():
-                while True:
-                    block = f.read(8 << 20)
-                    if not block:
-                        return
-                    yield block
-            done = httpx.put(start.headers["location"], content=pieces(),
-                             headers={"Content-Type": "video/mp4", "Content-Length": str(size)}, timeout=1800)
+        done = _send_resuming(start.headers["location"], path, size)
         if done.status_code not in (200, 201):
             raise RuntimeError(_google_error(done))
         video = done.json()

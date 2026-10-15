@@ -162,3 +162,55 @@ def test_each_caption_track_keeps_its_own_status(tmp_path, monkeypatch):
     ya.spend(9000 - ya.quota_used() + 1)
     row = ya.add_captions({"id": "r1", "video_id": "LONG1", "status": "done"}, str(srt), "en", key="captions_en")
     assert row["captions_en"] == "skipped" and "captions" not in row
+
+
+class _Resp:
+    def __init__(self, code, data=None, headers=None):
+        self.status_code, self._data, self.headers = code, data or {}, headers or {}
+        self.text = str(data)
+
+    def json(self):
+        return self._data
+
+
+def test_a_dropped_upload_resumes_where_youtube_stopped(tmp_path, monkeypatch):
+    import httpx
+    video = tmp_path / "v.mp4"
+    video.write_bytes(bytes(range(256)) * 4)                      # 1,024 bytes
+    ya._write(ya.TOKEN_FILE, {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12})
+    monkeypatch.setattr(ya.httpx, "post", lambda *a, **k: _Resp(200, {}, {"location": "https://up/session"}))
+    sent, calls = [], []
+
+    def put(url, content=None, headers=None, timeout=None, **kw):
+        calls.append(dict(headers))
+        if headers.get("Content-Range", "").startswith("bytes */"):
+            return _Resp(308, headers={"range": "bytes=0-399"})          # YouTube has the first 400
+        body = b"".join(content)
+        if len(calls) == 1:
+            raise httpx.ConnectError("the network dropped")
+        sent.append(body)
+        return _Resp(200, {"id": "ReSuMeD0001", "status": {"privacyStatus": "public"}})
+    monkeypatch.setattr(ya.httpx, "put", put)
+    waits = []
+    monkeypatch.setattr(ya.time, "sleep", waits.append)
+    row = ya.upload(str(video), "T", "D", genre="history")
+    assert row["status"] == "done" and row["video_id"] == "ReSuMeD0001"
+    assert calls[1] == {"Content-Range": "bytes */1024", "Content-Length": "0"}
+    assert calls[2]["Content-Range"] == "bytes 400-1023/1024" and calls[2]["Content-Length"] == "624"
+    assert sent == [video.read_bytes()[400:]] and waits == [ya.RESUME_WAITS[0]]
+
+
+def test_an_upload_that_stays_offline_fails_after_the_waits(tmp_path, monkeypatch):
+    import httpx
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x" * 100)
+    ya._write(ya.TOKEN_FILE, {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12})
+    monkeypatch.setattr(ya.httpx, "post", lambda *a, **k: _Resp(200, {}, {"location": "https://up/session"}))
+
+    def put(url, content=None, headers=None, timeout=None, **kw):
+        raise httpx.ConnectError("offline")
+    monkeypatch.setattr(ya.httpx, "put", put)
+    waits = []
+    monkeypatch.setattr(ya.time, "sleep", waits.append)
+    row = ya.upload(str(video), "T", "D")
+    assert row["status"] == "failed" and "offline" in row["error"] and waits == list(ya.RESUME_WAITS)
