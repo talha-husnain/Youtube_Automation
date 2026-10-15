@@ -516,6 +516,17 @@ never finished:
     length spread put one 3 s early). Tests use `EXACT_CAPTIONS=pauses`.
   - A render whose captions are burned later encodes veryfast CRF 16
     (`fast=True`): medium CRF 18 took 57 s of a 61 s Short.
+  - **Over footage, `short_kit.render` is three passes** (bg_video, no
+    music): `mix_audio` (all sound, audio only), the picture with `-an`,
+    then a join copying the picture. In one graph ffmpeg 9.0.1 stalled for
+    good (CPU flat, no error) with a footage background: at frame 352 when
+    a photo card's input ended early (fixed separately: pictures there run
+    to the end, hidden by enable=), at 47.6 s with the music bed, and even
+    with a finished track mapped as is. Bisected by input with a replay of
+    the stuck job; the gradient path never stalled and is unchanged.
+  - Other sessions and projects share this laptop's CPU (another Claude
+    session, a Next.js dev server at 100% load on 15-oct-2026): slow
+    renders are not always ours.
   - `trends.py`: this week's most viewed short videos per niche (yt-dlp
     search, 12 h cache) go into the cricket and controversy planners.
 - **Teaser Shorts for long videos** (`history_videos.run_teaser`,

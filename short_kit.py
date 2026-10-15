@@ -520,6 +520,15 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
                             f"gen_{os.getpid()}_{int(time.time() * 1000) % 10**8}.ass")
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write("\n".join(ass_header(extra_styles) + list(events)) + "\n")
+    mixed = None
+    if bg_video and not music:
+        # Over footage, audio filtered in the same graph as the video stalled
+        # the render for good (the music bed at 47.6 s every time, bisected
+        # input by input, 15-oct-2026; never on the gradient). So the sound is
+        # mixed first on its own, as the long videos' renderer does, and the
+        # picture pass only maps the finished track.
+        mixed = mix_audio(ass_path[:-4] + "_audio.wav", seconds, voices, sfx, bed)
+        voices, sfx, bed = [], [], None
     if bg_video:
         cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", bg_video]
         bg_image = None
@@ -530,7 +539,7 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
         cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", bg_source(colors, seconds)]
     cmd += ["-f", "lavfi", "-t", f"{seconds:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
     graph, v, mix, idx = [], "[0:v]", ["[1:a]"], 2
-    if bg_video:
+    if bg_video and os.environ.get("BROLL_SHADE", "1") != "0":
         # Footage gets a dark fade top and bottom so the title and captions read.
         import broll
         cmd += ["-i", broll.shade(OUT_W, OUT_H)]
@@ -564,17 +573,16 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
             graph.append(f"[ma]{fade}volume={vol},aresample=48000,aformat=channel_layouts=stereo[mus]")
             mix.append("[mus]")
     if bed:
-        track, length = bed
-        cmd += ["-stream_loop", "-1", "-i", track]
-        graph.append(f"[{idx}:a]atrim=0:{length:.3f},asetpts=PTS-STARTPTS,{BED_LOUDNORM},"
-                     f"afade=t=in:d=1,afade=t=out:st={max(0.0, length - 1.5):.3f}:d=1.5,"
-                     f"aresample=48000,aformat=channel_layouts=stereo[bed]")
-        mix.append("[bed]")
-        idx += 1
+        idx = _bed_input(cmd, graph, mix, idx, bed)
     for k, im in enumerate(images):
         t0, t1 = float(im["t0"]), float(im["t1"])
         d, z = max(0.5, t1 - t0), float(im.get("zoom", 0.05))
-        cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{d:.3f}", "-i", im["path"]]
+        # Over footage a picture input that ended early (a photo card gone at
+        # 6 s) stalled the render for good about 170 frames later; on the
+        # gradient it never did (15-oct-2026, reproduced and bisected). There
+        # each picture runs to the end, hidden after t1 by enable= and the fade.
+        length = max(d, seconds - t0 + 0.5) if bg_video else d
+        cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{length:.3f}", "-i", im["path"]]
         graph.append(f"[{idx}:v]format=rgba,setpts=PTS-STARTPTS+{t0:.3f}/TB,"
                      f"scale=w='trunc(iw*(1+{z:g}*(t-{t0:.3f})/{d:.3f})/2)*2':h=-2:eval=frame,"
                      f"fade=t=in:st={t0:.3f}:d=0.3:alpha=1,fade=t=out:st={max(t0, t1 - 0.3):.3f}:d=0.3:alpha=1"
@@ -584,6 +592,57 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
                      f"eof_action=pass:enable='between(t,{t0:.3f},{t1:.3f})'[v_im{k}]")
         v = f"[v_im{k}]"
         idx += 1
+    idx = _voice_sfx_inputs(cmd, graph, mix, idx, voices, sfx)
+    graph.append(f"{v}ass=filename='{escape_filter_value(ass_path)}'"
+                 f":fontsdir='{escape_filter_value(fl.FONTS_DIR)}',format=yuv420p[v]")
+    picture = ass_path[:-4] + "_picture.mp4" if mixed else None
+    if mixed:
+        # The picture alone (no sound in this pass at all), then a join that
+        # copies it: an audio stream in the picture pass, even a finished
+        # track mapped as is, still stalled it.
+        outputs = ["-map", "[v]", "-an", "-t", f"{seconds:.3f}", "-r", str(FPS),
+                   *(FAST_PASS if fast else video_encode_args(QUALITY)), picture]
+    else:
+        graph.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0[a]"
+                     if len(mix) > 1 else "[1:a]anull[a]")
+        outputs = ["-map", "[v]", "-map", "[a]", "-t", f"{seconds:.3f}", "-r", str(FPS),
+                   *(FAST_PASS if fast else video_encode_args(QUALITY)), "-c:a", "aac", "-b:a", "192k",
+                   *METADATA_SCRUB, "-movflags", "+faststart", out_path]
+    try:
+        r = subprocess.run(cmd + ["-filter_complex", ";".join(graph), *outputs],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                           # A render that stalls (one did, 15-oct-2026: 41 s of CPU in 15 min)
+                           # fails in minutes, not after half an hour.
+                           errors="replace", timeout=max(600, seconds * 12))
+        if r.returncode != 0:
+            raise RuntimeError(f"render failed: {r.stderr.strip()[-400:]}")
+        if mixed:
+            r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", picture, "-i", mixed,
+                                "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                                "-t", f"{seconds:.3f}", *METADATA_SCRUB, "-movflags", "+faststart", out_path],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                               errors="replace", timeout=300)
+            if r.returncode != 0:
+                raise RuntimeError(f"join failed: {r.stderr.strip()[-400:]}")
+    finally:
+        for temp in (ass_path, mixed, picture):
+            if temp and os.path.exists(temp):
+                os.remove(temp)
+    return out_path
+
+
+def _bed_input(cmd, graph, mix, idx, bed):
+    """The background bed: looped, cut to its length, quiet, faded in and out."""
+    track, length = bed
+    cmd += ["-stream_loop", "-1", "-i", track]
+    graph.append(f"[{idx}:a]atrim=0:{length:.3f},asetpts=PTS-STARTPTS,{BED_LOUDNORM},"
+                 f"afade=t=in:d=1,afade=t=out:st={max(0.0, length - 1.5):.3f}:d=1.5,"
+                 f"aresample=48000,aformat=channel_layouts=stereo[bed]")
+    mix.append("[bed]")
+    return idx + 1
+
+
+def _voice_sfx_inputs(cmd, graph, mix, idx, voices, sfx):
     for k, (wav, at) in enumerate(voices):
         cmd += ["-i", wav]
         ms = int(at * 1000)
@@ -596,25 +655,27 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
         graph.append(f"aevalsrc='{expr}':s=48000:d={secs:g},aformat=channel_layouts=stereo,"
                      f"adelay={ms}|{ms}[sx{k}]")
         mix.append(f"[sx{k}]")
-    graph.append(f"{v}ass=filename='{escape_filter_value(ass_path)}'"
-                 f":fontsdir='{escape_filter_value(fl.FONTS_DIR)}',format=yuv420p[v]")
+    return idx
+
+
+def mix_audio(path, seconds, voices=(), sfx=(), bed=None):
+    """The voices, sound effects and bed of a Short mixed into one 48 kHz stereo
+    wav of ``seconds``, the same filters render() uses, in an audio-only pass."""
+    cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-t", f"{seconds:.3f}",
+           "-i", "anullsrc=r=48000:cl=stereo"]
+    graph, mix, idx = [], ["[0:a]"], 1
+    if bed:
+        idx = _bed_input(cmd, graph, mix, idx, bed)
+    _voice_sfx_inputs(cmd, graph, mix, idx, voices, sfx)
     graph.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0[a]"
-                 if len(mix) > 1 else "[1:a]anull[a]")
-    try:
-        r = subprocess.run(cmd + ["-filter_complex", ";".join(graph), "-map", "[v]", "-map", "[a]",
-                                  "-t", f"{seconds:.3f}", "-r", str(FPS),
-                                  *(FAST_PASS if fast else video_encode_args(QUALITY)), "-c:a", "aac", "-b:a", "192k",
-                                  *METADATA_SCRUB, "-movflags", "+faststart", out_path],
-                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                           # A render that stalls (one did, 15-oct-2026: 41 s of CPU in 15 min)
-                           # fails in minutes, not after half an hour.
-                           errors="replace", timeout=max(600, seconds * 12))
-        if r.returncode != 0:
-            raise RuntimeError(f"render failed: {r.stderr.strip()[-400:]}")
-    finally:
-        if os.path.exists(ass_path):
-            os.remove(ass_path)
-    return out_path
+                 if len(mix) > 1 else "[0:a]anull[a]")
+    r = subprocess.run(cmd + ["-filter_complex", ";".join(graph), "-map", "[a]", "-t", f"{seconds:.3f}",
+                              "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", path],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                       errors="replace", timeout=max(300, seconds * 6))
+    if r.returncode != 0:
+        raise RuntimeError(f"audio mix failed: {r.stderr.strip()[-400:]}")
+    return path
 
 
 def end_card(t0, secs):

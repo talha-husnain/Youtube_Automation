@@ -234,3 +234,38 @@ def test_the_free_voice_rests_after_microsoft_refuses(monkeypatch, tmp_path):
     called = []
     monkeypatch.setattr(fv, "_say", lambda *a: called.append(1))
     assert fv.speak("lafz", str(tmp_path / "b.wav"), "ur-PK-AsadNeural") is None and called == []
+
+
+def test_a_short_over_footage_renders_through_with_a_card_a_bed_and_voices(tmp_path):
+    """The mix that stalled for good (15-oct-2026): a photo card that ends early,
+    a looped music bed and several voice lines over a footage background."""
+    import math
+    import struct
+    import wave
+    import cricket_shorts as cs
+    import short_kit as kit
+    from PIL import Image
+    bg = tmp_path / "bg.mp4"
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i",
+                    f"testsrc2=s={kit.OUT_W}x{kit.OUT_H}:d=6:r=30", "-pix_fmt", "yuv420p",
+                    "-video_track_timescale", "30000", str(bg)], check=True)
+    card = tmp_path / "card.png"
+    Image.new("RGBA", (400, 400), (200, 160, 40, 255)).save(card)
+    voices = []
+    for k in range(3):
+        p = tmp_path / f"v{k}.wav"
+        with wave.open(str(p), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(24000)
+            w.writeframes(b"".join(struct.pack("<h", int(6000 * math.sin(i / 7))) for i in range(24000)))
+        voices.append((str(p), 0.3 + k * 1.8))
+    out = tmp_path / "short.mp4"
+    kit.render(str(out), 6.0, ["#111111", "#222222"], [kit.dialogue(4, 0, 5, "CkText", "x")], cs.STYLES,
+               voices=voices, sfx=[(kit.WHOOSH, 0.3, 1.0)], bed=(str(voices[0][0]), 5.5),
+               images=[{"path": str(card), "t0": 0.2, "t1": 1.5, "zoom": 0.06}], bg_video=str(bg), fast=True)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type:format=duration",
+                            "-of", "compact", str(out)], capture_output=True, text=True).stdout
+    assert "codec_type=video" in probe and "codec_type=audio" in probe
+    assert abs(float(probe.split("duration=")[1].split()[0]) - 6.0) < 0.1
+    assert not list(tmp_path.glob("gen_*"))            # its temporary files are gone

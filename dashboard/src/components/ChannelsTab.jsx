@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
+import ChannelKit from './ChannelKit';
 
 // Every YouTube channel Shortkaar runs (GET /api/my-channels, my_channels.py):
 // the main one (comedy, set up in Autopilot) and the others, each with its
@@ -246,6 +247,7 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                         <Times times={ch.post_times} max={ch.max_per_day || maxPerDay} onChange={(t) => save({ post_times: t })} />
                     </div>
                     <EngageSwitches ch={ch} save={save} />
+                    <ChannelKit ch={ch} />
 
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-input border border-rule p-3">
                         <p className="text-xs text-ink2">

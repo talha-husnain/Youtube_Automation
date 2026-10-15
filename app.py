@@ -3387,6 +3387,62 @@ async def my_channels_make(cid: str):
     return {"ok": True, "job_id": job_id}
 
 
+def _kit_view(cid):
+    import channel_kit
+    data = channel_kit.load(cid)
+    if not data:
+        return {"kit": None}
+    stamp = int(os.path.getmtime(os.path.join(channel_kit.folder(cid), "kit.json")))
+    return {"kit": {**data, "banner": f"/api/my-channels/{cid}/kit/banner.png?v={stamp}",
+                    "profile": f"/api/my-channels/{cid}/kit/profile.png?v={stamp}"}}
+
+
+@app.get("/api/my-channels/{cid}/kit")
+async def my_channels_kit(cid: str):
+    _local_only()
+    return _kit_view(cid)
+
+
+@app.post("/api/my-channels/{cid}/kit")
+async def my_channels_kit_make(cid: str):
+    """Names, About text, keywords, banner and profile picture for a new channel (channel_kit.py)."""
+    _local_only()
+    import channel_kit
+    import my_channels
+    if not my_channels.get(cid):
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+    try:
+        await _in_thread(channel_kit.make, cid)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not make the kit: {str(e)[:200]}")
+    return _kit_view(cid)
+
+
+@app.get("/api/my-channels/{cid}/kit/{name}")
+async def my_channels_kit_file(cid: str, name: str):
+    _local_only()
+    import channel_kit
+    if name not in ("banner.png", "profile.png") or not re.fullmatch(r"[a-z]+\d*", cid):
+        raise HTTPException(status_code=404, detail="Not found.")
+    path = os.path.join(channel_kit.folder(cid), name)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Not found.")
+    return FileResponse(path, media_type="image/png", filename=f"{cid}_{name}")
+
+
+@app.post("/api/my-channels/{cid}/kit/apply")
+async def my_channels_kit_apply(cid: str):
+    """Put the kit's About text, keywords and banner on the connected channel (the owner's button)."""
+    _local_only()
+    import channel_kit
+    try:
+        return await _in_thread(channel_kit.apply, cid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001 — YouTube's own reason
+        raise HTTPException(status_code=502, detail=f"YouTube refused: {str(e)[:300]}")
+
+
 @app.post("/api/my-channels/{cid}/skip/{job_id}")
 async def my_channels_skip(cid: str, job_id: str):
     """Keep a waiting Short off YouTube (the owner watched it and said no)."""
