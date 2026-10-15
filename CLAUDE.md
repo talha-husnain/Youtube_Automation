@@ -527,6 +527,11 @@ never finished:
   - Other sessions and projects share this laptop's CPU (another Claude
     session, a Next.js dev server at 100% load on 15-oct-2026): slow
     renders are not always ours.
+  - The laptop sleeps and its network drops (DNS failing for minutes): a
+    10-minute video died at its picture-matching call with its voices made.
+    `short_kit.ask_json` now retries network and 5xx blips (3 tries), the
+    history matching falls back to each scene's own article, and the free
+    voice rests 10 minutes on an unreachable host (30 on a 403/429).
   - `trends.py`: this week's most viewed short videos per niche (yt-dlp
     search, 12 h cache) go into the cricket and controversy planners.
 - **Teaser Shorts for long videos** (`history_videos.run_teaser`,
