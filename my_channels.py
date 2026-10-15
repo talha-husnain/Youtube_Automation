@@ -384,6 +384,31 @@ def connected(ch):
         return youtube_account.status()
 
 
+UNVERIFIED_MINUTES = 14    # YouTube refuses videos over 15 min from an unverified channel
+LONG_CHECK_EVERY = 6 * 3600
+
+
+def long_minutes(ch, now=None):
+    """The history channel's video length, capped at UNVERIFIED_MINUTES while
+    YouTube says long uploads are not allowed (asked every 6 h, 1 unit);
+    unknown (not connected, an error) keeps the owner's length."""
+    import youtube_account
+    minutes = int(ch.get("minutes", DEFAULT_MINUTES))
+    if minutes <= UNVERIFIED_MINUTES:
+        return minutes
+    now = now or time.time()
+    state = ch.get("long_uploads") or {}
+    if now - state.get("at", 0) > LONG_CHECK_EVERY:
+        try:
+            with youtube_account.use(account(ch["id"])):
+                answer = youtube_account.long_uploads() if youtube_account.status()["connected"] else "unknown"
+        except Exception:  # noqa: BLE001 — unknown: keep the owner's length
+            answer = "unknown"
+        state = {"status": answer, "at": int(now)}
+        _change(ch["id"], lambda c: c.update(long_uploads=state))
+    return UNVERIFIED_MINUTES if state.get("status") in ("eligible", "disallowed") else minutes
+
+
 def summary(ch):
     import youtube_account
     with youtube_account.use(account(ch["id"])):
@@ -715,7 +740,7 @@ def _next_payload(ch, client_fn, log=print):
                        "history_parts": idea["parts"], "history_before": idea.get("before") or []}
                       if idea.get("series") else {})
             return ({**look, "genre": "history", "history_topic": idea["text"], "bg_music": True,
-                     "history_minutes": ch.get("minutes", DEFAULT_MINUTES), "history_lang": ch.get("lang", "urdu"),
+                     "history_minutes": long_minutes(ch), "history_lang": ch.get("lang", "urdu"),
                      "frame_outro": False, **series},
                     {"label": (f"Part {idea['part']}: " if series else "") + idea["text"], "format": "history",
                      "topic": idea["text"],

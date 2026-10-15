@@ -239,6 +239,8 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                             {ch.minutes > 15 && (
                                 <p className="text-xs text-warn">
                                     Videos over 15 minutes need a verified channel: switch to this channel on YouTube, open youtube.com/verify and verify with your phone. The same unlocks custom thumbnails.
+                                    {['eligible', 'disallowed'].includes(ch.long_uploads?.status) && ' YouTube says this channel is not verified yet, so videos are made 14 minutes long until it is.'}
+                                    {ch.long_uploads?.status === 'allowed' && ' YouTube says this channel is verified: the full length is used.'}
                                 </p>
                             )}
                         </>

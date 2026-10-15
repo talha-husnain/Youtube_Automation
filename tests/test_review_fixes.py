@@ -146,3 +146,20 @@ def test_a_quota_or_network_failure_pauses_the_channel_without_using_a_try():
                                                      "at": time.time(), "error": "Only 1 of the questions passed"}))
     assert mc.wants_more(mc.get(ch["id"])) is False       # real failures still count
     assert not mc.TRANSIENT.search("Not enough reliable sources for this topic (2).")
+
+
+def test_history_videos_stay_under_15_minutes_until_the_channel_is_verified(monkeypatch):
+    ch = mc.add("history")
+    mc.update(ch["id"], {"minutes": 25})
+    monkeypatch.setattr(ya, "status", lambda: {"connected": True})
+    asked = []
+    monkeypatch.setattr(ya, "long_uploads", lambda: asked.append(1) or "eligible")
+    assert mc.long_minutes(mc.get(ch["id"])) == mc.UNVERIFIED_MINUTES
+    assert mc.long_minutes(mc.get(ch["id"])) == mc.UNVERIFIED_MINUTES and len(asked) == 1     # asked every 6 h
+    monkeypatch.setattr(ya, "long_uploads", lambda: "allowed")
+    later = time.time() + mc.LONG_CHECK_EVERY + 1
+    assert mc.long_minutes(mc.get(ch["id"]), now=later) == 25
+    monkeypatch.setattr(ya, "long_uploads", lambda: (_ for _ in ()).throw(RuntimeError("quota")))
+    assert mc.long_minutes(mc.get(ch["id"]), now=later + mc.LONG_CHECK_EVERY + 1) == 25     # unknown keeps it
+    mc.update(ch["id"], {"minutes": 10})
+    assert mc.long_minutes(mc.get(ch["id"])) == 10

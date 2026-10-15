@@ -298,6 +298,15 @@ def channel():
             "uploads_playlist": c["contentDetails"]["relatedPlaylists"]["uploads"]}
 
 
+def long_uploads():
+    """YouTube's own answer on videos over 15 minutes for this channel:
+    "allowed" (verified), "eligible" or "disallowed" (channels.list status,
+    1 unit). Lets a history video be capped before it is rendered, not
+    refused after a 1 GB upload."""
+    items = _get(f"{API}/channels", {"part": "status", "mine": "true"}).get("items") or []
+    return ((items[0].get("status") or {}).get("longUploadsStatus") or "unknown") if items else "unknown"
+
+
 def status():
     tok = _read(token_file(), None)
     return {"configured": configured(), "connected": bool(tok and tok.get("refresh_token")),
