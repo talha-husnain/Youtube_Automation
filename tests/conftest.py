@@ -16,6 +16,7 @@ os.environ["AUTOPILOT_LOCAL"] = "0"
 # (broll.background_for); footage tests turn it back on with fakes.
 os.environ["STOCK_FOOTAGE"] = "0"
 os.environ["OPENVERSE"] = "0"      # keyless, so it would answer from a test for real
+os.environ["TRENDS"] = "0"         # trends.py searches YouTube for real
 # Caption timing from the voice's pauses only: no Whisper model load per test.
 os.environ["EXACT_CAPTIONS"] = "pauses"
 os.environ["VOICE_ENGINE"] = "gemini"   # the free voice is a network service: tests fake ai_take.speak

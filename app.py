@@ -3131,6 +3131,14 @@ PUBLISH_STEPS = "\n".join([
     '5. On each new channel press "connect youtube channel" and pick it on Google\'s screen. If Google says "Google hasn\'t verified this app": Advanced > Go to ... (it is your app).',
     "6. For the history channel (long videos): switch to it on YouTube, open youtube.com/verify and verify with your phone. Without this YouTube refuses videos over 15 minutes and custom thumbnails.",
 ])
+STOCK_STEPS = "\n".join([
+    '1. Open pexels.com/api, sign up (Google sign-in is fine), press "Your API Key", fill the short form (purpose: "my own YouTube video maker") and copy the key.',
+    "2. Open pixabay.com/accounts/register and sign up. Then open pixabay.com/api/docs: your key is shown under Parameters, next to key.",
+    "3. Open the file .env in the Shortkaar folder with Notepad and add two lines at the end:",
+    "PEXELS_API_KEY=your pexels key",
+    "PIXABAY_API_KEY=your pixabay key",
+    "4. Save the file. The next video uses them; nothing needs restarting.",
+])
 _fresh = {}
 
 
@@ -3229,9 +3237,17 @@ def _today():
                "tab": "channels"} for r in rows]
     setup.append({"key": "autopilot", "done": bool(cfg["enabled"]), "title": "Autopilot on for the main channel",
                   "tab": "local-autopilot"})
+    # .env is read by each job itself, so keys added there work without a restart.
+    from dotenv import dotenv_values
+    env_file = dotenv_values(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    stock = {k: bool((env_file.get(k) or os.environ.get(k) or "").strip())
+             for k in ("PEXELS_API_KEY", "PIXABAY_API_KEY")}
+    setup.append({"key": "stock", "done": all(stock.values()),
+                  "title": "Free stock footage keys (Pexels and Pixabay) in .env", "steps": STOCK_STEPS})
     upcoming = sorted(({**u, "channel": r["name"]} for r in rows for u in r["upcoming"]), key=lambda u: u["at"])
     rem = reminders.load()
     return {"channels": rows, "setup": setup, "upcoming": upcoming[:8],
+            "look": {**my_channels.look(), "stock_keys": stock},
             "totals": {"made_today": sum(r["made_today"] for r in rows),
                        "uploaded_today": sum(r["uploaded_today"] for r in rows),
                        "scheduled": sum(r["scheduled"] for r in rows), "views": views,
@@ -3253,8 +3269,12 @@ async def today_get():
 @app.put("/api/today/settings")
 async def today_settings(request: Request):
     _local_only()
+    import my_channels
     import reminders
-    reminders.update(await request.json())
+    patch = await request.json()
+    reminders.update(patch)
+    if any(k in patch for k in ("voice", "footage")):
+        my_channels.update_look(patch)
     return await _in_thread(_today)
 
 
@@ -4683,6 +4703,10 @@ async def process_endpoint(
     # Video type (validated above): main.py hands songs, movies and cricket
     # to their own modules.
     env["CONTENT_GENRE"] = genre_val
+    if genre_val in GENERATED_GENRES and not BILLING_ENABLED:
+        # The owner's choice of voice and footage (Today tab) for every generated video.
+        import my_channels
+        env.update(my_channels.look_env())
     if genre_val == "songs":
         env["SONG_OWNED"] = "1" if owned_music else "0"
         if song_urls:

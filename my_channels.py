@@ -190,6 +190,34 @@ def add(kind, name=""):
     return ch
 
 
+# How every generated video looks and sounds (all channels but the comedy one):
+# the free Microsoft voices or Gemini's, and free stock footage behind the text.
+LOOK_DEFAULTS = {"voice": "edge", "footage": True}
+
+
+def look():
+    return {**LOOK_DEFAULTS, **(_read(STATE_FILE, {}).get("look") or {})}
+
+
+def update_look(patch):
+    with _lock:
+        data = _read(STATE_FILE, {})
+        cur = {**LOOK_DEFAULTS, **(data.get("look") or {})}
+        if patch.get("voice") in ("edge", "gemini"):
+            cur["voice"] = patch["voice"]
+        if "footage" in patch:
+            cur["footage"] = bool(patch["footage"])
+        data["look"] = cur
+        _write(STATE_FILE, data)
+    return cur
+
+
+def look_env():
+    """The job environment for the look (app.py sets it on every generated job)."""
+    cur = look()
+    return {"VOICE_ENGINE": cur["voice"], "STOCK_FOOTAGE": "1" if cur["footage"] else "0"}
+
+
 def cap(ch):
     """Most videos a day for the channel's kind: Shorts up to YouTube's upload
     limit, long videos 3."""

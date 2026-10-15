@@ -338,7 +338,8 @@ def channel_ideas(client, count=8, avoid=(), best=(), worst=()):
     """Today's ideas for the cricket channel (my_channels.py), steered by what
     did best and worst there."""
     import time
-    learn = ""
+    import trends
+    learn = trends.hint("cricket")
     if best:
         learn += "These did BEST on the channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:

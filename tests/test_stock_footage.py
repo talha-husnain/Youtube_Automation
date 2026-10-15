@@ -163,3 +163,44 @@ def test_a_real_background_is_built_from_a_clip_and_a_photo(tmp_path):
                             "stream=width,height,nb_read_frames", "-of", "csv=p=0", out],
                            capture_output=True, text=True).stdout.strip()
     assert probe == "360,640,150"
+
+
+def test_the_owner_picks_voice_and_footage_for_every_generated_job(monkeypatch, tmp_path):
+    import my_channels as mc
+    assert mc.look() == {"voice": "edge", "footage": True}
+    mc.update_look({"voice": "gemini", "footage": False, "other": 1})
+    assert mc.look() == {"voice": "gemini", "footage": False}
+    assert mc.look_env() == {"VOICE_ENGINE": "gemini", "STOCK_FOOTAGE": "0"}
+    mc.update_look({"voice": "robot"})
+    assert mc.look()["voice"] == "gemini"
+    app_module = pytest.importorskip("app")
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(app_module, "_enqueue_job", lambda *a, **k: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    r = TestClient(app_module.app).post("/api/process", json={
+        "genre": "quiz", "quiz_format": "mcq", "acknowledged": True}, headers={"X-Shortkaar-Autopilot": "1"})
+    assert r.status_code == 200, r.text
+    env = app_module.jobs[r.json()["job_id"]]["env"]
+    assert env["VOICE_ENGINE"] == "gemini" and env["STOCK_FOOTAGE"] == "0"
+
+
+def test_planners_hear_what_gets_views_this_week(monkeypatch, tmp_path):
+    import channel_tools
+    import trends
+    monkeypatch.setenv("TRENDS", "1")
+    monkeypatch.setattr(trends, "CACHE_FILE", str(tmp_path / "trends.json"))
+    calls = []
+
+    def search(q, cc=True, duration="any", date="any", sort="relevance", limit=20):
+        calls.append((q, duration, date, sort))
+        return [{"id": q, "title": f"Hot {q}", "views": 1000 + len(calls)},
+                {"id": "dup", "title": "Same video", "views": 5}]
+    monkeypatch.setattr(channel_tools, "search", search)
+    h = trends.hint("cricket")
+    assert "this week" in h and "Hot cricket facts shorts" in h and h.count("Same video") == 1
+    assert calls[0][1:] == ("short", "week", "views")
+    n = len(calls)
+    assert trends.hint("cricket") == h and len(calls) == n          # cached
+    assert trends.hint("music") == ""                              # no queries for that niche

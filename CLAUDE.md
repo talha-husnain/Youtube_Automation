@@ -490,6 +490,34 @@ never finished:
   out of 151 free pictures; "best fit, a real picture beats none" matched 19
   on the same script. Description sources go through `rank_sources`: in
   Google's order the Rome video listed wikihow and medium first.
+- **Free footage, free voices, exact captions** (15-oct-2026, ideas from
+  MoneyPrinterTurbo, MIT, cloned at D:\youtube\MoneyPrinterTurbo for
+  reference only; the owner wants one system and everything free):
+  - `stock_media.py`: Pexels + Pixabay (free keys in .env) and Openverse
+    (no key, `license=cc0,pdm` only, anonymous limit 20/min and 200/day, so
+    capped at 180). One vision call picks a clip per scene with a `fit`
+    score; under `MIN_FIT` (6) is dropped: with only Openverse, a cricket
+    Short got old leather book covers for "records". Clips used lately rest
+    14 days. Tests turn it off (`OPENVERSE=0`, `STOCK_FOOTAGE=0`).
+  - `broll.py`: footage cut to the voice lines (a shot every ~2.8 s, every
+    other one a closer crop) behind cricket, controversy, quiz and song
+    Shorts; `short_kit.render(bg_video=)` adds a dark fade top and bottom.
+    Under half the lines with good footage: the Short keeps its own look.
+    `prefetch` searches while the lines are voiced (~1 min saved).
+  - `free_voice.py` (edge-tts, Microsoft's unofficial read-aloud service):
+    read as Roman Urdu it was garbled (half the words skipped); converted to
+    Urdu script first (one cheap Gemini call per video) Whisper heard it back
+    almost word for word. Default voice engine; Gemini reads any line it
+    fails. `VOICE_ENGINE=gemini` / Today tab "Video style" switches back.
+  - Caption timing (`short_kit.line_word_times`): the free voice's own word
+    times, else Whisper's (Urdu script has as many words as the Roman line
+    once izafat "-e-" pairs count as two), aligned clause by clause, else the
+    voice's measured pauses (sentence ends take the longest pauses; a plain
+    length spread put one 3 s early). Tests use `EXACT_CAPTIONS=pauses`.
+  - A render whose captions are burned later encodes veryfast CRF 16
+    (`fast=True`): medium CRF 18 took 57 s of a 61 s Short.
+  - `trends.py`: this week's most viewed short videos per niche (yt-dlp
+    search, 12 h cache) go into the cricket and controversy planners.
 - Patch scripts: always the Write tool, and write files back as LF (the
   repo stores LF; some working files are CRLF on disk, and a half-CRLF file
   got CLAUDE.md committed as CRLF once). The scratch `patchlib.patch`

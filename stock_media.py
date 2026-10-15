@@ -165,13 +165,16 @@ def _openverse_photos(term, portrait, key=None):
         if calls.get(day, 0) >= OPENVERSE_DAY_CAP:
             return []
         _write(OPENVERSE_FILE, {day: calls.get(day, 0) + 1})
-    r = httpx.get("https://api.openverse.org/v1/images/?" + urlencode(
-        {"q": term[:100], "license": "cc0,pdm", "size": "large", "mature": "false", "page_size": 20,
-         "aspect_ratio": "tall" if portrait else "wide"}), headers={"User-Agent": UA}, timeout=30)
+    # Few public-domain photos are tall: for a phone frame any large photo will
+    # do whose height fills it after the crop (a space quiz found 8 tall ones for 8 lines).
+    query = {"q": term[:100], "license": "cc0,pdm", "size": "large", "mature": "false", "page_size": 20}
+    if not portrait:
+        query["aspect_ratio"] = "wide"
+    r = httpx.get("https://api.openverse.org/v1/images/?" + urlencode(query), headers={"User-Agent": UA}, timeout=30)
     out = []
     for p in (r.json() or {}).get("results") or [] if r.status_code == 200 else []:
         w, h = int(p.get("width") or 0), int(p.get("height") or 0)
-        if not p.get("url") or (w and h and min(w, h) < 1000):
+        if not p.get("url") or (w and h and (h < 1400 if portrait else min(w, h) < 1000)):
             continue
         out.append({"id": f"openverse:{p['id']}", "provider": "Openverse", "kind": "photo", "url": p["url"],
                     "w": w, "h": h, "seconds": 0.0, "thumb": p.get("thumbnail") or p["url"],

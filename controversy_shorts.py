@@ -134,7 +134,8 @@ One per line, each starting with "topic: ". Nothing else."""
 
 
 def channel_ideas(client, count=8, avoid=(), best=(), worst=()):
-    learn = ""
+    import trends
+    learn = trends.hint("controversy")
     if best:
         learn += "These did BEST on the channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:

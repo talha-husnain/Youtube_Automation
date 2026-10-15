@@ -97,6 +97,12 @@ export default function TodayTab({ onOpenTab }) {
                         ))}
                     </div>
                     {publish && !publish.done && <Steps text={publish.steps} />}
+                    {data.setup.filter((s) => s.key !== 'publish' && !s.done && s.steps).map((s) => (
+                        <div key={s.key} className="space-y-1">
+                            <p className="text-xs text-ink2">{s.title}:</p>
+                            <Steps text={s.steps} />
+                        </div>
+                    ))}
                     {held && <p className="text-[11px] text-muted">Reminders start {day(data.notify.snooze_until)}, as you asked.</p>}
                 </div>
             )}
@@ -140,6 +146,28 @@ export default function TodayTab({ onOpenTab }) {
                             )}
                         </div>
                     ))}
+                </div>
+            )}
+
+            {data.look && (
+                <div className="card p-5 space-y-2">
+                    <p className="text-sm text-ink flex items-center gap-1.5"><Clapperboard size={15} /> Video style (every channel except comedy)</p>
+                    <label className="flex flex-wrap items-center gap-2 text-xs text-ink2">
+                        voice
+                        <select value={data.look.voice} onChange={(e) => setNotify({ voice: e.target.value })}
+                            className="input-field !w-auto text-xs py-1" aria-label="voice">
+                            <option value="edge">Free Microsoft voice</option>
+                            <option value="gemini">Gemini voice (about 1 cent a Short)</option>
+                        </select>
+                        <span className="text-muted">samples: the &quot;Shortkaar voice samples&quot; folder on your Desktop</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-ink2">
+                        <input type="checkbox" checked={data.look.footage} onChange={() => setNotify({ footage: !data.look.footage })} aria-label="stock footage" />
+                        free stock footage behind the text
+                        {!(data.look.stock_keys?.PEXELS_API_KEY || data.look.stock_keys?.PIXABAY_API_KEY) && (
+                            <span className="text-warn">(photos only until the Pexels and Pixabay keys are in)</span>
+                        )}
+                    </label>
                 </div>
             )}
 
