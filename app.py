@@ -3301,8 +3301,10 @@ def _today():
     env_file = dotenv_values(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
     stock = {k: bool((env_file.get(k) or os.environ.get(k) or "").strip())
              for k in ("PEXELS_API_KEY", "PIXABAY_API_KEY")}
-    setup.append({"key": "stock", "done": all(stock.values()),
-                  "title": "Free stock footage keys (Pexels and Pixabay) in .env", "steps": STOCK_STEPS})
+    # One library is enough: Pexels paused new API keys (17-oct-2026), and
+    # Pixabay, Openverse and Wikipedia fill the footage without it.
+    setup.append({"key": "stock", "done": any(stock.values()),
+                  "title": "Free stock footage key (Pixabay or Pexels) in .env", "steps": STOCK_STEPS})
     upcoming = sorted(({**u, "channel": r["name"]} for r in rows for u in r["upcoming"]), key=lambda u: u["at"])
     rem = reminders.load()
     return {"channels": rows, "setup": setup, "upcoming": upcoming[:8],
