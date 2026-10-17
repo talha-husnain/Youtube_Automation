@@ -3165,6 +3165,23 @@ PUBLISH_STEPS = "\n".join([
     "6. For the history channel (long videos): switch to it on YouTube, open youtube.com/verify and verify with your phone. Without this YouTube refuses videos over 15 minutes and custom thumbnails.",
     '7. On each connected channel card open "Channel kit" and press "put About text, keywords and banner on YouTube". Then upload its profile picture yourself in YouTube Studio > Customization > Branding (download it from the same place).',
 ])
+# Voice samples played on the Today tab, so the owner compares them where the
+# choice is made (a Desktop folder was hard to find, 17-oct-2026). Files live
+# in output/thumbnails/voice_samples/compare/, which the sweep never touches.
+VOICE_SAMPLES = [("free-asad", "Free voice, Asad, telling a story"),
+                 ("free-uzma", "Free voice, Uzma, telling a story"),
+                 ("free-cricket", "Free voice, Asad, a fast cricket line"),
+                 ("gemini-story", "Gemini voice, telling a story"),
+                 ("gemini-cricket", "Gemini voice, a cricket commentator")]
+
+
+def _voice_samples():
+    folder = os.path.join(THUMBNAILS_DIR, "voice_samples", "compare")
+    return [{"label": label, "url": f"/thumbnails/voice_samples/compare/{name}.wav",
+             "engine": "gemini" if name.startswith("gemini") else "edge"}
+            for name, label in VOICE_SAMPLES if os.path.isfile(os.path.join(folder, f"{name}.wav"))]
+
+
 VERIFY_STEPS = "\n".join([
     "1. On YouTube, switch to the history channel (your picture at the top right > Switch account).",
     "2. Open youtube.com/verify, pick text message, and type the code YouTube sends to your phone.",
@@ -3308,7 +3325,7 @@ def _today():
     upcoming = sorted(({**u, "channel": r["name"]} for r in rows for u in r["upcoming"]), key=lambda u: u["at"])
     rem = reminders.load()
     return {"channels": rows, "setup": setup, "upcoming": upcoming[:8],
-            "look": {**my_channels.look(), "stock_keys": stock,
+            "look": {**my_channels.look(), "stock_keys": stock, "samples": _voice_samples(),
                      "voice_rest": __import__("free_voice").rest_info()},
             "totals": {"made_today": sum(r["made_today"] for r in rows),
                        "uploaded_today": sum(r["uploaded_today"] for r in rows),

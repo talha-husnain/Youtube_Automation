@@ -2051,9 +2051,18 @@ function App() {
           {activeTab === 'channel' && !billingEnabled && (
             <ChannelTab notice={channelNotice} />
           )}
-          {activeTab === 'today' && !billingEnabled && <TodayTab onOpenTab={setActiveTab} />}
+          {/* Today and Channels render plain content, so they get the scrolling
+              frame every other tab has: inside this overflow-hidden shell,
+              without it nothing past the window's height could be reached. */}
+          {activeTab === 'today' && !billingEnabled && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-8 animate-fade">
+              <TodayTab onOpenTab={setActiveTab} />
+            </div>
+          )}
           {activeTab === 'channels' && !billingEnabled && (
-            <ChannelsTab notice={channelsNotice} onOpenAutopilot={() => setActiveTab('local-autopilot')} />
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-8 animate-fade">
+              <ChannelsTab notice={channelsNotice} onOpenAutopilot={() => setActiveTab('local-autopilot')} />
+            </div>
           )}
 
           {/* View: Gallery (local: every clip still on this machine) */}

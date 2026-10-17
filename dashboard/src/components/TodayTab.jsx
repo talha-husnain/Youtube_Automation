@@ -4,6 +4,7 @@ import {
     Bell, CalendarClock, Clock, Eye, Users, Upload, Clapperboard, ExternalLink, Flame, Landmark,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
+import { getApiUrl } from '../config';
 
 // The home page for self-host (GET /api/today, app._today): every channel at a
 // glance, what the owner still has to do, the next posts, and the switches
@@ -205,8 +206,18 @@ export default function TodayTab({ onOpenTab }) {
                             <option value="edge">Free Microsoft voice</option>
                             <option value="gemini">Gemini voice (about 1 cent a Short)</option>
                         </select>
-                        <span className="text-muted">samples: the &quot;Shortkaar voice samples&quot; folder on your Desktop</span>
                     </label>
+                    {data.look.samples?.length > 0 && (
+                        <div className="space-y-1.5">
+                            <p className="text-[11px] text-muted">Listen before you choose:</p>
+                            {data.look.samples.map((s) => (
+                                <div key={s.url} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink2">
+                                    <span className="w-56 shrink-0">{s.label}</span>
+                                    <audio controls preload="none" src={getApiUrl(s.url)} className="h-8 max-w-full" aria-label={s.label} />
+                                </div>
+                            ))}
+                        </div>
+                    )}
                     {data.look.voice === 'edge' && data.look.voice_rest && (
                         <p className="text-[11px] text-warn">
                             The free voice is unavailable right now, so Gemini voices the videos until {at(new Date(data.look.voice_rest.until * 1000).toISOString())} (reason: {data.look.voice_rest.reason}).

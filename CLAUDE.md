@@ -713,6 +713,15 @@ never finished:
   Python string into a real newline three times on 8-oct-2026.
 - Before starting uvicorn, check :8000: a server from an earlier session may
   still answer with old app.py code (job subprocesses load new code anyway).
+- **Every tab needs its own scrolling frame**: the shell and `<main>` are
+  overflow-hidden, so a tab whose root is plain content (Today and Channels
+  were) cannot be scrolled at all. They now sit in App.jsx's
+  `h-full overflow-y-auto p-4 sm:p-8` wrapper like the rest. A CDP check
+  must scroll with `Input.dispatchMouseEvent` mouseWheel and read scrollTop:
+  `scrollIntoView` scrolls an overflow-hidden box from code, which hid this
+  from every earlier check (the owner could not reach the channel cards).
+- Voice samples play on the Today tab (`app.VOICE_SAMPLES`, files in
+  output/thumbnails/voice_samples/compare/).
 - UI checks on this laptop: headless Edge `--screenshot` with
   `--virtual-time-budget` hangs on pages with `<video>` (History, Gallery)
   and without it captures before React loads. Drive Edge over CDP instead
