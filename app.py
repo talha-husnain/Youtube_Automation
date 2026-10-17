@@ -1462,12 +1462,24 @@ def _upload_job_id(filename: str) -> str:
     return filename.split("_", 1)[0]
 
 
+# A job's folder is named by its uuid4 (saas_ / saas_actors_ for SaaSShorts).
+# Everything else in output/ is state the sweeps must never touch: on
+# 18-oct-2026 the 24 h sweep deleted output/channels (five channels' Google
+# connections and upload logs), whose own mtime only changes when a channel
+# is added. flags/ and stock_cache/ were next.
+_JOB_DIR = re.compile(r"(?:saas_(?:actors_)?)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def _is_job_dir(name) -> bool:
+    return bool(_JOB_DIR.fullmatch(name or ""))
+
+
 def _sweep_expired_job_dirs(now):
     """Drop job dirs older than JOB_RETENTION_SECONDS, except live jobs."""
     for job_id in os.listdir(OUTPUT_DIR):
-        # Not a job: the thumbnails dir backs a StaticFiles mount, so
-        # deleting it would 500 every /thumbnails request until reboot.
-        if job_id == os.path.basename(THUMBNAILS_DIR):
+        # Not a job (thumbnails backs a StaticFiles mount; channels, flags and
+        # stock_cache are state): left alone.
+        if not _is_job_dir(job_id):
             continue
         job_path = os.path.join(OUTPUT_DIR, job_id)
         if not os.path.isdir(job_path):
@@ -1559,10 +1571,9 @@ def _enforce_output_size_cap():
     used = _dir_size(OUTPUT_DIR)
     if used <= cap:
         return
-    thumbs = os.path.basename(THUMBNAILS_DIR)
     candidates = []
     for job_id in os.listdir(OUTPUT_DIR):
-        if job_id == thumbs:
+        if not _is_job_dir(job_id):            # thumbnails, channels, caches: never trimmed
             continue
         p = os.path.join(OUTPUT_DIR, job_id)
         if os.path.isdir(p) and not _job_is_active(job_id):

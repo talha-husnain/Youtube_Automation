@@ -236,10 +236,16 @@ def first_comments(acct, kind, log=print):
     if not todo or ya.quota_used() + 1 + COMMENT_UNITS > QUOTA_BUDGET:
         return 0
     n = 0
+    me = (ya.status().get("channel") or {}).get("id")
     for r in _public(todo):
         if ya.quota_used() + COMMENT_UNITS > QUOTA_BUDGET:
             break
         try:
+            if me and _ours_on(r["video_id"], me):
+                # Commented already, by a state file that is gone (output/channels
+                # was swept away on 18-oct-2026): never a second first comment.
+                _update(acct, lambda s: s.setdefault("commented", {}).update({r["video_id"]: 1}))
+                continue
             got = _post(f"{ya.API}/commentThreads", {"part": "snippet"}, {"snippet": {
                 "videoId": r["video_id"], "topLevelComment": {"snippet": {"textOriginal": first_comment_text(kind, r)}}}})
         except RuntimeError as e:
@@ -252,6 +258,15 @@ def first_comments(acct, kind, log=print):
     if n:
         log(f"💬 First comment on {n} new Short(s).")
     return n
+
+
+def _ours_on(video_id, my_channel_id):
+    """True when this channel already has a top-level comment on the video (1 unit)."""
+    import youtube_account as ya
+    res = ya._get(f"{ya.API}/commentThreads", {"part": "snippet", "videoId": video_id, "maxResults": 50})
+    ya.spend(1)
+    return any(((t.get("snippet") or {}).get("topLevelComment") or {}).get("snippet", {})
+               .get("authorChannelId", {}).get("value") == my_channel_id for t in res.get("items") or [])
 
 
 def _comments_on(video_id, my_channel_id):
@@ -358,6 +373,7 @@ def add_to_playlists(acct, kind, log=print):
     todo = [r for r in ya.uploads() if r.get("status") == "done" and r.get("video_id") and not r.get("elsewhere")
             and r["video_id"] not in done and r.get("created", 0) >= time.time() - COMMENT_DAYS * 86400]
     n = 0
+    found = {}            # playlists already on the channel: title -> id, and their videos
     for r in todo:
         # A history series gets its own playlist, parts in upload order, so
         # YouTube plays part 2 after part 1.
@@ -368,6 +384,15 @@ def add_to_playlists(acct, kind, log=print):
             break
         try:
             pid = lists.get(title)
+            if not pid:
+                # The state file can be lost (output/channels was swept away on
+                # 18-oct-2026): a playlist of that title on the channel is reused.
+                pid = _existing_playlist(title, found)
+                if pid:
+                    _update(acct, lambda s: s.setdefault("playlists", {}).update({title: pid}))
+            if pid and r["video_id"] in _playlist_videos(pid, found):
+                _update(acct, lambda s: s.setdefault("playlisted", {}).update({r["video_id"]: pid}))
+                continue
             if not pid:
                 got = _post(f"{ya.API}/playlists", {"part": "snippet,status"},
                             {"snippet": {"title": title, "description": about},
@@ -384,6 +409,42 @@ def add_to_playlists(acct, kind, log=print):
     if n:
         log(f"📃 Added {n} Short(s) to playlists.")
     return n
+
+
+def _existing_playlist(title, found):
+    import youtube_account as ya
+    if "lists" not in found:
+        found["lists"] = {}
+        page = None
+        for _ in range(4):
+            res = ya._get(f"{ya.API}/playlists", {"part": "snippet", "mine": "true", "maxResults": 50,
+                                                   **({"pageToken": page} if page else {})})
+            ya.spend(1)
+            for p in res.get("items") or []:
+                found["lists"].setdefault(p["snippet"]["title"], p["id"])
+            page = res.get("nextPageToken")
+            if not page:
+                break
+    return found["lists"].get(title)
+
+
+def _playlist_videos(pid, found):
+    """Video ids in a playlist found on the channel (one we just made is empty)."""
+    import youtube_account as ya
+    key = "items:" + pid
+    if key not in found:
+        found[key] = set()
+        if pid in (found.get("lists") or {}).values():
+            page = None
+            for _ in range(10):
+                res = ya._get(f"{ya.API}/playlistItems", {"part": "contentDetails", "playlistId": pid,
+                                                          "maxResults": 50, **({"pageToken": page} if page else {})})
+                ya.spend(1)
+                found[key] |= {i["contentDetails"]["videoId"] for i in res.get("items") or []}
+                page = res.get("nextPageToken")
+                if not page:
+                    break
+    return found[key]
 
 
 # ------------------------------------------------------------------ cross promotion

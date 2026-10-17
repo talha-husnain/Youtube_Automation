@@ -716,6 +716,14 @@ never finished:
     resuming them (their genre/topic env is not in the manifest: a controversy
     job came back as cricket with no topic). test_mcp_stdio itself fails on
     this Windows Python (asyncio stdin pipe, WinError 6) before and after.
+  - **The 24 h job sweep deleted output/channels** (04:0x): it treated every
+    folder in output/ except thumbnails as a job, and channels/ itself only
+    changes when a channel is added. Five tokens, upload logs and engage.json
+    files went; the owner had to reconnect. Both sweeps now touch only uuid4
+    job folders (`app._is_job_dir`). Upload logs were rebuilt from the job
+    records in .my_channels.json (`rebuilt` on each row). engage reuses a
+    playlist of the same title and skips videos already in it, and never
+    posts a second first comment (`_ours_on`), so a lost engage.json is safe.
   - Tareekh History is not phone-verified (owner has no spare number): long
     videos stay at 14 min and custom thumbnails fail; YouTube picks a frame.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a

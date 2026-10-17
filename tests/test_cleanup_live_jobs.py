@@ -8,6 +8,7 @@ import asyncio
 import os
 import time
 import types
+import uuid
 
 import pytest
 
@@ -36,8 +37,13 @@ def _age(path, seconds):
     os.utime(path, (t, t))
 
 
+def jid(name):
+    """A job folder is named by its uuid4: the sweeps skip anything else."""
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, name))
+
+
 def _job_dir(out, job_id, manifest=False, age=OLD):
-    d = out / job_id
+    d = out / jid(job_id)
     d.mkdir()
     if manifest:
         m = d / app_module._RESUME_FILE
@@ -58,25 +64,25 @@ class TestJobDirSweep:
     def test_finished_old_job_is_purged(self, disk):
         out, _ = disk
         d = _job_dir(out, "done")
-        app_module.jobs["done"] = {"status": "completed"}
+        app_module.jobs[jid("done")] = {"status": "completed"}
         app_module._sweep_expired_job_dirs(time.time())
         assert not d.exists()
-        assert "done" not in app_module.jobs
+        assert jid("done") not in app_module.jobs
 
     def test_queued_old_job_survives(self, disk):
         out, _ = disk
         d = _job_dir(out, "waiting")
-        app_module.jobs["waiting"] = {"status": "queued"}
+        app_module.jobs[jid("waiting")] = {"status": "queued"}
         app_module._sweep_expired_job_dirs(time.time())
-        assert d.exists() and "waiting" in app_module.jobs
+        assert d.exists() and jid("waiting") in app_module.jobs
 
     def test_running_old_job_survives(self, disk):
         out, _ = disk
         d = _job_dir(out, "busy")
-        app_module.jobs["busy"] = {"status": "processing"}
-        app_module._running_jobs.add("busy")
+        app_module.jobs[jid("busy")] = {"status": "processing"}
+        app_module._running_jobs.add(jid("busy"))
         app_module._sweep_expired_job_dirs(time.time())
-        assert d.exists() and "busy" in app_module.jobs
+        assert d.exists() and jid("busy") in app_module.jobs
 
     def test_manifest_of_other_instance_survives(self, disk):
         out, _ = disk
@@ -97,12 +103,27 @@ class TestJobDirSweep:
         out, _ = disk
         live = _job_dir(out, "live")
         (live / "clip.mp4").write_bytes(b"x" * 2048)
-        app_module.jobs["live"] = {"status": "queued"}
+        app_module.jobs[jid("live")] = {"status": "queued"}
         dead = _job_dir(out, "dead")
         (dead / "clip.mp4").write_bytes(b"x" * 2048)
         monkeypatch.setattr(app_module, "OUTPUT_MAX_GB", 1 / 1024 ** 3)  # 1 byte
         app_module._enforce_output_size_cap()
         assert live.exists() and not dead.exists()
+
+
+    def test_state_folders_are_never_swept(self, disk, monkeypatch):
+        # 18-oct-2026: output/channels (five channels' Google connections and
+        # upload logs) looked like an old job and was deleted.
+        out, _ = disk
+        keep = [out / n for n in ("channels", "flags", "stock_cache", "thumbnails")]
+        for d in keep:
+            d.mkdir()
+            (d / "state.json").write_text("{}")
+            _age(d, OLD)
+        app_module._sweep_expired_job_dirs(time.time())
+        monkeypatch.setattr(app_module, "OUTPUT_MAX_GB", 1 / 1024 ** 3)
+        app_module._enforce_output_size_cap()
+        assert all(d.exists() for d in keep)
 
 
 class TestUploadSweep:

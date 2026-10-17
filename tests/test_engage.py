@@ -38,6 +38,13 @@ class FakeYouTube:
                               for i in params["id"].split(",")]}
         if url.endswith("/commentThreads"):
             return {"items": self.comments.get(params["videoId"], [])}
+        if url.endswith("/playlists"):           # the channel's playlists: the ones made here
+            return {"items": [{"id": f"new{k + 1}", "snippet": {"title": b["snippet"]["title"]}}
+                              for k, (kind, b) in enumerate(self.posts) if kind == "playlists"]}
+        if url.endswith("/playlistItems"):
+            return {"items": [{"contentDetails": {"videoId": b["snippet"]["resourceId"]["videoId"]}}
+                              for kind, b in self.posts
+                              if kind == "playlistItems" and b["snippet"]["playlistId"] == params["playlistId"]]}
         raise AssertionError(url)
 
     def post(self, url, params, body):
@@ -148,6 +155,27 @@ def test_playlists_are_made_once_per_kind_and_filled(fake):
     made = [b["snippet"]["title"] for k, b in fake.posts if k == "playlists"]
     assert sorted(made) == ["Flag quiz: guess the country", "Paheliyan"]
     assert engage.add_to_playlists(None, "quiz", lambda *a: None) == 0
+
+
+def test_a_lost_state_file_makes_no_second_playlist_and_adds_nothing_twice(fake):
+    # output/channels was swept away on 18-oct-2026, engage.json with it.
+    for vid, fmt in (("A", "riddle"), ("C", "flags")):
+        ya._save_upload(_row(vid, format=fmt))
+    engage.add_to_playlists(None, "quiz", lambda *a: None)
+    os.remove(engage._state_path(None))
+    ya._save_upload(_row("D", format="riddle"))
+    assert engage.add_to_playlists(None, "quiz", lambda *a: None) == 1          # only the new one
+    assert [k for k, _b in fake.posts].count("playlists") == 2
+    assert engage.load(None)["playlists"] == {"Paheliyan": "new1", "Flag quiz: guess the country": "new3"}
+
+
+def test_a_lost_state_file_posts_no_second_first_comment(fake):
+    _connect(None, "UC_me")
+    fake.public = {"A"}
+    fake.comments["A"] = [{"snippet": {"topLevelComment": {"snippet": {"authorChannelId": {"value": "UC_me"}}}}}]
+    ya._save_upload(_row("A"))
+    assert engage.first_comments(None, "quiz", lambda *a: None) == 0
+    assert not fake.posts and "A" in engage.load(None)["commented"]
 
 
 def test_a_history_series_gets_its_own_playlist_in_part_order(fake):
