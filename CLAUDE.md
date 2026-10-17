@@ -690,6 +690,34 @@ never finished:
   older than 48 h, or a "today" Short past its own date, is marked skipped
   instead of uploaded (samples made days before a channel is connected,
   the upload limit, a review hold). Quizzes, facts, history and songs keep.
+- **First day with all six channels connected** (18-oct-2026, `tests/test_placement.py`):
+  - The cricket card was first connected to the music channel by mistake; its
+    waiting Short went up there within a minute and the next one was made with
+    `@bytebeatsmusic-t5p` on its end card. Now a fresh connection makes and
+    uploads nothing for `CONNECT_HOLD` (15 min, Today says so), each job keeps
+    the `yt_channel` it was made for (`upload_waiting` refuses it on another
+    channel and puts its topic back in the ideas), upload rows keep
+    `yt_channel`, and `check_placement` (after a connect and each learn pass,
+    read-only) finds a card's uploads public or scheduled on another of our
+    channels; Today links them in Studio. It never changes or deletes them.
+  - `app._job_reason` read only `RuntimeError:`-style lines, so
+    `httpx.ConnectError` / `ServerError: 503` failures read "the job failed"
+    and `TRANSIENT` never paused for an outage. Any `...Error:` line counts now.
+  - A DNS outage left a quiz with 2 of 10 voice lines and no SEO copy, and it
+    went up (QA heard the music bed). `short_kit.voice_all` retries the failed
+    lines once and fails the job; `seo_or_fail` likewise; `upload_waiting`
+    never posts an empty description. Messages say "network" for TRANSIENT.
+  - Titles are one line (`youtube_account._clean_title`): YouTube kept
+    "... \n#shorts" as written.
+  - Every copy of the app on the laptop has the same INSTANCE_ID, so the
+    resume scan of a second copy (test_mcp_stdio's subprocess) re-ran the
+    server's RUNNING job in its folder. Self-host now leaves any manifest with
+    a fresh heartbeat alone and drops `--generate` manifests instead of
+    resuming them (their genre/topic env is not in the manifest: a controversy
+    job came back as cricket with no topic). test_mcp_stdio itself fails on
+    this Windows Python (asyncio stdin pipe, WinError 6) before and after.
+  - Tareekh History is not phone-verified (owner has no spare number): long
+    videos stay at 14 min and custom thumbnails fail; YouTube picks a frame.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
   player born today; `cricket_shorts.birthday_ok` keeps it only when the
   Wikipedia intro's "(born 15 October 1994)" matches (`player_photo.born`).

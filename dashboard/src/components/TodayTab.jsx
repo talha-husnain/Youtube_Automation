@@ -155,6 +155,13 @@ export default function TodayTab({ onOpenTab }) {
                                 {c.subscribers != null ? ` · ${c.subscribers} subs` : ''}
                             </span>
                         </button>
+                        {c.elsewhere?.map((v) => (
+                            <p key={v.video_id} className="px-3 text-xs text-warn">
+                                &quot;{v.title}&quot; went up on {v.on} by mistake.{' '}
+                                <a href={`https://studio.youtube.com/video/${v.video_id}/edit`} target="_blank" rel="noreferrer"
+                                   className="underline">Open it in Studio</a> and set it to Private or delete it.
+                            </p>
+                        ))}
                         {c.asked?.length > 0 && (
                             <p className="px-3 text-xs text-muted">Viewers asked for: {c.asked.join(' · ')} (the next ideas hear this)</p>
                         )}

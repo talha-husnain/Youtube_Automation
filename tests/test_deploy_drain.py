@@ -96,6 +96,24 @@ class TestResumeScan:
         assert app_module._read_manifest("bad") is None
 
 
+class TestResumeOnTheLaptop:
+    """Self-host: one INSTANCE_ID for every copy of the app (18-oct-2026)."""
+
+    def test_a_job_another_live_copy_runs_is_left_alone(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+        _manifest(out, "live", instance="me", heartbeat=time.time() - 5)
+        app_module._resume_interrupted_jobs()
+        assert "live" not in app_module.jobs and app_module._read_manifest("live")
+
+    def test_a_generated_short_is_dropped_not_rerun_without_its_settings(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+        _manifest(out, "gen", cmd=["python", "main.py", "--generate", "-o", "x"], heartbeat=time.time() - 600)
+        _manifest(out, "clip", heartbeat=time.time() - 600)
+        app_module._resume_interrupted_jobs()
+        assert "gen" not in app_module.jobs and app_module._read_manifest("gen") is None
+        assert app_module.jobs["clip"]["status"] == "queued"
+
+
 class TestDrain:
     def test_marker_of_another_instance_starts_draining(self, out):
         (out / app_module._INSTANCE_MARKER).write_text("newer")

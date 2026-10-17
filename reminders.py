@@ -84,6 +84,10 @@ def things_to_do(today, now=None):
         out.append(f"The disk has only {free:.1f} GB free, so new videos wait. Emptying the Recycle Bin or "
                    "deleting old files in Downloads makes room.")
     for c in today["channels"]:
+        for v in c.get("elsewhere") or []:
+            out.append(f"\"{v['title'][:70]}\" was made for {c['name']} but went up on {v['on']}. "
+                       f"Open https://studio.youtube.com/video/{v['video_id']}/edit and set it to Private "
+                       "or delete it.")
         if c.get("enabled", True) and c.get("failed_today", 0) >= FAILS_WARN:
             why = f" The latest reason: {c['fail_reason']}" if c.get("fail_reason") else ""
             out.append(f"{c['name']}: {c['failed_today']} videos failed today.{why}")

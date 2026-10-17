@@ -395,7 +395,7 @@ def run(output_dir, pipeline):
     print(f"🎙️ Voicing {len(lines)} lines...")
     import broll
     broll.prefetch(output_dir, quiz.title, lines, FOOTAGE_RULE, client)   # footage is searched while voicing
-    said = kit.voice_lines(client, [{"text": t, "voice": voice, "style": VOICE_STYLE} for t in lines],
+    said = kit.voice_all(client, [{"text": t, "voice": voice, "style": VOICE_STYLE} for t in lines],
                            output_dir, stem)
     if not any(p for p, _ in said):
         raise RuntimeError("The AI voice failed for every line; try again in a minute.")
@@ -471,7 +471,7 @@ def run(output_dir, pipeline):
                      "questions": ([f"flag:{q.answer_text}" for q in quiz.questions] if fmt == "flags"
                                    else [q.question for q in quiz.questions]),
                      "answers": [q.answer_text for q in quiz.questions]}}
-    seo_copy.apply([clip], transcript, source_title=quiz.title,
+    kit.seo_or_fail([clip], transcript, source_title=quiz.title,
                    context=SEO_CONTEXT.format(kind=FORMAT_TEXT[fmt], topic=topic or "mixed", n=len(quiz.questions))
                    + (f" It is the channel's daily quiz number {number}: start the title with \"Quiz #{number}:\"."
                       if number else ""),

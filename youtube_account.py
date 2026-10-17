@@ -311,7 +311,7 @@ def status():
     tok = _read(token_file(), None)
     return {"configured": configured(), "connected": bool(tok and tok.get("refresh_token")),
             "channel": (tok or {}).get("channel"), "redirect_uri": REDIRECT_URI,
-            "expires": refresh_expiry(tok)}
+            "expires": refresh_expiry(tok), "granted_at": (tok or {}).get("granted_at") or 0}
 
 
 def refresh_expiry(tok):
@@ -332,6 +332,12 @@ def refresh_expiry(tok):
 def _clean(text, limit):
     # YouTube rejects < and > in titles and descriptions.
     return (text or "").replace("<", "").replace(">", "").strip()[:limit]
+
+
+def _clean_title(text):
+    # A title is one line: YouTube kept "...reh gaye \n#shorts" as written on
+    # 12 Punchline Bazaar Shorts and a cricket one (checked 18-oct-2026).
+    return _clean(" ".join((text or "").split()), TITLE_MAX)
 
 
 def _clean_description(text):
@@ -370,6 +376,21 @@ def _save_upload(row):
         rows = [r for r in rows if r["id"] != row["id"]] + [row]
         import safe_json
         safe_json.write(uploads_file(), rows[-500:])
+
+
+def _mark_uploads(marks):
+    """Set fields on rows in place, by row id ({id: {field: value or None}};
+    None removes it), keeping the log's order."""
+    import safe_json
+    with _lock:
+        rows = uploads()
+        for r in rows:
+            for k, v in (marks.get(r.get("id")) or {}).items():
+                if v is None:
+                    r.pop(k, None)
+                else:
+                    r[k] = v
+        safe_json.write(uploads_file(), rows)
 
 
 # A dropped connection mid-upload resumes where YouTube stopped receiving
@@ -446,9 +467,12 @@ def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
            privacy="public", ai_made=False, meta=None):
     """Upload one file. ``publish_at``: aware datetime to schedule it (the video
     is private until then, YouTube publishes it). Returns the uploads.json row."""
-    row = {"id": secrets.token_hex(6), "file": os.path.basename(path), "title": _clean(title, TITLE_MAX),
+    row = {"id": secrets.token_hex(6), "file": os.path.basename(path), "title": _clean_title(title),
            "genre": genre, "publish_at": publish_at.astimezone(timezone.utc).isoformat() if publish_at else None,
            "asked": "scheduled" if publish_at else privacy, "status": "uploading",
+           # Which YouTube channel it went to: a card reconnected to another
+           # channel must not count it as its own (moved_uploads).
+           "yt_channel": (status().get("channel") or {}).get("id"),
            "created": int(time.time()), **(meta or {})}
     _save_upload(row)
     body = {"snippet": {"title": row["title"] or "Short", "description": _clean_description(description),
@@ -537,6 +561,26 @@ def add_to_description(video_id, line):
     if r.status_code != 200:
         raise RuntimeError(_google_error(r))
     return True
+
+
+def unschedule(video_id):
+    """Keep a scheduled video private for good: it never goes public at its
+    time (51 units). videos.update replaces the whole status, so every other
+    field goes back as it is. Reversible in Studio; nothing is deleted.
+    False when the video is not on this channel."""
+    items = _get(f"{API}/videos", {"part": "status", "id": video_id}).get("items") or []
+    if not items:
+        return False
+    st = {k: v for k, v in items[0]["status"].items()
+          if k in ("embeddable", "license", "publicStatsViewable", "selfDeclaredMadeForKids",
+                   "containsSyntheticMedia")}
+    spend(UPDATE_UNITS)
+    r = httpx.put(f"{API}/videos", params={"part": "status"},
+                  json={"id": video_id, "status": {**st, "privacyStatus": "private"}},
+                  headers={"Authorization": f"Bearer {_token()}"}, timeout=60)
+    if r.status_code != 200:
+        raise RuntimeError(_google_error(r))
+    return not r.json().get("status", {}).get("publishAt")
 
 
 CAPTIONS_API = "https://www.googleapis.com/upload/youtube/v3/captions"

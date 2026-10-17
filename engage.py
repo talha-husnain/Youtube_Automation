@@ -180,7 +180,10 @@ def _live_rows(days):
     since = time.time() - days * 86400
     out = []
     for r in ya.uploads():
-        if r.get("status") != "done" or not r.get("video_id") or r.get("created", 0) < since or r.get("blocked"):
+        # "elsewhere": it went up on another channel (my_channels.check_placement),
+        # so this channel must not comment on it as if it were its own.
+        if (r.get("status") != "done" or not r.get("video_id") or r.get("created", 0) < since or r.get("blocked")
+                or r.get("elsewhere")):
             continue
         at = r.get("publish_at")
         try:
@@ -352,7 +355,7 @@ def add_to_playlists(acct, kind, log=print):
     import youtube_account as ya
     st = load(acct)
     done = st.get("playlisted") or {}
-    todo = [r for r in ya.uploads() if r.get("status") == "done" and r.get("video_id")
+    todo = [r for r in ya.uploads() if r.get("status") == "done" and r.get("video_id") and not r.get("elsewhere")
             and r["video_id"] not in done and r.get("created", 0) >= time.time() - COMMENT_DAYS * 86400]
     n = 0
     for r in todo:
@@ -386,7 +389,7 @@ def add_to_playlists(acct, kind, log=print):
 # ------------------------------------------------------------------ cross promotion
 
 PROMO_LABEL = {"comedy": "comedy", "cricket": "cricket facts", "quiz": "daily quiz", "music": "new songs",
-               "controversy": "controversies explained", "history": "history stories (long videos)"}
+               "controversy": "controversies explained", "history": "history documentaries"}
 
 
 def promo_line(others):

@@ -171,7 +171,7 @@ def test_uploads_go_into_the_channels_own_times_and_stop_at_the_limit(monkeypatc
         ya._save_upload(row)
         return row
     monkeypatch.setattr(ya, "upload", upload)
-    clips = lambda j: ("completed", [{"index": 0, "path": "x.mp4", "title": j, "description": "",
+    clips = lambda j: ("completed", [{"index": 0, "path": "x.mp4", "title": j, "description": "About it.",
                                       "tags": [], "seconds": 40}])
     got = mc.upload_waiting(mc.get(ch["id"]), clips, lambda *a: None)
     assert got == {"done": 2, "limit": True}

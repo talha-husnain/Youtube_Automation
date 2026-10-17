@@ -59,6 +59,11 @@ LOST = "the job was lost when the server restarted"
 # A long video needs a few GB while it renders (shots, voices, the join); a
 # full disk fails it at the last step, after all its AI calls were paid.
 MIN_FREE_GB = 5
+# A fresh connection makes and uploads nothing for 15 minutes: the cricket
+# card was first connected to the music channel by mistake (18-oct-2026), and
+# within a minute its waiting Short went up there and the next one was made
+# with the music channel's handle on its end card. The card names the channel.
+CONNECT_HOLD = 15 * 60
 UPLOAD_TRIES = 3
 IDEAS_RETRY = 1800
 EXPLORE = 0.3
@@ -412,6 +417,95 @@ def connected(ch):
         return youtube_account.status()
 
 
+def settling(st, now=None):
+    """Until when a just-made connection waits (CONNECT_HOLD), or 0."""
+    until = int(st.get("granted_at") or 0) + CONNECT_HOLD
+    return until if st.get("connected") and (now or time.time()) < until else 0
+
+
+PLACEMENT_DAYS = 14
+
+
+def check_placement(cid, log=print, now=None):
+    """This card's uploads that are not on the channel it is connected to
+    now: they went up while the card pointed at another channel. One found
+    public or scheduled on another of our channels is marked with that
+    channel's name, so Today asks the owner to set it to private or delete
+    it; the mark goes once it is private or gone. Read-only on YouTube (1
+    unit per 50 videos per channel). Run after a connect and each learn."""
+    import youtube_account
+    now = now or time.time()
+    with youtube_account.use(account(cid)):
+        me = (youtube_account.status().get("channel") or {}).get("id")
+        rows = [r for r in youtube_account.uploads() if r.get("status") == "done" and r.get("video_id")
+                and now - r.get("created", 0) < PLACEMENT_DAYS * 86400]
+        if not me or not rows:
+            return []
+        owners = _owners([r["video_id"] for r in rows])
+    away = [r for r in rows if (owners.get(r["video_id"]) or {}).get("channel") != me]
+    if not away and not any(r.get("elsewhere") for r in rows):
+        return []
+    # Which of our other channels holds them: a private video is visible only
+    # to its own channel's token. One the owner deleted is found nowhere and
+    # is left alone (it may as well have been deleted from this channel).
+    found = {}
+    for oid, acct in [("main", None)] + [(c["id"], account(c["id"])) for c in channels() if c["id"] != cid]:
+        with youtube_account.use(acct):
+            st = youtube_account.status()
+            yid = (st.get("channel") or {}).get("id")
+            if not (st.get("connected") and yid and away):
+                continue
+            try:
+                seen = _owners([r["video_id"] for r in away])
+            except Exception:  # noqa: BLE001 — that channel is not checked this time
+                continue
+        found.update({v: {**o, "title": (st["channel"].get("title") or "").strip()}
+                      for v, o in seen.items() if o["channel"] == yid})
+    marks, marked = {}, []
+    for r in rows:
+        o = found.get(r["video_id"])
+        # Public or still scheduled there: the owner should act. Kept private
+        # (set by the owner) it harms nothing and leaves the to-do list.
+        if o and (o["privacy"] != "private" or o["publish_at"]):
+            marked.append({**r, "elsewhere": o["title"]})
+            if r.get("elsewhere") != o["title"]:
+                marks[r["id"]] = {"elsewhere": o["title"]}
+        elif r.get("elsewhere"):
+            marks[r["id"]] = {"elsewhere": None}
+    if marks:
+        with youtube_account.use(account(cid)):
+            youtube_account._mark_uploads(marks)
+    for r in marked:
+        if r["id"] in marks:
+            log(f"⚠️ {cid}: '{r.get('title', '')[:60]}' went up on {r['elsewhere']}, not on this channel.")
+    return marked
+
+
+def _owners(video_ids):
+    """video id -> {channel, privacy, publish_at} as YouTube says, for the
+    videos this token can see (private ones only on their own channel)."""
+    import youtube_account
+    out = {}
+    for i in range(0, len(video_ids), 50):
+        items = youtube_account._get(f"{youtube_account.API}/videos",
+                                     {"part": "snippet,status", "id": ",".join(video_ids[i:i + 50])}).get("items") or []
+        out.update({v["id"]: {"channel": v["snippet"]["channelId"], "privacy": v["status"].get("privacyStatus"),
+                              "publish_at": v["status"].get("publishAt")} for v in items})
+    return out
+
+
+def elsewhere(cid, now=None):
+    """Uploads of this card found on another channel, for Today: still
+    scheduled or public within PLACEMENT_DAYS."""
+    import youtube_account
+    now = now or time.time()
+    with youtube_account.use(account(cid)):
+        return [{"title": r.get("title", ""), "video_id": r["video_id"], "on": r["elsewhere"],
+                 "publish_at": r.get("publish_at")}
+                for r in youtube_account.uploads()
+                if r.get("elsewhere") and now - r.get("created", 0) < PLACEMENT_DAYS * 86400]
+
+
 UNVERIFIED_MINUTES = 14    # YouTube refuses videos over 15 min from an unverified channel
 LONG_CHECK_EVERY = 6 * 3600
 
@@ -529,7 +623,7 @@ def learn(ch, log=print):
             return ch
         since = time.time() - LOOKBACK_DAYS * 86400
         rows = [r for r in youtube_account.uploads() if r.get("video_id") and r.get("status") == "done"
-                and r.get("created", 0) >= since]
+                and r.get("created", 0) >= since and not r.get("elsewhere")]   # another channel's numbers
         numbers = {}
         for k in range(0, len(rows), 50):
             part = rows[k:k + 50]
@@ -903,6 +997,11 @@ async def make_one(submit, ch, client_fn, log=print, now=None):
     if not payload:
         return None
     row = {"at": int(time.time()), "day": today(now), "status": "running", **meta}
+    # The channel it is made for (its end card names it): upload_waiting
+    # refuses it if the card is connected to another channel by then.
+    yid = (connected(ch).get("channel") or {}).get("id")
+    if yid:
+        row["yt_channel"] = yid
     try:
         row["job_id"] = await submit(payload)
     except Exception as e:  # noqa: BLE001
@@ -1067,6 +1166,23 @@ def stale(j, now=None):
     return bool(hours) and now - j.get("at", now) > hours * 3600
 
 
+def _remake(cid, j):
+    """A planned topic goes back to the front of the ideas (after urgent
+    results), for a video that cannot be posted as it was made."""
+    if not j.get("topic") or j.get("format") in EXTRA_FORMATS or j.get("series"):
+        return
+    kind = j["format"] if j.get("format") in ("match", "versus", "topic") else "topic"
+
+    def fn(c):
+        if c["kind"] not in PLANNERS:
+            return
+        rest = [i for i in c.get("ideas") or [] if i.get("text") != j["topic"]]
+        urgent = [i for i in rest if i.get("urgent")]
+        c["ideas"] = urgent + [{"kind": kind, "text": j["topic"]}] + [i for i in rest if not i.get("urgent")]
+        c["used"] = [u for u in c.get("used") or [] if u != j["topic"][:140]]
+    _change(cid, fn)
+
+
 def upload_waiting(ch, job_clips, log=print):
     """Upload the channel's finished Shorts, each into its next free posting
     time. Stops at YouTube's daily limit and pauses the channel 3 h."""
@@ -1074,9 +1190,19 @@ def upload_waiting(ch, job_clips, log=print):
     _change(ch["id"], lambda c: c.update(last_upload=int(time.time())))
     done, limit = 0, False
     with youtube_account.use(account(ch["id"])):
-        if not youtube_account.status()["connected"]:
+        st = youtube_account.status()
+        if not st["connected"]:
             return {"done": 0, "limit": False}
+        me = (st.get("channel") or {}).get("id")
         for j in sorted(waiting(ch), key=lambda j: j.get("at", 0)):
+            if j.get("yt_channel") and me and j["yt_channel"] != me:
+                # Made while the card pointed at another channel: its end card
+                # and description name that channel. Made again instead.
+                _set_job(ch["id"], j["job_id"], status="skipped",
+                         error="made for another channel (this card was reconnected); made again")
+                _remake(ch["id"], j)
+                log(f"⏭️ {ch['name']}: not uploading '{(j.get('label') or '')[:60]}': made for another channel.")
+                continue
             if stale(j):
                 _set_job(ch["id"], j["job_id"], status="skipped", error="too old to post now (news of an earlier day)")
                 log(f"⏭️ {ch['name']}: not uploading '{(j.get('label') or j.get('topic') or '')[:60]}': too old now.")
@@ -1133,6 +1259,12 @@ def upload_waiting(ch, job_clips, log=print):
                     continue
             else:
                 slot = youtube_account.next_slots(ch["post_times"], 1)[0]
+            if not (clip.get("description") or "").strip():
+                # Its writing step failed (a network drop, 18-oct-2026); such a
+                # job was usually voiced in the same outage too.
+                _set_job(ch["id"], j["job_id"], status="failed", error="no description (its writing step failed)")
+                log(f"🚫 {ch['name']}: not uploading '{clip.get('title', '')[:60]}': it has no description.")
+                continue
             desc = promote(clip["description"], ch["id"])
             if KINDS[ch["kind"]].get("long") and j.get("format") not in EXTRA_FORMATS:
                 import history_videos
@@ -1375,13 +1507,22 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
     for ch in rows:
         refresh_jobs(ch, job_clips, output_dir, t)
     rows = channels()
-    live = []
+    live, settled = [], []
     for ch in rows:
         if not ch.get("enabled"):
             continue
         st = await loop.run_in_executor(None, connected, ch)
         if st.get("connected"):
             live.append(ch)
+            if not settling(st, t):
+                settled.append(ch)
+            elif not ch.get("placement_checked") or ch["placement_checked"] < st.get("granted_at", 0):
+                # Just connected: did an earlier connection of this card put videos elsewhere?
+                _change(ch["id"], lambda c: c.update(placement_checked=int(t)))
+                try:
+                    await loop.run_in_executor(None, check_placement, ch["id"], log)
+                except Exception as e:  # noqa: BLE001 — the learn pass checks again
+                    log(f"⚠️ {ch['name']}: placement check failed ({type(e).__name__}).")
     # One generated job at a time on this laptop: a sample the owner asked for
     # first (connected or not), else the channel furthest behind.
     room = disk_free_gb() >= MIN_FREE_GB
@@ -1390,7 +1531,7 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
         log(f"⚠️ Only {disk_free_gb():.1f} GB free on the disk: no new videos until {MIN_FREE_GB} GB are free.")
     if room and not any(running(c) for c in rows):
         samples = [c for c in rows if c.get("sample_wanted")]
-        behind = [c for c in live if wants_more(c)]
+        behind = [c for c in settled if wants_more(c)]
         if samples:
             ch = min(samples, key=lambda c: c.get("sample_wanted", 0))
             _change(ch["id"], lambda c: c.pop("sample_wanted", None))
@@ -1408,7 +1549,7 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
             log(f"⚠️ Telegram poll: {type(e).__name__}")
     for ch in live:
         ch = get(ch["id"]) or ch
-        if upload_due(ch, t):
+        if ch["id"] in {c["id"] for c in settled} and upload_due(ch, t):
             import keep_awake
             with keep_awake.task():
                 await loop.run_in_executor(None, upload_waiting, ch, job_clips, log)
@@ -1417,6 +1558,10 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
         if t - ch.get("last_learn", 0) >= LEARN_EVERY:
             await loop.run_in_executor(None, learn, ch, log)
             await loop.run_in_executor(None, retry_extras, ch, log)
+            try:
+                await loop.run_in_executor(None, check_placement, ch["id"], log)
+            except Exception as e:  # noqa: BLE001 — next learn pass
+                log(f"⚠️ {ch['name']}: placement check failed ({type(e).__name__}).")
         if ch.get("kind") == "cricket":
             await loop.run_in_executor(None, match_watch, ch, client_fn, log, t)
     # Engagement on every connected channel, the main one included.

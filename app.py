@@ -1333,6 +1333,21 @@ def _resume_interrupted_jobs() -> set:
             continue  # already ours (queued, running or recovered)
         if _manifest_busy_elsewhere(m):
             continue  # the other instance is on it; we take over if it goes stale
+        if not BILLING_ENABLED:
+            # On the laptop every copy of the app shares INSTANCE_ID, so a fresh
+            # heartbeat under our own id is another live process (the server,
+            # while mcp_stdio or its test starts): resuming re-ran the server's
+            # running job in its own folder (18-oct-2026). After a real restart
+            # the heartbeat goes stale within a minute and the next scan resumes it.
+            if time.time() - float(m.get("heartbeat") or 0) < HEARTBEAT_STALE_AFTER:
+                continue
+            if "--generate" in (m.get("cmd") or []):
+                # A generated Short's genre, topic and voice live only in the
+                # job's env, which the manifest does not keep: a controversy job
+                # came back as a cricket one with no topic and failed. Dropped:
+                # my_channels sees it lost and makes the next video.
+                _clear_resume_manifest(job_id)
+                continue
 
         attempts = int(m.get("attempts", 0)) + 1
         user_id = m.get("user_id")
@@ -2009,6 +2024,13 @@ def _job_reason(job_id):
         m = re.search(r"\b(?:RuntimeError|ValueError|HTTPException|Exception): (.+)", ln)
         if m:
             return m.group(1).strip()[:160]
+        # Any other exception keeps its class name: "ConnectError: [Errno 11001]
+        # getaddrinfo failed" and "ServerError: 503 UNAVAILABLE" read as "the job
+        # failed" before, so my_channels.TRANSIENT never saw an outage and it
+        # used up one of the day's tries (a song on 18-oct-2026).
+        m = re.search(r"\b([A-Z]\w*(?:Error|Exception|Timeout)): (.+)", ln)
+        if m and "Traceback" not in ln:
+            return f"{m.group(1)}: {m.group(2).strip()}"[:160]
     return None
 
 
@@ -3285,6 +3307,12 @@ def _today():
             why = (sorted(failed_jobs, key=lambda j: j.get("at", 0))[-1].get("error") or "").strip()
             p.append(f"{len(failed_jobs)} failed today" + (f" (latest: {why[:90]})" if why else ""))
         with youtube_account.use(my_channels.account(ch["id"])):
+            st = youtube_account.status()
+            hold = my_channels.settling(st, now)
+            if hold:
+                p.append(f"just connected to {((st.get('channel') or {}).get('title') or 'a channel').strip()}: "
+                         f"nothing is made or uploaded until {datetime.fromtimestamp(hold):%H:%M}. "
+                         "Wrong channel? Disconnect it now")
             rows.append(_today_row(ch["id"], ch["name"], ch["kind"], ch["per_day"],
                                    len(my_channels._jobs_on(ch, day)), (ch.get("stats") or {}).get("views"),
                                    p, bool(ch.get("enabled"))))
@@ -3294,6 +3322,7 @@ def _today():
         rows[-1]["fail_reason"] = (sorted(failed_jobs, key=lambda j: j.get("at", 0))[-1].get("error") or ""
                                    )[:160] if failed_jobs else ""
         rows[-1]["asked"] = __import__("engage").requests(my_channels.account(ch["id"]), limit=3)
+        rows[-1]["elsewhere"] = my_channels.elsewhere(ch["id"], now)
     connected = [r for r in rows if r["connected"]]
     expiring = [r["expires"] for r in connected if r.get("expires")]
     views = sum(r["views"] or 0 for r in rows) if any(r["views"] is not None for r in rows) else None

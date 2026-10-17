@@ -624,7 +624,7 @@ def _voice_timeline(client, lines, output_dir, stem, voice=None, style=None, bro
     voice = voice or os.environ.get("CRICKET_VOICE") or "Fenrir"
     broll_rule = CRICKET_FOOTAGE if broll_rule is None else broll_rule
     broll.prefetch(output_dir, lines[0] if lines else "", [t for t in lines if (t or "").strip()], broll_rule, client)
-    said = kit.voice_lines(client, [{"text": t, "voice": voice, "style": style or VOICE_STYLE} for t in lines],
+    said = kit.voice_all(client, [{"text": t, "voice": voice, "style": style or VOICE_STYLE} for t in lines],
                            output_dir, stem)
     if not any(p for p, _ in said):
         raise RuntimeError("The AI voice failed for every line; try again in a minute.")
@@ -688,7 +688,7 @@ def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_e
     clip.update({"end": round(total, 3), "seconds": round(total, 3), "file": final,
                  "background_music": os.path.basename(track) if track else None,
                  "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in footage]})
-    seo_copy.apply([clip], clip["captions"], **seo)
+    kit.seo_or_fail([clip], clip["captions"], **seo)
     if after_seo:
         after_seo(clip)
     if footage:

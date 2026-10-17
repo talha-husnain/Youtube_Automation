@@ -422,6 +422,47 @@ def voice_lines(client, items, job_dir, prefix):
     return out
 
 
+RETRY_WAIT = 30
+
+
+def voice_all(client, items, job_dir, prefix, wait=None):
+    """voice_lines, then once more after a pause for the lines that failed;
+    raises when a line still has no voice. A quiz went up with 8 of its 10
+    lines silent on 18-oct-2026 (a DNS outage, free voice and Gemini both
+    down): only an every-line-failed check guarded it."""
+    said = voice_lines(client, items, job_dir, prefix)
+    missing = [k for k, (p, _s) in enumerate(said) if not p]
+    if missing:
+        print(f"   🔁 {len(missing)} voice line(s) failed; trying them again in {RETRY_WAIT if wait is None else wait} s...")
+        time.sleep(RETRY_WAIT if wait is None else wait)
+        for k, got in zip(missing, voice_lines(client, [items[k] for k in missing], job_dir, prefix + "r")):
+            if got[0]:
+                said[k] = got
+        missing = [k for k, (p, _s) in enumerate(said) if not p]
+    if missing:
+        # "network" is what my_channels.TRANSIENT reads: the channel waits, the try is not used.
+        raise RuntimeError(f"{len(missing)} of {len(items)} voice lines could not be made (the network or the "
+                           "voice service is down); made again later.")
+    return said
+
+
+def seo_or_fail(clips, *args, wait=None, **kwargs):
+    """seo_copy.apply for a generated Short, which has no copy of its own: once
+    more after a pause, then the job fails. The same quiz went up with an
+    empty description and no tags when the SEO call hit the outage."""
+    import seo_copy
+    if os.environ.get("SEO_COPY", "1").strip() == "0" or not os.getenv("GEMINI_API_KEY"):
+        return seo_copy.apply(clips, *args, **kwargs)
+    done = seo_copy.apply(clips, *args, **kwargs)
+    if not done:
+        time.sleep(RETRY_WAIT if wait is None else wait)
+        done = seo_copy.apply(clips, *args, **kwargs)
+    if not done:
+        raise RuntimeError("The title and description could not be written (the network or Gemini is down); "
+                           "made again later.")
+    return done
+
+
 def ass_header(extra_styles=()):
     """Script header at the canvas size with the end card's styles."""
     return [
