@@ -367,7 +367,7 @@ never finished:
   "Channels", 14-oct-2026): Punchline Bazaar stays "main" with its own files
   and Autopilot, untouched. Each other channel has a kind (cricket facts,
   quiz, AI songs), its own Google token + uploads log in
-  `output/channels/<id>/`, used through `youtube_account.use(account)` (a
+  `state/channels/<id>/` (was output/channels), used through `youtube_account.use(account)` (a
   contextvar; `run_in_executor` threads do not inherit it, so set it inside
   the function that runs there). One OAuth client and callback serve every
   channel: the sign-in state carries the account, `prompt=select_account
@@ -669,7 +669,7 @@ never finished:
     at the top of the tick, before any upload. getUpdates' allowed_updates
     is remembered by Telegram, so connect() and poll() name the same list.
   - A failed thumbnail or a skipped/failed caption track is copied to
-    `output/channels/<id>/retry/` and tried again with each learn pass
+    `state/channels/<id>/retry/` and tried again with each learn pass
     (`retry_extras`, 4 tries, 7 days); thumbnails wait while YouTube says
     the channel is not verified (`long_uploads` "eligible"/"disallowed").
   - Reminders, the evening summary and the Sunday week report
@@ -724,6 +724,19 @@ never finished:
     records in .my_channels.json (`rebuilt` on each row). engage reuses a
     playlist of the same title and skips videos already in it, and never
     posts a second first comment (`_ours_on`), so a lost engage.json is safe.
+  - Channel files now live in `state/channels/` (gitignored), outside the
+    scratch output/ folder; `my_channels.move_old_folder` moves an old
+    output/channels at startup. **test_a_second_copy_of_the_app enters the
+    real lifespan with AUTOPILOT_LOCAL=1**, and the move carried the real
+    folder into the test's redirected CHANNELS_DIR (recovered from the pytest
+    temp dir): startup code must do nothing to real files when a path is
+    redirected (`_REAL_CHANNELS_DIR` check).
+  - Each card remembers its YouTube channel in .my_channels.json
+    (`yt_channel`, `yt_title`, set on connect, cleared by disconnect):
+    `wrong_pick` refuses another channel on reconnect. "connect all channels"
+    (`/api/youtube/connect-all`) walks every unconnected card: a page names
+    the channel to pick, Google, then the callback (`chain` in the sign-in
+    state) goes on to the next.
   - Tareekh History is not phone-verified (owner has no spare number): long
     videos stay at 14 min and custom thumbnails fail; YouTube picks a frame.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a

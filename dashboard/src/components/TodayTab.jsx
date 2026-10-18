@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     Loader2, CheckCircle2, Circle, Copy, Check, AlertTriangle, Rocket, Trophy, HelpCircle, Music, Layers,
-    Bell, CalendarClock, Clock, Eye, Users, Upload, Clapperboard, ExternalLink, Flame, Landmark,
+    Bell, CalendarClock, Clock, Eye, Users, Upload, Clapperboard, ExternalLink, Flame, Landmark, Youtube,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
@@ -125,6 +125,12 @@ export default function TodayTab({ onOpenTab }) {
             <div className="card p-5 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm text-ink flex items-center gap-1.5"><Layers size={15} /> Your channels</p>
+                    <div className="flex flex-wrap gap-2">
+                    {data.channels.some((c) => c.id !== 'main' && !c.connected) && (
+                        <a href={getApiUrl(`/api/youtube/connect-all?back=${encodeURIComponent(window.location.origin)}`)} className="btn-primary px-3 py-1.5 text-xs inline-flex items-center gap-1.5">
+                            <Youtube size={13} /> connect all channels
+                        </a>
+                    )}
                     <button onClick={async () => {
                         try {
                             const d = await apiJson('/api/my-channels/samples', { method: 'POST' });
@@ -133,6 +139,7 @@ export default function TodayTab({ onOpenTab }) {
                             setSampleNote(e.detail || 'Could not queue the samples.');
                         }
                     }} className="btn-ghost px-3 py-1.5 text-xs"><Clapperboard size={13} /> make a sample for every channel</button>
+                    </div>
                 </div>
                 {sampleNote && <p className="text-xs text-ok">{sampleNote}</p>}
                 {data.channels.map((c) => {

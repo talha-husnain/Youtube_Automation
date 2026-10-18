@@ -31,7 +31,11 @@ from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(ROOT, "output", ".my_channels.json")
-CHANNELS_DIR = os.path.join(ROOT, "output", "channels")
+# Each channel's Google token, upload log and engagement state. Not under
+# output/, which is scratch space for jobs: the 24 h job sweep deleted
+# output/channels on 18-oct-2026 and all five channels had to reconnect.
+CHANNELS_DIR = _REAL_CHANNELS_DIR = os.path.join(ROOT, "state", "channels")
+OLD_CHANNELS_DIR = os.path.join(ROOT, "output", "channels")
 TICK_SECONDS = 60
 UPLOAD_EVERY = 600
 UPLOAD_PAUSE_SECONDS = 3 * 3600
@@ -319,6 +323,58 @@ def want_samples(cids=None):
             _change(ch["id"], lambda c, at=now + k: c.update(sample_wanted=at))
             picked.append(ch["id"])
     return picked
+
+
+def move_old_folder(old=None, new=None, log=print):
+    """Move output/channels/<id> to CHANNELS_DIR once (the server calls it at
+    startup). A file already in the new place wins; the old folder goes when
+    it is empty."""
+    if old is None and new is None and CHANNELS_DIR != _REAL_CHANNELS_DIR:
+        # Redirected by a test: test_a_second_copy_of_the_app enters the real
+        # startup, and the move carried the real output/channels into its
+        # temporary folder (18-oct-2026).
+        return 0
+    old, new = old or OLD_CHANNELS_DIR, new or CHANNELS_DIR
+    if not os.path.isdir(old):
+        return 0
+    moved = 0
+    for root, _dirs, files in os.walk(old):
+        for name in files:
+            src = os.path.join(root, name)
+            dst = os.path.join(new, os.path.relpath(src, old))
+            if os.path.exists(dst):
+                continue
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.move(src, dst)
+            moved += 1
+    for root, _dirs, _files in os.walk(old, topdown=False):       # deepest first
+        if not os.listdir(root):
+            os.rmdir(root)
+    if moved:
+        log(f"📦 Moved {moved} channel file(s) from output/channels to {new}.")
+    return moved
+
+
+def remember_channel(cid, me):
+    """The YouTube channel this card belongs to, kept in the channels file
+    (outside the token, which can be lost): a later connect must pick it."""
+    _change(cid, lambda c: c.update(yt_channel=me.get("id"), yt_title=(me.get("title") or "").strip()))
+
+
+def forget_channel(cid):
+    """Disconnect on purpose: the card may then go to another channel."""
+    _change(cid, lambda c: [c.pop(k, None) for k in ("yt_channel", "yt_title")])
+
+
+def wrong_pick(cid, me):
+    """Why a sign-in for this card picked the wrong channel, or None."""
+    ch = get(cid) or {}
+    if ch.get("yt_channel") and me.get("id") and ch["yt_channel"] != me["id"]:
+        want = ch.get("yt_title") or "its own channel"
+        return (f"This card belongs to {want}, but {(me.get('title') or 'another channel').strip()} was picked. "
+                f"Press connect again and pick {want}. To move the card to a different channel, "
+                "press disconnect first.")
+    return None
 
 
 def remove(cid):

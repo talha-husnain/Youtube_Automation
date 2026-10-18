@@ -426,6 +426,11 @@ export default function ChannelsTab({ notice, onOpenAutopilot }) {
                 <p className="text-xs text-muted leading-relaxed">
                     Each channel has its own YouTube connection, its own kind of Short and its own posting times. Shortkaar makes them one at a time while this computer is on, and uploads each one into the channel&apos;s next free time. YouTube publishes them at that time, even when the computer is off.
                 </p>
+                {data.channels.some((c) => !c.main && !c.youtube?.connected) && (
+                    <a href={getApiUrl(`/api/youtube/connect-all?back=${encodeURIComponent(window.location.origin)}`)} className="btn-primary px-4 py-2 text-sm inline-flex items-center gap-1.5">
+                        <Youtube size={15} /> connect all channels
+                    </a>
+                )}
                 {notice?.connected && <p className="text-xs text-ok">Connected.</p>}
                 {notice?.error && <p className="text-xs text-danger" role="alert">{notice.error}</p>}
             </div>

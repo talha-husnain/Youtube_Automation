@@ -183,3 +183,68 @@ def test_a_video_on_another_channel_gets_no_comment_or_playlist_from_this_one():
             ya._save_upload({"id": vid.lower(), "video_id": vid, "status": "done", "created": int(time.time()),
                              **({"elsewhere": away} if away else {})})
         assert [r["video_id"] for r in engage._live_rows(7)] == ["B"]
+
+
+def test_the_channel_folder_moves_out_of_output_once(tmp_path):
+    old, new = tmp_path / "output" / "channels", tmp_path / "state" / "channels"
+    (old / "quiz" / "kit").mkdir(parents=True)
+    (old / "quiz" / "token.json").write_text("old token")
+    (old / "quiz" / "kit" / "banner.png").write_bytes(b"png")
+    (new / "quiz").mkdir(parents=True)
+    (new / "quiz" / "token.json").write_text("new token")                     # the new place wins
+    assert mc.move_old_folder(str(old), str(new), log=lambda *a: None) == 1
+    assert (new / "quiz" / "token.json").read_text() == "new token"
+    assert (new / "quiz" / "kit" / "banner.png").read_bytes() == b"png"
+    assert not (old / "quiz" / "kit").exists()
+
+
+def test_a_card_refuses_a_different_channel_until_disconnected():
+    import app
+    mc.add("cricket")
+    me = {"id": "UCcric", "title": "CricRecordz Daily"}
+    assert app._refuse_same_channel(me, mc.account("cricket")) is None              # first connect: any channel
+    mc.remember_channel("cricket", me)
+    why = app._refuse_same_channel({"id": "UCmusic", "title": "Byte Beats Music"}, mc.account("cricket"))
+    assert "CricRecordz Daily" in why and "Byte Beats Music" in why
+    assert app._refuse_same_channel(me, mc.account("cricket")) is None
+    mc.forget_channel("cricket")
+    assert app._refuse_same_channel({"id": "UCmusic", "title": "Byte Beats Music"}, mc.account("cricket")) is None
+
+
+def test_connect_all_walks_every_unconnected_channel(monkeypatch):
+    import app
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app, "BILLING_ENABLED", False)
+    monkeypatch.setenv("YT_CLIENT_ID", "id")
+    monkeypatch.setenv("YT_CLIENT_SECRET", "s")
+    mc.add("cricket")
+    mc.add("quiz")
+    mc.remember_channel("cricket", {"id": "UCc", "title": "CricRecordz Daily"})
+    c = TestClient(app.app)
+    back = "http://127.0.0.1:5180"
+    page = c.get("/api/youtube/connect-all", params={"back": back}).text
+    assert "Next: Cricket facts" in page and "pick <b>CricRecordz Daily</b>" in page
+    assert "accounts.google.com" in page and "skip=cricket" in page
+    page = c.get("/api/youtube/connect-all", params={"back": back, "skip": "cricket"}).text
+    assert "Next: Quiz" in page and "the YouTube channel you made for it" in page
+    # Google sends the browser back: the next channel comes up, not the dashboard.
+    state = __import__("urllib.parse").parse.parse_qs(
+        __import__("urllib.parse").parse.urlparse(ya.auth_url(back, mc.account("quiz"), chain=["cricket"])).query)["state"][0]
+    me = {"id": "UCq", "title": "Sawal Paheli"}
+    monkeypatch.setattr(ya, "finish_connect", lambda code, st, refuse=None: me)
+    r = c.get("/api/youtube/callback", params={"code": "x", "state": state}, follow_redirects=False)
+    assert r.headers["location"].startswith("/api/youtube/connect-all?") and "skip=cricket" in r.headers["location"]
+    assert mc.get("quiz")["yt_channel"] == "UCq"
+    monkeypatch.setattr(mc, "connected", lambda ch: {"connected": True})
+    r = c.get("/api/youtube/connect-all", params={"back": back}, follow_redirects=False)
+    assert r.status_code in (302, 307) and r.headers["location"].startswith(back)
+
+
+def test_startup_never_moves_the_real_folder_into_a_redirected_one(tmp_path, monkeypatch):
+    old = tmp_path / "real_output_channels"
+    (old / "quiz").mkdir(parents=True)
+    (old / "quiz" / "uploads.json").write_text("[]")
+    monkeypatch.setattr(mc, "OLD_CHANNELS_DIR", str(old))
+    assert mc.CHANNELS_DIR != mc._REAL_CHANNELS_DIR                      # conftest redirects it
+    assert mc.move_old_folder(log=lambda *a: None) == 0
+    assert (old / "quiz" / "uploads.json").exists()

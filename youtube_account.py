@@ -108,9 +108,11 @@ def back_url(origin, query, tab="channel"):
     return f"{base}/#app?tab={tab}&{query}"
 
 
-def auth_url(origin="", account=None):
+def auth_url(origin="", account=None, chain=None):
     """Google's sign-in page; ``account`` is the channel the token is for
-    (None = main). The state remembers it, so one callback URL serves all."""
+    (None = main). The state remembers it, so one callback URL serves all.
+    ``chain``: started by "connect all" (the ids skipped so far), so the
+    callback goes on to the next channel."""
     if not configured():
         raise RuntimeError("Add YT_CLIENT_ID and YT_CLIENT_SECRET to .env first.")
     state = secrets.token_urlsafe(24)
@@ -118,7 +120,8 @@ def auth_url(origin="", account=None):
     with _lock:
         for k in [k for k, v in _states.items() if now - v[0] > 900]:
             _states.pop(k, None)
-        _states[state] = (now, origin if _LOOPBACK.match(origin or "") else "", account)
+        _states[state] = (now, origin if _LOOPBACK.match(origin or "") else "", account,
+                          None if chain is None else tuple(chain))
     return AUTH_URL + "?" + urllib.parse.urlencode({
         "client_id": os.environ["YT_CLIENT_ID"], "redirect_uri": REDIRECT_URI,
         "response_type": "code", "scope": " ".join(SCOPES), "state": state,
@@ -132,6 +135,13 @@ def origin_for(state):
     with _lock:
         got = _states.get(state or "")
     return got[1] if got else ""
+
+
+def chain_for(state):
+    """None, or the ids "connect all" skipped so far."""
+    with _lock:
+        got = _states.get(state or "")
+    return got[3] if got and len(got) > 3 else None
 
 
 def account_for(state):

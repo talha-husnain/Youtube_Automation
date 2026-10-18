@@ -2379,6 +2379,10 @@ async def lifespan(app: FastAPI):
         import my_channels
         import short_kit
         my_channels.failure_reason = _job_reason
+        try:
+            my_channels.move_old_folder()
+        except Exception as e:  # noqa: BLE001 — the files stay where they were
+            print(f"⚠️ Could not move output/channels: {e}")
         asyncio.create_task(my_channels.loop_forever(
             _autopilot_submit, _job_clips, OUTPUT_DIR, short_kit.gemini, is_active=lambda: not _draining,
             today_fn=_today))
@@ -2931,6 +2935,10 @@ def _refuse_same_channel(me, account):
     import my_channels
     import youtube_account
     here = (account or {}).get("id") or "main"
+    if here != "main":
+        why = my_channels.wrong_pick(here, me)
+        if why:
+            return why
     places = [("main", None, "your main channel")] + [
         (c["id"], my_channels.account(c["id"]), c["name"]) for c in my_channels.channels()]
     for cid, acct, name in places:
@@ -2951,17 +2959,65 @@ async def youtube_callback(code: str = "", state: str = "", error: str = ""):
     import urllib.parse
     import youtube_account
     from fastapi.responses import RedirectResponse
+    import my_channels
     origin = youtube_account.origin_for(state)
+    acct = youtube_account.account_for(state)
+    chain = youtube_account.chain_for(state)
     # Another channel's sign-in returns to the Channels tab, the main one to My channel.
-    tab = "channels" if youtube_account.account_for(state) else "channel"
+    tab = "channels" if acct else "channel"
     if error or not code:
         return RedirectResponse(youtube_account.back_url(
             origin, "yt_error=" + urllib.parse.quote(error or "cancelled"), tab))
     try:
-        await _in_thread(youtube_account.finish_connect, code, state, _refuse_same_channel)
+        me = await _in_thread(youtube_account.finish_connect, code, state, _refuse_same_channel)
     except Exception as e:  # noqa: BLE001
         return RedirectResponse(youtube_account.back_url(origin, "yt_error=" + urllib.parse.quote(str(e)[:200]), tab))
+    if acct:
+        my_channels.remember_channel(acct["id"], me or {})
+    if chain is not None:
+        # "connect all": on to the next channel that is not connected.
+        return RedirectResponse("/api/youtube/connect-all?" + urllib.parse.urlencode(
+            {"back": origin, "skip": ",".join(chain)}))
     return RedirectResponse(youtube_account.back_url(origin, "connected=1", tab))
+
+
+@app.get("/api/youtube/connect-all")
+async def youtube_connect_all(back: str = "", skip: str = ""):
+    """Every channel that is not connected, one after another: a page saying
+    which channel to pick next, then Google's screen, then the next page."""
+    _local_only()
+    import html
+    import urllib.parse
+    import my_channels
+    import youtube_account
+    from fastapi.responses import HTMLResponse, RedirectResponse
+    skipped = [s for s in skip.split(",") if s]
+    todo = [c for c in my_channels.channels() if not c.get("main") and c["id"] not in skipped
+            and not my_channels.connected(c).get("connected")]
+    if not todo:
+        return RedirectResponse(youtube_account.back_url(back, "connected=1", "channels"))
+    ch = todo[0]
+    try:
+        go = youtube_account.auth_url(back, my_channels.account(ch["id"]), chain=skipped)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    pick = (f"pick <b>{html.escape(ch['yt_title'])}</b>" if ch.get("yt_title")
+            else "pick the YouTube channel you made for it")
+    later = "/api/youtube/connect-all?" + urllib.parse.urlencode({"back": back, "skip": ",".join(skipped + [ch["id"]])})
+    left = f"{len(todo)} channel{'s' if len(todo) > 1 else ''} left to connect"
+    page = f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect your channels</title><style>
+body{{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#0d0d16;color:#ececf4;margin:0;padding:48px 16px}}
+main{{max-width:520px;margin:0 auto}} p{{line-height:1.6;color:#b9b9cc}} b{{color:#fff}}
+a.go{{display:inline-block;background:#7c5cff;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:600}}
+a.alt{{color:#b9b9cc;margin-left:16px}}</style></head><body><main>
+<p>{left}</p>
+<h1 style="font-size:22px">Next: {html.escape(ch['name'])}</h1>
+<p>On Google's next screen, {pick}. If Google says it hasn't verified this app, press Advanced, then Go to (it is your own app), and allow everything.</p>
+<p><a class="go" href="{html.escape(go)}">Continue to Google</a><a class="alt" href="{html.escape(later)}">skip this one</a>
+<a class="alt" href="{html.escape(youtube_account.back_url(back, '', 'channels'))}">stop</a></p>
+</main></body></html>"""
+    return HTMLResponse(page)
 
 
 @app.post("/api/youtube/disconnect")
@@ -3473,6 +3529,7 @@ async def my_channels_disconnect(cid: str):
     def run():
         with youtube_account.use(my_channels.account(cid)):
             youtube_account.disconnect(revoke=False)
+        my_channels.forget_channel(cid)   # on purpose: the card may go to another channel now
     await _in_thread(run)
     return {"ok": True}
 
