@@ -42,7 +42,13 @@ FOOTAGE_RULE = ("Never footage that suggests a crime, arrest or guilt (handcuffs
                 "arrests, mugshots), never a recognisable face, never religious or political symbols. ")
 RULES = ("religion or blasphemy; politics or the army of any country; anyone under 18; sexual assault or "
          "harassment claims no court has ruled on; private people who are not famous; suicide or self-harm; "
-         "a named person's health or mental illness; family members who are not public figures themselves")
+         "a named person's health or mental illness; family members who are not public figures themselves; "
+         # Asked for more stories about famous women (19-oct-2026), the planner
+         # offered "cosmetic surgery rumors" and a kissing incident: gossip
+         # about a woman's body is not a controversy, and a leaked private
+         # video is abuse to its subject, never a story.
+         "leaked private photos or videos of anyone; rumours about a person's body, looks, cosmetic surgery, "
+         "love life or pregnancy")
 
 
 class Beat(BaseModel):
@@ -124,6 +130,10 @@ controversies about famous people, fairly and with sources, for Pakistani and In
 Google Search for what people are talking about now. About half recent (last 30 days) and well
 reported; the rest famous older ones people still search: Bollywood, Pakistani showbiz and dramas,
 cricketers, YouTubers and influencers, global celebrities, tech and business leaders.
+At least half the ideas are about famous WOMEN: actresses, models, singers, influencers and
+TikTok stars, female athletes and cricketers. Their public feuds, viral interviews and
+statements, award-show and red-carpet outfit debates, trolling they answered, film, drama or
+brand backlash, publicly announced splits of two famous people. Told fairly, like every story.
 Each idea is about ONE named famous person (never a team, board, company or country), names
 them first and says what it is about ("Shoaib Akhtar vs PCB: the 2008 ban"), and is a real,
 widely reported controversy, not a small disagreement or a debate about policy.

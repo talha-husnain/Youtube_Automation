@@ -103,7 +103,7 @@ KINDS = {
 PLANNERS = {"cricket": "cricket_shorts", "controversy": "controversy_shorts", "history": "history_videos"}
 MINUTES_RANGE, DEFAULT_MINUTES = (2, 30), 10
 LANGS = ("urdu", "english")
-FORMATS = {"quiz": ["mcq", "riddle", "math", "flags", "truefalse", "oddone"]}
+FORMATS = {"quiz": ["mcq", "riddle", "math", "flags", "truefalse", "oddone", "stars"]}
 # Fast results on the cricket channel: a match Pakistan or India just
 # finished is the most searched cricket topic of the day, worth more than
 # any planned idea, so it jumps the queue and is published 20 minutes after
@@ -981,7 +981,7 @@ def _next_payload(ch, client_fn, log=print):
     if kind == "music":
         import music_shorts
         style = pick_format(ch, music_shorts.STYLES)
-        theme = random.choice(music_shorts.THEMES)
+        theme = music_shorts.pick_theme()
         # No end card on songs: a Short that ends on the music loops straight
         # back into the first line, and replays count as views.
         return ({**look, "genre": "music", "music_style": style, "music_theme": theme, "frame_outro": False,

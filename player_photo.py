@@ -88,8 +88,15 @@ PERSON = re.compile(r"actor|actress|singer|cricketer|footballer|player|athlete|b
                     re.I)
 
 
+# kind "star" (the actress quiz): the photo IS the answer, so only an article
+# that says the person acts, models or sings, and only under their own name.
+STAR = re.compile(r"actress|actor|model|singer|entertainer|television personality", re.I)
+
+
 def _fits(desc, kind):
-    return "cricket" in desc.lower() if kind == "cricket" else bool(PERSON.search(desc or ""))
+    if kind == "cricket":
+        return "cricket" in desc.lower()
+    return bool((STAR if kind == "star" else PERSON).search(desc or ""))
 
 
 def lookup(name, kind="cricket"):
@@ -119,7 +126,8 @@ def _lookup(name, kind="cricket"):
     # politician): its short description says "cricketer".
     if not title or not _fits(desc, kind):
         res = _api({"action": "query", "list": "search", "srlimit": 1,
-                    "srsearch": f"{name} cricketer" if kind == "cricket" else name})
+                    "srsearch": f"{name} cricketer" if kind == "cricket" else f"{name} actress" if kind == "star"
+                    else name})
         hits = ((res or {}).get("query") or {}).get("search") or []
         if not hits:
             return None

@@ -743,6 +743,25 @@ never finished:
     `reminders.connection_lost` tells the owner once (toast + Telegram).
   - Tareekh History is not phone-verified (owner has no spare number): long
     videos stay at 14 min and custom thumbnails fail; YouTube picks a frame.
+- **Glamour** (owner, 19-oct-2026: "the videos have no ladies factor"; `tests/test_glamour.py`).
+  Classy, never suggestive: YouTube age-restricts sexually suggestive Shorts and leaves them out
+  of the Shorts feed, and real women are never edited, AI-made or sexualised.
+  - Songs: `music_shorts.pick_theme` takes a love/heartbreak theme 75% of the time,
+    `FEMALE_SHARE` (65%) are sung by a woman (`MUSIC_VOCAL`), two romance styles, and the
+    footage rule welcomes an unnamed stock model as the song's character.
+  - Quiz format `stars` ("PEHCHANO"): four famous women of one group (`STARS`: Pakistani,
+    Bollywood, Hollywood; only Wikipedia titles whose lead photo has a free licence, 70 of 93
+    tried), `player_photo` kind `star` (the article must say actress/model/singer and the photo
+    must be filed under exactly that title: the photo is the answer). Facts go through a Google
+    Search check (`_checked_facts`); credits are numbered, not named, so the description does
+    not give the answers away.
+  - Controversy: half the ideas about famous women. RULES now also refuse leaked private
+    photos/videos and rumours about anyone's body, looks, surgery, love life or pregnancy: the
+    first planner run with the women hint offered "cosmetic surgery rumors".
+  - History: one idea in three a famous woman of history (never a woman of the Prophet's family).
+  - Punchline Bazaar unchanged: CC searches for female comedians found only reaction re-uploads.
+- The Write tool refuses a file it has not read, and a patch script run right after that
+  failed Write runs the OLD file: give every patch script a new name.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
   player born today; `cricket_shorts.birthday_ok` keeps it only when the
   Wikipedia intro's "(born 15 October 1994)" matches (`player_photo.born`).

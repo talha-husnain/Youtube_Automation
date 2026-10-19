@@ -256,6 +256,10 @@ IDEAS_PROMPT = """Today is {today}. Plan the next {count} long YouTube videos ({
 empires (Rome, the Ottomans, the Mughals, the Abbasids), Islamic history told with respect (Karbala, the Caliphs,
 Al-Andalus), famous wars and events, how countries work and why they got rich or poor (the US government, the US
 economy, the dollar, China, the Gulf states), mysteries and turning points of history.
+About one idea in three is the story of a famous woman of history, told as drama and power: queens,
+empresses, warriors and rulers (Razia Sultana, Noor Jahan, Cleopatra, Rani of Jhansi, Hurrem Sultan,
+Chand Bibi, Elizabeth I, Shajar al-Durr). Never a woman of the Prophet's family or his companions:
+those stories are told only with the respect of a sacred story.
 {owner}{trending}Use Google Search for what people search and talk about now: anniversaries this month, news
 that makes an old story matter again.
 Each idea is one clear story with a hook, e.g. "Roman Empire: how the greatest empire fell", "Karbala: what

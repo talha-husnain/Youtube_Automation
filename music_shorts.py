@@ -14,7 +14,7 @@ prompt never names an artist. The upload carries YouTube's altered or
 synthetic content label (the voice is realistic and made by AI) and the
 description says the song is AI-made.
 
-Env: MUSIC_STYLE, MUSIC_THEME, MUSIC_AVOID (JSON list of titles already
+Env: MUSIC_STYLE, MUSIC_THEME, MUSIC_VOCAL (female/male), MUSIC_AVOID (JSON list of titles already
 made), MUSIC_MODEL (Lyria model), MUSIC_WHISPER (Whisper model size).
 """
 import base64
@@ -35,14 +35,40 @@ LYRIA_MODEL = os.environ.get("MUSIC_MODEL") or "lyria-3.5"
 MAX_SONG = 58.0      # Shorts music of a minute at most (owner's ask), end card after
 SING_TRIES = 3
 # Mood footage under the lyrics: a stranger singing or playing would look like
-# a music video of someone else's song.
-FOOTAGE_RULE = ("Mood footage that fits the song's feeling (city lights, rain, roads, sea, sky, nature); never "
-                "a person singing, rapping or playing an instrument, never text. ")
+# a music video of someone else's song. A woman as the song's character is
+# what the owner asked for (19-oct-2026: the songs had only scenery, no one
+# to feel the song through); stock models signed releases for this use.
+# Classy, never suggestive: YouTube age-restricts sexually suggestive Shorts,
+# and an age-restricted Short is left out of the Shorts feed.
+FOOTAGE_RULE = ("Mood footage that fits the song's feeling. In a love or heartbreak song a beautiful young woman "
+                "is the song's character: at least every other line's search shows her, with the line's feeling "
+                "(\"sad woman window rain\", \"woman walking alone night city\", \"woman red dress sunset\", "
+                "\"couple holding hands beach\"); the lines between may show the objects and places the lyrics "
+                "name. When choosing clips, a woman whose clip fits the line's feeling beats an object or an "
+                "empty place, and a line whose search asked for a woman never gets a man. She is an unnamed "
+                "stock model, not a person the song is about, so a close shot of her is fine. Stylish and classy, never revealing, lingerie or suggestive. Other songs: city lights, "
+                "rain, roads, sea, sky, nature. Never a person singing, rapping or playing an instrument, never "
+                "text. ")
 STYLES = ["upbeat pop", "lo-fi chill", "acoustic love song", "EDM dance pop", "R&B slow jam", "pop punk",
-          "country pop", "indie folk", "afrobeats", "synthwave", "motivational anthem", "sad piano ballad"]
+          "country pop", "indie folk", "afrobeats", "synthwave", "motivational anthem", "sad piano ballad",
+          "heartbreak pop ballad", "romantic slow pop"]
 THEMES = ["falling in love", "heartbreak", "summer nights", "late night drive", "best friends",
           "chasing dreams", "missing home", "first crush", "self-love", "rainy days", "gym motivation",
           "city lights", "long distance", "new beginnings", "dancing all night"]
+# Romance and heartbreak are what the owner's viewers click (owner, 19-oct-2026):
+# LOVE_SHARE of the songs take one of these, the rest any theme.
+LOVE_THEMES = ["heartbreak", "falling in love", "first crush", "long distance", "she left without a goodbye",
+               "missing her at 3 am", "one-sided love", "love at first sight", "moving on after a breakup",
+               "a love I can't let go of", "first date butterflies", "the one that got away",
+               "he never deserved her", "still waiting for your text"]
+LOVE_SHARE = 0.75
+FEMALE_SHARE = 0.65      # songs sung by a woman, to match the woman on screen
+
+
+def pick_theme(rnd=None):
+    import random
+    rnd = rnd or random
+    return rnd.choice(LOVE_THEMES if rnd.random() < LOVE_SHARE else THEMES)
 
 
 class SongPlan(BaseModel):
@@ -61,7 +87,10 @@ class SongPlan(BaseModel):
 
 
 PLAN_PROMPT = """Write an ORIGINAL catchy English song for a YouTube Shorts music channel.
-Style: {style}. Theme: {theme}.
+Style: {style}. Theme: {theme}. Lead vocal: {vocal}.
+Love and heartbreak songs hit hardest when they feel real: one specific moment
+(a text left on read, her perfume on his jacket, the last goodbye at the door),
+told from the heart, with a chorus people want to send to someone.
 It must work in under 60 seconds: one verse, a short pre-chorus, a big chorus that is
 easy to sing along to and gets stuck in the head. Fresh images, no cliches stacked up,
 nothing explicit, no brand or artist names, never copy or echo an existing song.
@@ -72,13 +101,16 @@ Return:
   one emoji, no false claims.
 - genre: 1-3 words.
 - lyria_style: the musical direction for an AI music model in one sentence: genre,
-  mood, tempo in BPM, main instruments, vocal type (male or female, how they sing).
+  mood, tempo in BPM, main instruments, the lead vocal above and how it sings.
   Never name an artist or a song.
 - verse: exactly 4 lines, 5-9 words each.
 - pre_chorus: exactly 2 lines.
 - chorus: exactly 4 lines, the title in one of them.
-- image_prompt: a cover art scene for a vertical 9:16 picture that fits the song: a
-  place, light and mood; no text, no letters, no logos, no real or famous person.
+- image_prompt: a cover art scene for a vertical 9:16 picture that fits the song: for
+  a love or heartbreak song a beautiful, elegant young woman as the song's character
+  (a fictional person: her look, outfit, expression, the place, light and mood);
+  otherwise a place, light and mood. Stylish and classy, never revealing or suggestive;
+  no text, no letters, no logos, no real or famous person.
 - colors: 2 hex colours (#RRGGBB) that match the cover's mood.
 - description: 2 short sentences for YouTube about the song's feeling, in English.
 - tags: 10-15 search tags (genre, mood, "new song 2026", "ai music"...).
@@ -92,9 +124,9 @@ def _avoid():
         return []
 
 
-def plan(client, style, theme):
+def plan(client, style, theme, vocal="a female lead singer"):
     from quiz_shorts import quiz_model
-    p = kit.ask_json(client, SongPlan, PLAN_PROMPT.format(style=style, theme=theme,
+    p = kit.ask_json(client, SongPlan, PLAN_PROMPT.format(style=style, theme=theme, vocal=vocal,
                                                           avoid=", ".join(_avoid()) or "(none yet)"),
                      model=quiz_model())
     if len(p.verse) < 2 or len(p.chorus) < 2:
@@ -128,7 +160,8 @@ def cover(client, p, out_path):
     from google.genai import types
     model = os.environ.get("GEMINI_IMAGE_MODEL") or "gemini-3.1-flash-image"
     prompt = (f"{p.image_prompt}. Vertical 9:16 album cover art, cinematic, rich colour, soft depth of "
-              "field, beautiful light. No text, no letters, no logos, no watermark, no famous or real person.")
+              "field, beautiful light. A fictional woman may be the song's character: elegant, fully clothed, "
+              "never suggestive. No text, no letters, no logos, no watermark, no famous or real person.")
     try:
         r = client.models.generate_content(
             model=model, contents=[prompt],
@@ -295,13 +328,15 @@ def run(output_dir, pipeline):
     import random
     cfg = fl.settings()
     style = (os.environ.get("MUSIC_STYLE") or random.choice(STYLES))[:60]
-    theme = (os.environ.get("MUSIC_THEME") or random.choice(THEMES))[:60]
+    theme = (os.environ.get("MUSIC_THEME") or pick_theme())[:60]
+    vocal = os.environ.get("MUSIC_VOCAL") or ("female" if random.random() < FEMALE_SHARE else "male")
+    vocal = "a male lead singer" if vocal.lower().startswith("m") else "a female lead singer"
     client = kit.gemini()
     stem = kit.neutral_stem("Song")
     song = os.path.join(output_dir, f".{stem}_song.mp3")
     for attempt in range(SING_TRIES):
-        print(f"🎵 AI song: writing a {style} song about {theme}...")
-        p = plan(client, style, theme)
+        print(f"🎵 AI song: writing a {style} song about {theme} ({vocal})...")
+        p = plan(client, style, theme, vocal)
         print(f"   ✅ \"{p.title}\" ({p.genre})")
         print("🎤 Lyria is singing it...")
         try:
@@ -366,7 +401,7 @@ def run(output_dir, pipeline):
             "video_description_for_instagram": description,
             "ai_voice": "AI music and vocals (Google Lyria)",
             "comment_question": "Which line hit you the hardest? 🎧",
-            "song": {"title": p.title, "style": style, "theme": theme, "genre": p.genre,
+            "song": {"title": p.title, "style": style, "theme": theme, "genre": p.genre, "vocal": vocal,
                      "lyrics": lyrics, "cover": bool(art)},
             "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in footage]}
     kit.finish(output_dir, stem, [clip], None, pipeline, extra={"genre": "music"})

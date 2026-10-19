@@ -45,12 +45,39 @@ FORMATS = {
     # Added 15-oct-2026 for variety (the channel learns which formats get views).
     "truefalse": {"count": 4, "options": 2, "timer": 4, "label": "SACH YA JHOOT"},
     "oddone": {"count": 3, "options": 4, "timer": 5, "label": "ODD ONE OUT"},
+    # A famous woman's free Wikipedia photo to name (owner, 19-oct-2026: the
+    # channels had no glamour at all). One group of stars per Short.
+    "stars": {"count": 4, "options": 4, "timer": 4, "label": "PEHCHANO"},
 }
 # Formats whose facts the answer check confirms with Google Search, and that take a topic.
 FACT_FORMATS = ("mcq", "truefalse", "oddone")
 FLAG_QUESTIONS = ["Ye jhanda kis mulk ka hai?", "Aur ye wala jhanda?", "Ab ye pehchano!",
                   "Last one: ye kis mulk ka hai?"]
 FLAG_Y = 470
+STAR_QUESTIONS = ["Ye kaun hai? Pehchano!", "Aur ye kaun hai?", "Ab isko pehchano!", "Last one: ye kaun hai?"]
+STAR_CARD = (400, 440)    # player_photo.card adds 40 px around: the flag card's room above the question
+# Wikipedia titles whose lead photo has a free licence (checked one by one on
+# 19-oct-2026; player_photo kind "star" checks again and caches 30 days).
+# Hania Aamir, Ayeza Khan, Sajal Aly, Priyanka Chopra and others have none;
+# Saba Hameed's is from 2011 in sunglasses (nobody could name her from it).
+STARS = {
+    "pakistan": ["Mahira Khan", "Mehwish Hayat", "Yumna Zaidi", "Sonya Hussyn", "Ayesha Omar", "Maya Ali",
+                 "Hareem Farooq", "Sanam Saeed", "Minal Khan", "Hira Mani", "Bushra Ansari",
+                 "Reema Khan", "Meera (Pakistani actress)", "Amna Ilyas", "Ramsha Khan", "Momina Mustehsan",
+                 "Aima Baig"],
+    "bollywood": ["Deepika Padukone", "Katrina Kaif", "Alia Bhatt", "Aishwarya Rai", "Kareena Kapoor",
+                  "Anushka Sharma", "Shraddha Kapoor", "Kriti Sanon", "Janhvi Kapoor", "Sara Ali Khan",
+                  "Madhuri Dixit", "Kajol", "Sonam Kapoor", "Disha Patani", "Jacqueline Fernandez",
+                  "Tamannaah Bhatia", "Rashmika Mandanna", "Samantha Ruth Prabhu", "Sonakshi Sinha", "Vidya Balan",
+                  "Taapsee Pannu", "Ananya Panday", "Nora Fatehi", "Shilpa Shetty", "Rani Mukerji",
+                  "Bhumi Pednekar", "Yami Gautam", "Parineeti Chopra", "Mrunal Thakur", "Triptii Dimri"],
+    "hollywood": ["Margot Robbie", "Zendaya", "Scarlett Johansson", "Angelina Jolie", "Gal Gadot", "Emma Watson",
+                  "Selena Gomez", "Taylor Swift", "Jennifer Lawrence", "Anne Hathaway", "Dua Lipa", "Rihanna",
+                  "Shakira", "Ariana Grande", "Beyonc\u00e9", "Emma Stone", "Natalie Portman", "Jennifer Lopez",
+                  "Megan Fox", "Sydney Sweeney", "Anya Taylor-Joy", "Lady Gaga"],
+}
+STAR_GROUPS = {"pakistan": "Pakistani drama and film stars", "bollywood": "Bollywood actresses",
+               "hollywood": "Hollywood and pop stars"}
 TOPICS = ["Pakistan general knowledge", "world general knowledge", "science", "geography and capitals",
           "space and planets", "human body", "animals", "inventions and inventors", "history",
           "sports general knowledge", "food and fruits", "famous places of the world"]
@@ -112,6 +139,7 @@ FORMAT_TEXT = {
     "oddone": ("3 \"odd one out\" puzzles: the question asks which one does not belong (\"In mein se kaun alag "
                "hai?\"), 4 options where three clearly share something and one clearly does not; the answer is the "
                "odd one; the explain field says what the other three share."),
+    "stars": "4 famous actresses and singers to recognise from a photo, 4 names each.",
 }
 
 CHECK_PROMPT = """Check this quiz carefully. For each question say if the marked answer is
@@ -178,6 +206,107 @@ def write_flags(client, handle, rnd=None):
                  for k, (country, options, answer, _p) in enumerate(picked)]
     return (Quiz(title=copy.title, hook_line=copy.hook_line, questions=questions, outro_line=copy.outro_line),
             [p for *_x, p in picked])
+
+
+STAR_PROMPT = """You write the words for a "guess the star" quiz YouTube Short for Pakistani and Indian
+viewers ({handle}): a photo of a famous woman ({group}), four names, a countdown. The stars, in order: {names}.
+Return:
+- title: max 45 characters, Roman Urdu hook, no emoji, never naming a star
+  ("Sirf true fans {n}/{n} pehchan paate hain").
+- hook_line: Roman Urdu voice line, 6-12 words, a challenge.
+- outro_line: Roman Urdu voice line, max 12 words, asking for their score in the comments.
+- facts: one per star in the same order: her best-known film, drama or song, Roman Urdu, max 70
+  characters, only what you are sure of (else ""). About her work, never her body or private life.
+Everyday Roman Urdu in Latin letters, never Devanagari or Arabic script."""
+
+
+def star_name(title):
+    """What the screen and the voice say: "Meera (Pakistani actress)" is Meera."""
+    return re.sub(r"\s*\(.*?\)", "", title).strip()
+
+
+def write_stars(client, handle, out_dir, rnd=None):
+    """(Quiz, [card png], [photo info]): four famous women of one group with
+    their free photos (player_photo kind "star"), wrong names from the same group."""
+    import random
+    import player_photo
+    rnd = rnd or random.Random()
+    group = rnd.choice(sorted(STARS))
+    names = STARS[group]
+    used = {a[5:].lower() for a in _avoid() if a.lower().startswith("star:")}
+    fresh = [n for n in names if star_name(n).lower() not in used]
+    old = [n for n in names if star_name(n).lower() in used]
+    rnd.shuffle(fresh)
+    rnd.shuffle(old)
+    count = FORMATS["stars"]["count"]
+    picked = []
+    for name in fresh + old:     # stars shown before come back only when the group runs out
+        got = player_photo.fetch(name, out_dir, STAR_CARD, kind="star")
+        # The photo is the answer: only one filed under exactly this name.
+        if got and got["info"]["player"].lower() == name.lower():
+            picked.append((name, got))
+        if len(picked) == count:
+            break
+    if len(picked) < count:
+        raise RuntimeError("Could not get enough star photos from Wikipedia (network?); try again later.")
+    shown = [star_name(n) for n, _g in picked]
+    try:
+        copy = kit.ask_json(client, FlagCopy, STAR_PROMPT.format(
+            handle=handle or "this channel", group=STAR_GROUPS[group], names=", ".join(shown), n=count),
+            model=quiz_model())
+    except Exception as e:  # noqa: BLE001 — the quiz works without the facts
+        print(f"   ℹ️ No star facts ({type(e).__name__}); plain answers.")
+        copy = FlagCopy(title=f"Sirf true fans {count}/{count} pehchan paate hain",
+                        hook_line="Kitne stars pehchan sakte ho? Chalo dekhte hain!",
+                        outro_line="Kitne sahi hue? Apna score comment karo!", facts=[])
+    facts = _checked_facts(client, shown, list(copy.facts[:count]))
+    others = [star_name(n) for n in names]
+    questions = []
+    for k, who in enumerate(shown):
+        wrong = [o for o in others if o != who]
+        rnd.shuffle(wrong)
+        options = wrong[:3]
+        answer = rnd.randrange(4)
+        options.insert(answer, who)
+        questions.append(Question(question=STAR_QUESTIONS[k] if k < count - 1 else STAR_QUESTIONS[-1],
+                                  options=options, answer=answer, answer_text=who,
+                                  explain=(facts[k] if k < len(facts) else "")))
+    return (Quiz(title=copy.title, hook_line=copy.hook_line, questions=questions, outro_line=copy.outro_line),
+            [g["card"] for _n, g in picked], [g["info"] for _n, g in picked])
+
+
+FACT_CHECK_PROMPT = """Check each fact about the named famous woman with Google Search: her films,
+dramas and songs. Reply with one line per item: "1: OK" or "1: WRONG - <why>". Nothing else.
+
+{items}"""
+
+
+def _checked_facts(client, names, facts):
+    """Each fact Google Search confirms, else "" (the answer then shows alone).
+    The model's "best-known work" lines were unchecked guesses on the first
+    real run (19-oct-2026), and a quiz channel that gets a fact wrong is told so
+    in its comments."""
+    items = [f"{k}. {n}: {f}" for k, (n, f) in enumerate(zip(names, facts), 1) if f.strip()]
+    if not items:
+        return ["" for _ in names]
+    try:
+        from cricket_shorts import grounded
+        text, _ = grounded(client, FACT_CHECK_PROMPT.format(items="\n".join(items)))
+    except Exception as e:  # noqa: BLE001 — unchecked facts are left out, the quiz goes on
+        print(f"   ℹ️ Star facts not checked ({type(e).__name__}); left out.")
+        return ["" for _ in names]
+    ok = {int(m.group(1)) for m in re.finditer(r"(?m)^\W*(\d+)\s*[:.)-]\s*OK\b", text or "", re.I)}
+    out = [f if k in ok else "" for k, f in enumerate(facts, 1)]
+    if sum(bool(f.strip()) for f in facts) > sum(bool(f) for f in out):
+        print(f"   ⚠️ The check left out {sum(bool(f.strip()) for f in facts) - sum(bool(f) for f in out)} star fact(s).")
+    return out + [""] * (len(names) - len(out))
+
+
+def star_credits(photos):
+    """CC BY needs the author and licence; numbered, not named, so the
+    description does not hand out the answers."""
+    return "Photos (Wikimedia Commons): " + "; ".join(
+        f"{k}) {p['artist']}, {p['licence']}, {p['page']}" for k, p in enumerate(photos, 1))
 
 
 def write(client, fmt, topic, handle):
@@ -372,8 +501,11 @@ def run(output_dir, pipeline):
     topic = (os.environ.get("QUIZ_TOPIC") or "").strip()[:80]
     print(f"🧠 Quiz short ({fmt}{', ' + topic if topic else ''}): writing and checking the questions...")
     client = kit.gemini()
-    pictures = []
-    if fmt == "flags":
+    pictures, star_photos = [], []
+    if fmt == "stars":
+        quiz, pictures, star_photos = write_stars(client, cfg["handle"], output_dir)
+        print(f"   ✅ {len(quiz.questions)} stars: {', '.join(q.answer_text for q in quiz.questions)}.")
+    elif fmt == "flags":
         quiz, flag_pngs = write_flags(client, cfg["handle"])
         import flags
         pictures = [flags.card(p, os.path.join(output_dir, f".flag_{k}.png")) for k, p in enumerate(flag_pngs)]
@@ -394,7 +526,8 @@ def run(output_dir, pipeline):
     lines.append(quiz.outro_line)
     print(f"🎙️ Voicing {len(lines)} lines...")
     import broll
-    broll.prefetch(output_dir, quiz.title, lines, FOOTAGE_RULE, client)   # footage is searched while voicing
+    rule = FOOTAGE_RULE + (STAR_FOOTAGE if fmt == "stars" else "")
+    broll.prefetch(output_dir, quiz.title, lines, rule, client)   # footage is searched while voicing
     said = kit.voice_all(client, [{"text": t, "voice": voice, "style": VOICE_STYLE} for t in lines],
                            output_dir, stem)
     if not any(p for p, _ in said):
@@ -456,7 +589,7 @@ def run(output_dir, pipeline):
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
     transcript = kit.timed_transcript(caps)
     import broll
-    bg, footage = broll.background_for(quiz.title, transcript["segments"], total, output_dir, client, FOOTAGE_RULE)
+    bg, footage = broll.background_for(quiz.title, transcript["segments"], total, output_dir, client, rule)
     print(f"🎬 Rendering the quiz short ({total:.0f}s"
           + (f", music: {os.path.basename(track)}" if track else "") + ")...")
     kit.render(final, total, [cfg["bg"], kit.blend("#4C1D95", cfg["bg"], 0.35), kit.blend("#1E3A8A", cfg["bg"], 0.3)],
@@ -469,6 +602,7 @@ def run(output_dir, pipeline):
             "comment_question": quiz.outro_line,
             "quiz": {"format": fmt, "topic": topic, "number": number,
                      "questions": ([f"flag:{q.answer_text}" for q in quiz.questions] if fmt == "flags"
+                                   else [f"star:{q.answer_text}" for q in quiz.questions] if fmt == "stars"
                                    else [q.question for q in quiz.questions]),
                      "answers": [q.answer_text for q in quiz.questions]}}
     kit.seo_or_fail([clip], transcript, source_title=quiz.title,
@@ -476,6 +610,12 @@ def run(output_dir, pipeline):
                    + (f" It is the channel's daily quiz number {number}: start the title with \"Quiz #{number}:\"."
                       if number else ""),
                    text_limit=4000)
+    if star_photos:
+        import credits
+        clip["photos"] = star_photos
+        for field in ("seo_description", "video_description_for_instagram"):
+            if clip.get(field):
+                clip[field] = credits.insert(clip[field], star_credits(star_photos))
     if footage:
         import credits
         import stock_media
@@ -491,6 +631,9 @@ def run(output_dir, pipeline):
 # The footage behind a question must not give the answer away.
 FOOTAGE_RULE = ("This is a quiz: never footage that shows or hints at an answer, never a flag, map with names, "
                 "text or numbers; calm footage of the question's subject or theme. ")
+
+# The photo on screen is the question: a woman in the footage behind it reads as a clue.
+STAR_FOOTAGE = "Never a person or a face: soft glamour footage only (stage lights, bokeh, a red carpet, city night). "
 
 SEO_CONTEXT = ("IMPORTANT: this short is NOT comedy. It is a quiz Short ({kind}, topic: {topic}) with "
                "exactly {n} questions (a score is out of {n}) and a countdown before each answer. Ignore the comedy phrases and hashtags above: use quiz "
