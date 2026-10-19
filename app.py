@@ -2379,6 +2379,9 @@ async def lifespan(app: FastAPI):
         import my_channels
         import short_kit
         my_channels.failure_reason = _job_reason
+        import reminders
+        import youtube_account as _ya
+        _ya.on_dead = reminders.connection_lost
         try:
             my_channels.move_old_folder()
         except Exception as e:  # noqa: BLE001 — the files stay where they were

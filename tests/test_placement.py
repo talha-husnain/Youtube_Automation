@@ -248,3 +248,28 @@ def test_startup_never_moves_the_real_folder_into_a_redirected_one(tmp_path, mon
     assert mc.CHANNELS_DIR != mc._REAL_CHANNELS_DIR                      # conftest redirects it
     assert mc.move_old_folder(log=lambda *a: None) == 0
     assert (old / "quiz" / "uploads.json").exists()
+
+
+def test_a_cancelled_connection_is_marked_once_and_a_network_drop_is_not(monkeypatch):
+    import pytest
+    mc.add("quiz")
+    _connect("quiz", "UCq", "Sawal Paheli")
+    told = []
+    monkeypatch.setattr(ya, "on_dead", told.append)
+
+    class R:
+        def __init__(self, code, body):
+            self.status_code, self._b = code, body
+
+        def json(self):
+            return self._b
+    with ya.use(mc.account("quiz")):
+        monkeypatch.setattr(ya.httpx, "post", lambda *a, **k: R(503, {"error": "backendError"}))
+        with pytest.raises(RuntimeError):
+            ya._token()
+        assert ya.status()["connected"] and told == []                     # a blip is not a lost connection
+        monkeypatch.setattr(ya.httpx, "post", lambda *a, **k: R(400, {"error": "invalid_grant"}))
+        for _ in range(2):
+            with pytest.raises(RuntimeError):
+                ya._token()
+        assert not ya.status()["connected"] and told == ["Sawal Paheli"]   # told once

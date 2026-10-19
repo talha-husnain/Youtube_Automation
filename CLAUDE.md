@@ -737,6 +737,10 @@ never finished:
     (`/api/youtube/connect-all`) walks every unconnected card: a page names
     the channel to pick, Google, then the callback (`chain` in the sign-in
     state) goes on to the next.
+  - A connection Google cancels (`invalid_grant` on refresh, never a
+    network error or 5xx) is marked `dead` in its token: status() reads it
+    as not connected (Today, reminders, connect all), and
+    `reminders.connection_lost` tells the owner once (toast + Telegram).
   - Tareekh History is not phone-verified (owner has no spare number): long
     videos stay at 14 min and custom thumbnails fail; YouTube picks a frame.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a

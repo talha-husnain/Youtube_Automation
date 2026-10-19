@@ -218,6 +218,11 @@ def disconnect(revoke=True):
         pass
 
 
+# app.py sets it: called once when Google says a connection is cancelled
+# (the owner is told at once, not when an upload fails hours later).
+on_dead = None
+
+
 def _token():
     tok = _read(token_file(), None)
     if not tok:
@@ -229,6 +234,20 @@ def _token():
         "refresh_token": tok["refresh_token"], "grant_type": "refresh_token"}, timeout=30)
     if r.status_code != 200:
         # invalid_grant: revoked, or a "Testing" consent screen's 7-day token expired.
+        # Only that answer marks the connection dead: a network drop or a 5xx
+        # is tried again on the next call.
+        try:
+            dead = r.json().get("error") == "invalid_grant"
+        except ValueError:
+            dead = False
+        if dead and not tok.get("dead"):
+            tok["dead"] = int(time.time())
+            _write(token_file(), tok)
+            if on_dead:
+                try:
+                    on_dead((tok.get("channel") or {}).get("title") or "A channel")
+                except Exception:  # noqa: BLE001 — the mark is what matters
+                    pass
         raise RuntimeError("YouTube connection expired. Connect again.")
     fresh = r.json()
     tok["access_token"] = fresh["access_token"]
@@ -319,7 +338,9 @@ def long_uploads():
 
 def status():
     tok = _read(token_file(), None)
-    return {"configured": configured(), "connected": bool(tok and tok.get("refresh_token")),
+    # A connection Google cancelled reads as not connected: Today, the
+    # reminders and "connect all channels" then pick it up.
+    return {"configured": configured(), "connected": bool(tok and tok.get("refresh_token") and not tok.get("dead")),
             "channel": (tok or {}).get("channel"), "redirect_uri": REDIRECT_URI,
             "expires": refresh_expiry(tok), "granted_at": (tok or {}).get("granted_at") or 0}
 

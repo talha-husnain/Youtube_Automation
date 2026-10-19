@@ -162,6 +162,16 @@ def week_text(today, now=None, rows_fn=_channel_rows):
     return "\n".join([head] + lines)
 
 
+def connection_lost(name):
+    """youtube_account.on_dead: told at once, on the laptop and the phone."""
+    import notify
+    title = f"{name.strip()} needs reconnecting"
+    text = ("Google cancelled its connection, so nothing uploads there. Open Shortkaar, "
+            "Today tab, and press connect all channels.")
+    notify.toast(title, text)
+    _phone(load(), title, text)
+
+
 def _phone(st, title, text):
     """The same message on Telegram when it is connected; never fails the tick."""
     if not st.get("phone"):
