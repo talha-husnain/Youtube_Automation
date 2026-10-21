@@ -230,7 +230,7 @@ a date, number, name or quote that contradicts the facts or looks invented; a qu
 with no documented original (viral quotes are often misattributed); a DISPUTED point told as settled;
 one-sided or judgmental words about any religion, sect, nation or people; disrespect to any religious figure,
 including the Prophet Muhammad or his family named without their customary titles ({honour_short});
-taking sides in current party politics. Small wording choices are fine.
+taking sides in current party politics{more} Small wording choices are fine.
 Return ok=true when there is no real problem; otherwise ok=false and the problems, each short and specific."""
 
 PICK_PROMPT = """Pick pictures for the scenes of a history documentary about: {topic}
@@ -317,7 +317,10 @@ def trending(lang, limit=8):
 
 
 def channel_ideas(client, count=2, avoid=(), best=(), worst=(), notes="", lang="urdu", minutes=DEFAULT_MINUTES,
-                  requests=()):
+                  requests=(), mode="history"):
+    if mode == "explainer":
+        import trend_explainer
+        return trend_explainer.channel_ideas(client, count, avoid, best, worst, notes, lang, minutes, requests)
     import cricket_shorts as cs
     import engage
     learn = engage.request_hint(requests)
@@ -371,9 +374,11 @@ def shape(minutes):
     return words, chapters, scenes
 
 
-def research(client, topic, minutes):
-    """(facts, extra facts, [(source name, url)])."""
+def research(client, topic, minutes, prompts=None):
+    """(facts, extra facts, [(source name, url)]). ``prompts``: (facts, extra)
+    prompt templates of another mode (trend_explainer's)."""
     from google.genai import types
+    facts_prompt, extra_prompt = prompts or (FACTS_PROMPT, EXTRA_PROMPT)
     today = time.strftime("%d %B %Y")
 
     def ask(prompt):
@@ -388,9 +393,9 @@ def research(client, topic, minutes):
                 out.append(((web.title or "").strip(), web.uri))
         return (r.text or "").strip(), out
     with ThreadPoolExecutor(max_workers=2) as pool:
-        main = pool.submit(ask, FACTS_PROMPT.format(today=today, minutes=minutes, topic=topic,
+        main = pool.submit(ask, facts_prompt.format(today=today, minutes=minutes, topic=topic,
                                                     fact_words=max(600, min(3000, minutes * 120))))
-        more = pool.submit(ask, EXTRA_PROMPT.format(today=today, topic=topic))
+        more = pool.submit(ask, extra_prompt.format(today=today, topic=topic))
         (facts, s1), (extra, s2) = main.result(), more.result()
     seen, sources = set(), []
     for name, uri in s1 + s2:
@@ -489,21 +494,40 @@ def part_title(title, part):
     return f"{title.strip()[:88]} | Part {part}"
 
 
-def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_fn=None, series_note=""):
+def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_fn=None, series_note="",
+          mode="history", study_fn=None, keywords_fn=None):
     """(Script, facts, sources) that passed the fact check, or raises.
-    ``series_note``: where this part sits in a series (series_note())."""
+    ``series_note``: where this part sits in a series (series_note()).
+    ``mode`` "explainer": trend_explainer's research, script and rules, the
+    top videos on the topic studied and YouTube's search phrases."""
     from quiz_shorts import quiz_model
-    facts, extra, sources = (research_fn or research)(client, topic, minutes)
+    explainer = mode == "explainer"
+    if explainer:
+        import trend_explainer as te
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            got_research = pool.submit(research_fn or research, client, topic, minutes,
+                                       (te.FACTS_PROMPT, te.EXTRA_PROMPT))
+            got_study = pool.submit(study_fn or te.study, client, topic)
+            got_keywords = pool.submit(keywords_fn or te.keywords, topic, client)
+            facts, extra, sources = got_research.result()
+            studied, phrases = got_study.result(), got_keywords.result()
+        prompt, rules = te.SCRIPT_PROMPT, te.RULES
+    else:
+        facts, extra, sources = (research_fn or research)(client, topic, minutes)
+        studied, phrases, prompt, rules = {}, [], SCRIPT_PROMPT, RULES
     if not facts or "NOT FOUND" in facts[:200].upper() or len(sources) < MIN_SOURCES:
         raise RuntimeError(f"Not enough reliable sources for this topic ({len(sources)}).")
     words, chapters, scenes = shape(minutes)
     fixes = ""
     for attempt in range(2):
-        script = kit.ask_json(client, Script, SCRIPT_PROMPT.format(
+        script = kit.ask_json(client, Script, prompt.format(
             minutes=minutes, handle=handle, topic=topic + (f"\n{series_note}" if series_note else ""),
             lang_rule=LANG_RULE.get(lang, LANG_RULE["urdu"]),
-            fixes=fixes, facts=facts, extra=extra or "(none)", words=words, rules=RULES, sacred=SACRED,
+            fixes=fixes, facts=facts, extra=extra or "(none)", words=words, rules=rules, sacred=SACRED,
             chapters=chapters, scenes=scenes, no_people=NO_PEOPLE,
+            study=studied.get("notes") or "(not available)",
+            rival_titles="\n".join(studied.get("titles") or []) or "(not available)",
+            keywords="\n".join(phrases) or "(not available)",
             honour=HONOUR.get(lang, HONOUR["urdu"])), model=quiz_model())
         if not script.allowed:
             raise RuntimeError(f"Not made: {script.reason or 'the topic is not for this channel'}.")
@@ -513,12 +537,19 @@ def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_
         got = word_count(script)
         if got < words * 0.75:
             notes.append(f"The script is too short: {got} words. Write about {words} words, with more scenes.")
+        copied = te.copied_runs(_narration_text(script), studied.get("texts")) if explainer else []
+        if copied:
+            notes.append("These runs of words repeat another creator's video word for word; say them in your "
+                         "own words: " + "; ".join(f'"{c}"' for c in copied[:8]))
         check = kit.ask_json(client, Check, CHECK_PROMPT.format(
             facts=facts, extra=extra or "(none)", script=_narration_text(script),
+            more=("; " + te.CHECK_MORE) if explainer else ".",
             honour_short="\"Hazrat\", \"sallallahu alaihi wasallam\" / \"(SAW)\"" if lang == "urdu"
             else "\"peace be upon him\""), model=quiz_model())
         if not check.ok:
             notes += check.problems
+        if copied and attempt == 1:
+            raise RuntimeError("The script still repeated another creator's words after a rewrite; skipped.")
         if not notes or (check.ok and got >= MIN_MINUTES * WORDS_PER_MINUTE * 0.8 and attempt == 1):
             return script, facts, sources
         if attempt == 0:
@@ -1236,12 +1267,16 @@ def next_part_line(video_id, part, lang="urdu"):
     return f"{PART_WORD.get(lang, PART_WORD['urdu'])[1]} (Part {part}): https://youtu.be/{video_id}"
 
 
-def describe(script, marks, sources, credits, handle, lang, ai_used, stock_line=""):
+def describe(script, marks, sources, credits, handle, lang, ai_used, stock_line="", mode="history"):
     """The YouTube description: summary, chapters, question, sources, picture credits, follow line."""
     import youtube_account
-    word = WORDS.get(lang, WORDS["urdu"])
+    word = dict(WORDS.get(lang, WORDS["urdu"]))
     slug = re.sub(r"[^A-Za-z0-9]+", "", (script.tags or ["history"])[0].title())[:30] or "History"
     tags = ["#history", "#urdu" if lang == "urdu" else "#documentary", f"#{slug}"]
+    if mode == "explainer":
+        import trend_explainer
+        word["follow"] = trend_explainer.FOLLOW.get(lang, trend_explainer.FOLLOW["urdu"])
+        tags = ["#explained", "#urdu" if lang == "urdu" else "#news", f"#{slug}"]
     head = [script.summary.strip(), "", "\n".join(f"{clock(t)} {_esc(title)}" for title, t in marks), "",
             script.question.strip()]
     if sources:
@@ -1393,7 +1428,7 @@ def render(job_dir, segs, pics, title_pic, out_name, workers=3, log=print):
 
 # ------------------------------------------------------------------ the job
 
-def pictures(client, script, topic, job_dir, log=print):
+def pictures(client, script, topic, job_dir, log=print, mode="history"):
     """(scene index -> canvases, title canvas, credits, AI pictures used)."""
     sc = scenes_of(script)
     os.makedirs(os.path.join(job_dir, ".hv_pics"), exist_ok=True)
@@ -1444,7 +1479,12 @@ def pictures(client, script, topic, job_dir, log=print):
         import broll
         import stock_media
         if stock_media.available():
-            rule = FOOTAGE_RULE + ((NO_PEOPLE + " ") if script.sacred else "")
+            if mode == "explainer":
+                import trend_explainer
+                rule = trend_explainer.FOOTAGE_RULE
+            else:
+                rule = FOOTAGE_RULE
+            rule += (NO_PEOPLE + " ") if script.sacred else ""
             try:
                 lines = [sc[k].picture for k in missing]
                 terms = broll.terms_for(client, topic, lines, rule)
@@ -1548,16 +1588,18 @@ def run(output_dir, pipeline):
     lang = (os.environ.get("HISTORY_LANG") or "urdu").lower()
     lang = lang if lang in LANGS else "urdu"
     captions = os.environ.get("HISTORY_CAPTIONS", "1") != "0"
+    mode = "explainer" if (os.environ.get("HISTORY_MODE") or "").lower() == "explainer" else "history"
     cfg = fl.settings()
     handle = cfg["handle"] or ""
     client = kit.gemini()
     started = time.time()
-    print(f"📜 History video ({minutes} min, {lang}): researching \"{topic}\"...")
+    print(f"📜 {'Explainer' if mode == 'explainer' else 'History'} video ({minutes} min, {lang}): "
+          f"researching \"{topic}\"...")
     series = series_env()
     if series:
         print(f"   📚 Part {series['part']} of {series['parts']} of the series \"{series['name']}\".")
     script, facts, sources = write(client, series_topic(topic, series), handle or "this channel", minutes, lang,
-                                   series_note=series_note(series, lang))
+                                   series_note=series_note(series, lang), mode=mode)
     if series:
         script.title = part_title(script.title, series["part"])
     sc = scenes_of(script)
@@ -1570,7 +1612,7 @@ def run(output_dir, pipeline):
     with ThreadPoolExecutor(max_workers=1) as voicing:
         said_later = voicing.submit(voice_all, client, texts, output_dir, lang,
                                     os.environ.get("HISTORY_VOICE") or "Charon")
-        pics, title_pic, credits, ai_used, first_pic, stock = pictures(client, script, topic, output_dir)
+        pics, title_pic, credits, ai_used, first_pic, stock = pictures(client, script, topic, output_dir, mode=mode)
         said = said_later.result()
     missing = sum(1 for p, _ in said if not p)
     if missing > 2:
@@ -1600,12 +1642,13 @@ def run(output_dir, pipeline):
             print(f"⚠️ English subtitles skipped: {type(e).__name__}: {e}")
     real = [(name, _real_url(url)) for name, url in rank_sources(sources)[:8]]
     import stock_media
-    desc = describe(script, marks, real, credits, handle, lang, ai_used > 0, stock_media.credit_line(stock))
+    desc = describe(script, marks, real, credits, handle, lang, ai_used > 0, stock_media.credit_line(stock), mode)
     clip = {"start": 0.0, "end": round(total, 3), "seconds": round(total, 3), "file": final,
             "video_title_for_youtube_short": script.title, "seo_title": script.title[:100],
             "seo_description": desc, "seo_tags": [t[:40] for t in script.tags][:15],
             "viral_hook_text": (script.hook[0].line if script.hook else "")[:200],
-            "why": f"History video: {topic}", "predicted_score": 85, "genre": "history",
+            "why": f"{'Explainer' if mode == 'explainer' else 'History'} video: {topic}", "predicted_score": 85,
+            "genre": "history",
             "comment_question": script.question, "ai_voice": "AI voice", "ai_made": ai_used > 0,
             "thumbnail_file": os.path.basename(thumb) if thumb else None,
             # Uploaded as the video's own caption track (my_channels, captions.insert).
@@ -1616,6 +1659,7 @@ def run(output_dir, pipeline):
             "source_links": real, "photo_credit": "\n".join(credits),
             "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in stock],
             "history": {"topic": topic, "minutes": minutes, "lang": lang, "sacred": script.sacred, "series": series,
+                        "mode": mode,
                         "pictures": {"free": len(credits), "stock": len(stock), "ai": ai_used},
                         "background_music": bool(tracks),
                         # The teaser Short (run_teaser) reuses the opening's voice and pictures.

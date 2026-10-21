@@ -190,6 +190,14 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                         {ch.long && (
                             <>
                                 <label className="flex items-center gap-2">
+                                    videos about
+                                    <select value={ch.mode || 'history'} onChange={(e) => save({ mode: e.target.value })}
+                                        className="input-field !w-auto text-xs py-1" aria-label="videos about">
+                                        <option value="explainer">this week&apos;s hot topics, explained</option>
+                                        <option value="history">history stories</option>
+                                    </select>
+                                </label>
+                                <label className="flex items-center gap-2">
                                     minutes each
                                     <select value={ch.minutes} onChange={(e) => save({ minutes: Number(e.target.value) })}
                                         className="input-field !w-auto text-xs py-1" aria-label="minutes each">

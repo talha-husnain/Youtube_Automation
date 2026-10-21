@@ -4672,6 +4672,7 @@ async def process_endpoint(
     history_topic: Optional[str] = Form(None),
     history_minutes: Optional[str] = Form(None),
     history_lang: Optional[str] = Form(None),
+    history_mode: Optional[str] = Form(None),
     history_teaser_of: Optional[str] = Form(None),
     history_video_id: Optional[str] = Form(None),
     history_teaser_part: Optional[str] = Form(None),
@@ -4748,6 +4749,7 @@ async def process_endpoint(
         history_topic = body.get("history_topic")
         history_minutes = body.get("history_minutes")
         history_lang = body.get("history_lang")
+        history_mode = body.get("history_mode")
         history_teaser_of = body.get("history_teaser_of")
         history_video_id = body.get("history_video_id")
         history_teaser_part = body.get("history_teaser_part")
@@ -5008,6 +5010,8 @@ async def process_endpoint(
         except (TypeError, ValueError):
             env["HISTORY_MINUTES"] = "10"
         env["HISTORY_LANG"] = "english" if str(history_lang or "").lower() == "english" else "urdu"
+        # "explainer": trending topics explained (trend_explainer.py) instead of history.
+        env["HISTORY_MODE"] = "explainer" if str(history_mode or "").lower() == "explainer" else "history"
         if str(history_today or "").lower() in ("1", "true", "yes"):
             # The daily "on this day" Short (history_today.py), with the events already made.
             env["HISTORY_TODAY"] = "1"

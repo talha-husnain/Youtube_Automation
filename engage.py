@@ -56,12 +56,15 @@ FIRST_COMMENTS = {
                     "Agli controversy kis ki explain karein? 👇"],
     "history": ["Agli kahani kis ki sunni hai? Neeche likho 👇", "Is kahani ka kaunsa hissa sab se hairan kar gaya? 👇",
                 "Kya aap ko yeh pehle se pata tha? 👇"],
+    "explainer": ["Aap ke hisab se aage kya hoga? Neeche likho 👇", "Agla kaunsa topic explain karein? 👇",
+                  "Is mein sab se hairan karne wali baat kya thi? 👇"],
 }
 FOLLOW_LINE = {"comedy": "Roz naye funny Shorts: follow karo 🔔", "cricket": "Roz naye cricket facts: follow karo 🔔",
                "quiz": "Roz naya quiz: follow karo aur apna streak banao 🔔",
                "music": "A new song every day: follow so you don't miss it 🔔",
                "controversy": "Roz ek controversy, sources ke saath: follow karo 🔔",
-               "history": "Nayi tareekhi kahaniyon ke liye subscribe karo 🔔"}
+               "history": "Nayi tareekhi kahaniyon ke liye subscribe karo 🔔",
+               "explainer": "Duniya ki har bari khabar, asaan zaban mein: subscribe karo 🔔"}
 PLAYLISTS = {
     ("cricket", "match"): "Cricket match results", ("cricket", "topic"): "Cricket facts and records",
     ("cricket", "versus"): "Who is better? Player vs player", ("quiz", "mcq"): "GK quiz",
@@ -70,6 +73,7 @@ PLAYLISTS = {
     ("quiz", "oddone"): "Odd one out", ("quiz", "stars"): "Pehchano kaun: guess the star", ("music", None): "New AI songs",
     ("comedy", None): "Comedy Shorts", ("controversy", None): "Controversies explained",
     ("history", None): "History and stories", ("history", "teaser"): "History in 60 seconds", ("history", "today"): "Aaj ki tareekh",
+    ("explainer", None): "Explained: the week's biggest stories", ("explainer", "teaser"): "Explained in 60 seconds",
 }
 
 REPLY_PROMPT = """You reply to viewer comments for {who} ({handle}).
@@ -88,7 +92,8 @@ COMMENTS (JSON):
 WHO = {"comedy": "a Pakistani comedy Shorts channel", "cricket": "a cricket facts channel for Pakistani and Indian fans",
        "quiz": "a quiz and paheli Shorts channel", "music": "an English AI music channel (songs made with AI)",
        "controversy": "a channel that explains controversies about famous people fairly, with sources",
-       "history": "a history channel of long documentary videos (empires, famous events, countries)"}
+       "history": "a history channel of long documentary videos (empires, famous events, countries)",
+       "explainer": "a channel of long videos that explain the week's biggest news and trending topics"}
 # Replies on a controversy must not become new accusations.
 CONTROVERSY_EXTRA = ("Stay neutral and fair: never agree with insults or new accusations about the person, "
                      "never add claims the video did not make; thank people for their view and ask what they think. ")
@@ -96,6 +101,9 @@ CONTROVERSY_EXTRA = ("Stay neutral and fair: never agree with insults or new acc
 HISTORY_EXTRA = ("These are history documentaries: thank viewers, answer only with what the video said, and never "
                  "argue about religion, sects, nations or politics; to a religious comment reply with a short, "
                  "respectful thanks. ")
+# News explainers: the comments argue politics; replies stay neutral and add nothing new.
+EXPLAINER_EXTRA = ("These are news explainers: thank viewers, answer only with what the video said, never take a "
+                   "side in politics, war or religion and never add claims; ask what they think will happen next. ")
 QUIZ_EXTRA = ("These are quiz Shorts: each comment's short_answers lists the right answers of that Short. "
               "When the comment gives answers or a score, say warmly whether they got it right (\"Bilkul sahi!\" / "
               "\"Ufff, galat! Sahi jawab tha ...\"), never mocking. ")
@@ -325,7 +333,7 @@ def auto_replies(acct, kind, handle, my_channel_id, client_fn, log=print, model=
         model=model or kit.text_model(),
         contents=REPLY_PROMPT.format(who=WHO.get(kind, WHO["comedy"]), handle=handle or "this channel",
                                      extra={"quiz": QUIZ_EXTRA, "controversy": CONTROVERSY_EXTRA,
-                                            "history": HISTORY_EXTRA}.get(kind, ""),
+                                            "history": HISTORY_EXTRA, "explainer": EXPLAINER_EXTRA}.get(kind, ""),
                                      comments=json.dumps(payload, ensure_ascii=False)),
         config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=Replies,
                                            temperature=0.8))
@@ -450,7 +458,8 @@ def _playlist_videos(pid, found):
 # ------------------------------------------------------------------ cross promotion
 
 PROMO_LABEL = {"comedy": "comedy", "cricket": "cricket facts", "quiz": "daily quiz", "music": "new songs",
-               "controversy": "controversies explained", "history": "history documentaries"}
+               "controversy": "controversies explained", "history": "history documentaries",
+               "explainer": "big stories explained"}
 
 
 def promo_line(others):

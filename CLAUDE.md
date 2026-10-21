@@ -760,6 +760,25 @@ never finished:
     first planner run with the women hint offered "cosmetic surgery rumors".
   - History: one idea in three a famous woman of history (never a woman of the Prophet's family).
   - Punchline Bazaar unchanged: CC searches for female comedians found only reaction re-uploads.
+- **Trending explainers on the long channel** (`trend_explainer.py`, card setting `mode`
+  "explainer", `HISTORY_MODE`, `tests/test_explainer.py`; owner, 21-oct-2026: six 8-10 min
+  history videos had 0 views each). A scan that day of the month's most viewed Urdu/Hindi long
+  videos: current-affairs explainers 1-3M (Abhi and Niyu, Ankit Inspires India), history far
+  behind, Pakistan economy ~40k. history_videos keeps the whole pipeline; the mode swaps the
+  planner (RIVALS' latest uploads + this week's top explainers + grounded news, specific English
+  topics, half of them on a story a rival is riding), research prompts (claims labelled
+  CONFIRMED/REPORTED/ALLEGED/OPINION), rules (no Pakistani/Indian party politics, no criticism of
+  Pakistan's army or courts), footage rule, description and engage texts (`engage_kind`).
+  - Keywords: YouTube's own suggestions (`suggestqueries`, client=firefox, no key) for 3 phrases
+    a model writes; seeds guessed from capitalised words were junk ("solved past paper").
+  - Rivals are studied, never copied: the top 3 videos' captions go to one call that describes
+    their angles in English; the script writer never sees their words, and `copied_runs` (8 words
+    in a row) forces a rewrite, then refuses the video. Searching with the whole Hinglish topic
+    found no videos; the short phrases did.
+  - Ideas carry `at` and go stale after `IDEA_HOURS` (36); owner ideas stay. Switching the mode
+    clears the planned ideas; "Aaj ki tareekh" is off in explainer mode.
+  - World Affairs by Unacademy, StudyIQ IAS, Adda247 Skills and Nitish Rajput answer "This
+    channel is not available" from Pakistan, so they are not in RIVALS.
 - The Write tool refuses a file it has not read, and a patch script run right after that
   failed Write runs the OLD file: give every patch script a new name.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a

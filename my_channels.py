@@ -103,6 +103,9 @@ KINDS = {
 PLANNERS = {"cricket": "cricket_shorts", "controversy": "controversy_shorts", "history": "history_videos"}
 MINUTES_RANGE, DEFAULT_MINUTES = (2, 30), 10
 LANGS = ("urdu", "english")
+# The long channel's subject: "history" documentaries, or "explainer", this
+# week's hot topics explained (trend_explainer.py; owner, 21-oct-2026).
+LONG_MODES = ("history", "explainer")
 FORMATS = {"quiz": ["mcq", "riddle", "math", "flags", "truefalse", "oddone", "stars"]}
 # Fast results on the cricket channel: a match Pakistan or India just
 # finished is the most searched cricket topic of the day, worth more than
@@ -310,6 +313,10 @@ def update(cid, patch):
                     pass
             if patch.get("lang") in LANGS:
                 ch["lang"] = patch["lang"]
+            if patch.get("mode") in LONG_MODES and patch["mode"] != ch.get("mode", "history"):
+                # The planned ideas belong to the old mode: plan again.
+                ch["mode"] = patch["mode"]
+                ch["ideas"] = []
     return _change(cid, fn)
 
 
@@ -408,6 +415,8 @@ def today_short_due(ch, now=None):
     """True while the history channel still owes today's "Aaj ki tareekh"
     Short (history_today.py): on by default (daily_short), two tries a day."""
     if not KINDS.get(ch.get("kind"), {}).get("long") or not ch.get("daily_short", True):
+        return False
+    if ch.get("mode") == "explainer":      # "on this day" is a history Short
         return False
     day = today(now)
     mine = [j for j in ch.get("jobs") or [] if j.get("format") == "today" and j.get("day") == day]
@@ -596,7 +605,8 @@ def summary(ch):
     out = {k: v for k, v in ch.items() if k not in ("jobs", "ideas", "used")}
     long = bool(KINDS.get(ch["kind"], {}).get("long"))
     if long:
-        out.update(minutes=ch.get("minutes", DEFAULT_MINUTES), lang=ch.get("lang", "urdu"))
+        out.update(minutes=ch.get("minutes", DEFAULT_MINUTES), lang=ch.get("lang", "urdu"),
+                   mode=ch.get("mode", "history"))
     out.update({
         "max_per_day": cap(ch), "long": long,
         **engage_settings(ch), "match_watch": bool(ch.get("match_watch", True)),
@@ -921,6 +931,13 @@ def _next_payload(ch, client_fn, log=print):
                  "history_avoid": made[-40:], "bg_music": True},
                 {"label": f"Aaj ki tareekh: {datetime.now():%d %B}", "format": "today", "topic": ""})
     if kind in PLANNERS:
+        if ch.get("mode") == "explainer" and ch.get("ideas"):
+            # News goes stale: ideas planned more than a day and a half ago are dropped.
+            import trend_explainer
+            keep = trend_explainer.fresh(ch["ideas"])
+            if len(keep) < len(ch["ideas"]):
+                _change(ch["id"], lambda c: c.update(ideas=trend_explainer.fresh(c.get("ideas"))))
+                ch = get(ch["id"])
         if not ch.get("ideas"):
             if time.time() - _ideas_failed.get(ch["id"], 0) < IDEAS_RETRY:
                 return None, None
@@ -928,7 +945,9 @@ def _next_payload(ch, client_fn, log=print):
             planner = importlib.import_module(PLANNERS[kind])
             # The history channel also hears the owner's topic wishes, its language and length.
             extra = ({"notes": ch.get("notes") or "", "lang": ch.get("lang", "urdu"),
-                      "minutes": ch.get("minutes", DEFAULT_MINUTES)} if kind == "history" else {})
+                      "minutes": ch.get("minutes", DEFAULT_MINUTES),
+                      **({"mode": "explainer"} if ch.get("mode") == "explainer" else {})}
+                     if kind == "history" else {})
             # Topics viewers asked for in comments (engage.auto_replies); the
             # planner's own rules still decide whether any of them is made.
             import engage
@@ -959,6 +978,7 @@ def _next_payload(ch, client_fn, log=print):
                       if idea.get("series") else {})
             return ({**look, "genre": "history", "history_topic": idea["text"], "bg_music": True,
                      "history_minutes": long_minutes(ch), "history_lang": ch.get("lang", "urdu"),
+                     "history_mode": ch.get("mode", "history"),
                      "frame_outro": False, **series},
                     {"label": (f"Part {idea['part']}: " if series else "") + idea["text"], "format": "history",
                      "topic": idea["text"],
@@ -1482,8 +1502,14 @@ def promo_targets(exclude):
             yt = ya.status()
         handle = c.get("handle") or (yt.get("channel") or {}).get("handle") or ""
         if yt.get("connected") and handle:
-            out.append((handle if handle.startswith("@") else "@" + handle, c["kind"]))
+            out.append((handle if handle.startswith("@") else "@" + handle, engage_kind(c)))
     return out
+
+
+def engage_kind(ch):
+    """The kind engage.py words comments, playlists and replies for: a long
+    channel in explainer mode is not a history channel any more."""
+    return "explainer" if ch.get("kind") == "history" and ch.get("mode") == "explainer" else ch["kind"]
 
 
 def promote(description, cid):
@@ -1508,7 +1534,7 @@ def engage_pass(cid, client_fn, log=print):
         ch = get(cid)
         if not ch:
             return
-        sw, kind = engage_settings(ch), ch["kind"]
+        sw, kind = engage_settings(ch), engage_kind(ch)
     st = engage.load(acct)
     if time.time() - st.get("last_pass", 0) < ENGAGE_EVERY:
         return
