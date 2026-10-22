@@ -81,7 +81,7 @@ def test_same_youtube_channel_cannot_be_connected_twice(monkeypatch):
 
 def test_channels_are_added_kept_in_range_and_removed():
     a, b = mc.add("cricket"), mc.add("cricket")
-    assert (a["id"], b["id"]) == ("cricket", "cricket2") and a["per_day"] == 8 and len(a["post_times"]) == 8
+    assert (a["id"], b["id"]) == ("cricket", "cricket2") and a["per_day"] == 2 and a["post_times"] == ["14:00", "20:30"]   # 2 a day at busy hours
     ch = mc.update("cricket", {"per_day": 40, "post_times": ["9:00", "bad", "23:30", "09:00"],
                                "handle": "cricket facts", "color": "#abcdef", "enabled": 0})
     assert ch["per_day"] == mc.MAX_PER_DAY and ch["post_times"] == ["09:00", "23:30"]

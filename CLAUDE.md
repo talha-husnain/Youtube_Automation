@@ -809,6 +809,30 @@ never finished:
   16 frames, so clips go up at 16 fps). Use fal's returned status/response URLs (the full model
   path answers 405) and check `error` on COMPLETED. Off until `FAL_KEY` is in .env (read fresh)
   and a character is picked; `DAILY_MAX` 2 a day; a failure keeps the song's stock footage.
+- **Quality pass** (22-oct-2026, `tests/test_quality.py`; owner: ~1,200 views a week on six channels).
+  Our numbers: median watch 2 s (songs), 7 s (quiz), 10 s (cricket), 19 s (controversy); 8 uploads
+  a day per new channel, 51 refused at the daily limit. Every channel in these niches with a median
+  over 40k posts 0.2-2.1 a day, breakouts are same-day stories, Shorts 20-40 s.
+  - Shorts channels default to 2 a day at busy PKT hours (`KINDS` times); the live cards were set too.
+  - `trends.searches` reads Google Trends' daily RSS (`trending/rss?geo=PK|IN`, free, headlines
+    included, 1 h cache); `searches_hint` goes into the cricket, controversy and explainer planners
+    with "a same-day story for this channel comes first". pytrends is dead (archived Apr 2025).
+  - Cricket and controversy scripts aim at 30-35 s (fewer, shorter lines); a match Short opened
+    "Namaste dosto ... swagat hai": the intro line is now the hook, never a greeting.
+  - Quiz titles open on the challenge, "| Quiz #N" goes last (30 of 37 opened "Quiz #N:"). Format
+    `islamic` (Urdu GK Shorts median 0.8-3k views, "quran urdu quiz" 16.5k): `ISLAMIC_RULE`
+    replaces the prompt's "nothing about religion" (undisputed facts only, no fiqh, sects or
+    ranking companions, honorifics), no people in its footage.
+  - Songs start on the chorus, ~32 s (`SHORT_SONG`), 0.15 s fade (the 1.2 s fade made the first
+    second -26 dB); titles may lead with the AI reveal ("This AI song hits too hard"), which is true.
+  - YouTube (help pages, 2025-26): views count every start and replay; only 3 hashtags show; Shorts
+    custom thumbnails are YPP + desktop only; the Oct 2026 originality update gives aggregating /
+    re-upload channels "less distribution" (the comedy channel's model).
+  - `.env` `GEMINI_IMAGE_MODEL` is `gemini-nano-banana-2.1` (the named successor of
+    gemini-3.1-flash-image, half the price; tested with our generate_content call).
+- Research agents that ran ~250 yt-dlp calls in parallel got this laptop's IP the "Sign in to
+  confirm you're not a bot" answer (22-oct-2026), which the pipeline's own yt-dlp shares: never fan
+  out yt-dlp from an agent; use web search, or a few calls in a row.
 - The Write tool turns `\uXXXX` written in a file into the literal character (invisible U+FEFF,
   RTL letters in regex classes): write `chr()` or fix the escapes after (a patch matching
   `"\\ufeff"` then fails to find it).

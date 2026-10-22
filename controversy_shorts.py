@@ -83,7 +83,7 @@ Start every claim with REPORTED, ALLEGED, ADMITTED or RULED.
 If the topic touches any of these, answer only "NOT ALLOWED: <why>": {rules}.
 If fewer than three reliable sources cover it, answer only "NOT FOUND"."""
 
-STORY_PROMPT = """You write a 40-55 second YouTube Short that explains a controversy about a famous
+STORY_PROMPT = """You write a 30-35 second YouTube Short that explains a controversy about a famous
 person, for Pakistani and Indian viewers, voiced by the channel {handle}. Topic: {topic}
 Use ONLY the facts below; never add a claim, a date or a quote that is not in them.
 {fixes}
@@ -97,12 +97,13 @@ Return:
 - title: max 45 characters, Roman Urdu, curious but true ("Shoaib Akhtar aur PCB: asal kahani kya thi?"),
   no emoji, no word that calls the person guilty of something only alleged.
 - hook_line: Roman Urdu, 8-14 words, the question the video answers.
-- beats: 4 to 6, in time order, covering what happened, the reaction, the person's own side,
+- beats: 3 to 4, in time order, covering what happened, the reaction, the person's own side,
   and the outcome. Each: when (max 12 characters: "2019", "MARCH 2023"), headline (max 30
-  characters), detail (Roman Urdu, max 80 characters), line (Roman Urdu voice line, 10-20 words).
+  characters), detail (Roman Urdu, max 80 characters), line (Roman Urdu voice line, 8-15 words).
+  The whole Short is about 30-35 seconds: the ones that break out in this niche run 23-40 s.
   Anything ALLEGED is said as an allegation ("un par ilzaam laga ke...", "reports ke mutabiq...");
   only ADMITTED, RULED or plainly REPORTED events are said as facts.
-- status_line: Roman Urdu, 10-18 words: where it stands today.
+- status_line: Roman Urdu, 8-12 words: where it stands today.
 - question: Roman Urdu, max 70 characters, asking viewers' opinion without attacking anyone,
   ending with "comment mein batao" or similar.
 Neutral and fair: no insults, no mocking, no guessing at motives. Everyday Roman Urdu in Latin
@@ -146,7 +147,7 @@ One per line, each starting with "topic: ". Nothing else."""
 def channel_ideas(client, count=8, avoid=(), best=(), worst=(), requests=()):
     import engage
     import trends
-    learn = trends.hint("controversy") + engage.request_hint(requests)
+    learn = trends.searches_hint() + trends.hint("controversy") + engage.request_hint(requests)
     if best:
         learn += "These did BEST on the channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:

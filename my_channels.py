@@ -74,21 +74,24 @@ EXPLORE = 0.3
 MIN_FOR_LEARNING = 3
 
 KINDS = {
+    # Shorts channels start at 2 a day at Pakistan's busy hours: every channel in these
+    # niches with a median over 40k views posts 0.2-2.1 a day; ours posted 8 around the
+    # clock, hit the daily limit 51 times and got a median of 0-5 views (22-oct-2026).
     "cricket": {"label": "Cricket facts and updates", "genre": "cricket", "color": "#0B3D2E",
-                "times": ["11:30", "13:30", "15:30", "17:30", "19:30", "21:30", "23:30", "00:30"],
+                "times": ["14:00", "20:30"], "per_day": 2,
                 "about": "Animated stats, records and match results with a voice-over and free-licence "
                          "player photos. Ideas come from Google Search every day."},
     "quiz": {"label": "Quiz and paheliyan", "genre": "quiz", "color": "#16206B",
-             "times": ["10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00", "00:00"],
+             "times": ["16:00", "21:30"], "per_day": 2,
              "about": "General knowledge questions, paheliyan and quick maths puzzles with a countdown. "
                       "Viewers answer in the comments before the reveal."},
     "controversy": {"label": "Controversies, explained", "genre": "controversy", "color": "#2A0A0A",
-                    "times": ["11:15", "13:15", "15:15", "17:15", "19:15", "21:15", "23:15", "00:45"],
+                    "times": ["13:00", "19:30"], "per_day": 2,
                     "about": "What really happened in famous people's controversies: researched with sources, "
                              "allegations told as allegations, both sides, a fairness check before every video. "
                              "No religion, politics or army."},
     "music": {"label": "AI songs in English", "genre": "music", "color": "#2A0B2E",
-              "times": ["01:00", "04:00", "07:00", "10:00", "13:00", "16:00", "19:00", "22:00"],
+              "times": ["18:00", "23:00"], "per_day": 2,
               "about": "Original songs under a minute: AI lyrics, sung by Google Lyria, with a cover "
                        "picture and the lyrics on screen. About $0.15 of Gemini per song."},
     # Long 16:9 videos (history_videos.py): 1-3 a day, a job takes 15-60 min on the laptop.
@@ -115,7 +118,7 @@ LANGS = ("urdu", "english")
 # The long channel's subject: "history" documentaries, or "explainer", this
 # week's hot topics explained (trend_explainer.py; owner, 21-oct-2026).
 LONG_MODES = ("history", "explainer")
-FORMATS = {"quiz": ["mcq", "riddle", "math", "flags", "truefalse", "oddone", "stars"]}
+FORMATS = {"quiz": ["mcq", "riddle", "math", "flags", "truefalse", "oddone", "stars", "islamic"]}
 # Fast results on the cricket channel: a match Pakistan or India just
 # finished is the most searched cricket topic of the day, worth more than
 # any planned idea, so it jumps the queue and is published 20 minutes after
@@ -1022,8 +1025,9 @@ def _next_payload(ch, client_fn, log=print):
     if kind == "quiz":
         import quiz_shorts
         fmt = pick_format(ch, FORMATS["quiz"])
-        topic = random.choice(quiz_shorts.TOPICS) if fmt in quiz_shorts.FACT_FORMATS else ""
-        if ch.get("notes") and fmt in quiz_shorts.FACT_FORMATS and random.random() < 0.5:
+        topics = quiz_shorts.ISLAMIC_TOPICS if fmt == "islamic" else quiz_shorts.TOPICS
+        topic = random.choice(topics) if fmt in quiz_shorts.FACT_FORMATS else ""
+        if ch.get("notes") and fmt in quiz_shorts.FACT_FORMATS and fmt != "islamic" and random.random() < 0.5:
             topic = ch["notes"][:80]
         # The channel's running number: "QUIZ #12" makes a daily series to come back for.
         number = 1 + sum(1 for j in ch.get("jobs") or [] if j.get("status") in ("done", "uploaded"))

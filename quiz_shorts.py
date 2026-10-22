@@ -48,9 +48,23 @@ FORMATS = {
     # A famous woman's free Wikipedia photo to name (owner, 19-oct-2026: the
     # channels had no glamour at all). One group of stars per Short.
     "stars": {"count": 4, "options": 4, "timer": 4, "label": "PEHCHANO"},
+    # Urdu GK Shorts sit at a median of 0.8k-3k views, "quran urdu quiz" ones at 16.5k
+    # (research 22-oct-2026): Islamic general knowledge, under ISLAMIC_RULE.
+    "islamic": {"count": 3, "options": 4, "timer": 5, "label": "ISLAMI SAWAL"},
 }
 # Formats whose facts the answer check confirms with Google Search, and that take a topic.
-FACT_FORMATS = ("mcq", "truefalse", "oddone")
+FACT_FORMATS = ("mcq", "truefalse", "oddone", "islamic")
+ISLAMIC_TOPICS = ["the Quran: its surahs, ayat and revelation", "Islamic months and festivals",
+                  "the five pillars of Islam", "famous mosques and holy places", "prophets named in the Quran",
+                  "early Islamic history: places, dates and battles"]
+# Replaces the "nothing about religion" rule for the Islamic format.
+ISLAMIC_RULE = ("only facts every Muslim school agrees on (Sunni and Shia alike), as found in the Quran or the "
+                "best-known history (how many surahs, which surah has no Bismillah, the month of fasting); never "
+                "a question about rulings (fiqh), sects, disputed history, or ranking the companions or the "
+                "family of the Prophet; always the honorifics (Prophet Muhammad (SAW), Hazrat Musa (AS)); "
+                "respectful words only, nothing playful about the sacred, and nothing about a living person.")
+ISLAMIC_FOOTAGE = (" This is an Islamic quiz: only mosques, Islamic architecture, calligraphy-free places and "
+                   "calm nature; no people at all, no other religions' symbols.")
 FLAG_QUESTIONS = ["Ye jhanda kis mulk ka hai?", "Aur ye wala jhanda?", "Ab ye pehchano!",
                   "Last one: ye kis mulk ka hai?"]
 FLAG_Y = 470
@@ -140,6 +154,7 @@ FORMAT_TEXT = {
                "hai?\"), 4 options where three clearly share something and one clearly does not; the answer is the "
                "odd one; the explain field says what the other three share."),
     "stars": "4 famous actresses and singers to recognise from a photo, 4 names each.",
+    "islamic": "3 Islamic general-knowledge multiple-choice questions, 4 options each.",
 }
 
 CHECK_PROMPT = """Check this quiz carefully. For each question say if the marked answer is
@@ -314,7 +329,8 @@ def write(client, fmt, topic, handle):
     f = FORMATS[fmt]
     extra = f["count"] + 2   # spares for the ones the check drops
     prompt = PROMPT.format(
-        seconds=45 if fmt == "mcq" else 35, handle=handle or "this channel", format_text=FORMAT_TEXT[fmt],
+        seconds=45 if fmt in ("mcq", "islamic") else 35, handle=handle or "this channel",
+        format_text=FORMAT_TEXT[fmt],
         topic_text=f"Topic: {topic}." if topic and fmt in FACT_FORMATS else "",
         avoid="\n".join(f"  - {a}" for a in _avoid()) or "  (nothing yet)", count=extra, final=f["count"],
         q_chars=140 if fmt == "riddle" else 90,
@@ -322,6 +338,9 @@ def write(client, fmt, topic, handle):
                       if f["options"] else "an empty list."),
         answer_text=(f"index 0-{f['options'] - 1} of the right option (vary its position)."
                      if f["options"] else "-1."))
+    if fmt == "islamic":
+        prompt = prompt.replace("nothing about religion, politics, or a living person's private life.",
+                                ISLAMIC_RULE)
     quiz = kit.ask_json(client, Quiz, prompt, model=quiz_model())
     good = [q for q in quiz.questions if _shape_ok(q, f)]
     good = _checked(client, fmt, good)
@@ -526,7 +545,7 @@ def run(output_dir, pipeline):
     lines.append(quiz.outro_line)
     print(f"🎙️ Voicing {len(lines)} lines...")
     import broll
-    rule = FOOTAGE_RULE + (STAR_FOOTAGE if fmt == "stars" else "")
+    rule = FOOTAGE_RULE + (STAR_FOOTAGE if fmt == "stars" else ISLAMIC_FOOTAGE if fmt == "islamic" else "")
     broll.prefetch(output_dir, quiz.title, lines, rule, client)   # footage is searched while voicing
     said = kit.voice_all(client, [{"text": t, "voice": voice, "style": VOICE_STYLE} for t in lines],
                            output_dir, stem)
@@ -607,7 +626,10 @@ def run(output_dir, pipeline):
                      "answers": [q.answer_text for q in quiz.questions]}}
     kit.seo_or_fail([clip], transcript, source_title=quiz.title,
                    context=SEO_CONTEXT.format(kind=FORMAT_TEXT[fmt], topic=topic or "mixed", n=len(quiz.questions))
-                   + (f" It is the channel's daily quiz number {number}: start the title with \"Quiz #{number}:\"."
+                   # The number goes LAST: 30 of 37 titles opened "Quiz #N:", which spent the
+                   # first words (the ones a viewer reads) on nothing (audit, 22-oct-2026).
+                   + " The title opens on the challenge or the stake, never on the quiz number."
+                   + (f" It is the channel's daily quiz number {number}: end the title with \" | Quiz #{number}\"."
                       if number else ""),
                    text_limit=4000)
     if star_photos:

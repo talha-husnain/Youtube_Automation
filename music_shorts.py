@@ -33,6 +33,11 @@ import framed_layout as fl
 CX = kit.OUT_W // 2
 LYRIA_MODEL = os.environ.get("MUSIC_MODEL") or "lyria-3.5"
 MAX_SONG = 58.0      # Shorts music of a minute at most (owner's ask), end card after
+# What a song Short uses: the chorus first, ~half a minute, so it loops back into the hook.
+# Starting on the verse with a 1.2 s fade-in, viewers left after a median 2 s (4.5% watched,
+# 13 Shorts, learning stats 22-oct-2026).
+SHORT_SONG = 32.0
+FADE = 0.15
 SING_TRIES = 3
 # Mood footage under the lyrics: a stranger singing or playing would look like
 # a music video of someone else's song. A woman as the song's character is
@@ -97,8 +102,11 @@ nothing explicit, no brand or artist names, never copy or echo an existing song.
 Never reuse these titles, already made: {avoid}
 Return:
 - title: max 30 characters.
-- youtube_title: max 70 characters, the song title plus a short catchy hook, at most
-  one emoji, no false claims.
+- youtube_title: max 70 characters: a hook that makes people tap, then the song title.
+  Hooks that work: the AI reveal (it IS an AI song, so it is true: "This AI song hits too
+  hard 💔", "An AI wrote this about your ex"), or the moment the song is about ("When she
+  leaves you on read"). A brand-new song title alone has no search demand. At most one
+  emoji, no false claims.
 - genre: 1-3 words.
 - lyria_style: the musical direction for an AI music model in one sentence: genre,
   mood, tempo in BPM, main instruments, the lead vocal above and how it sings.
@@ -378,8 +386,8 @@ def run(output_dir, pipeline):
                 ai_influencer.SECONDS, output_dir)
             if usd:
                 ai_influencer.record(usd)
-    start, end = window(lines, seconds, media_seconds(dance_bg) if dance_bg else MAX_SONG,
-                        p.chorus[0] if dance_bg and p.chorus else None)
+    start, end = window(lines, seconds, media_seconds(dance_bg) if dance_bg else SHORT_SONG,
+                        p.chorus[0] if p.chorus else None)
     lines = [(t, a - start, min(b, end) - start) for t, a, b in lines if a < end - 0.5 and a >= start]
     body = end - start
     print(f"   ✅ {len(lines)} lines timed; using {start:.1f}-{end:.1f}s.")
@@ -406,7 +414,7 @@ def run(output_dir, pipeline):
     print(f"🎬 Rendering the song short ({total:.0f}s{', with footage' if bg else ', with cover' if art else ''})...")
     kit.render(final, total, [kit.blend(colors[0], "#000000", 0.6), kit.blend(colors[-1], "#000000", 0.5)],
                events, LYRIC_STYLES, sfx=card_sfx, music=(song, start, 1.0), visualizer=True,
-               fades=(1.2, body), music_seconds=body, bg_image=art, bg_video=bg)
+               fades=(FADE, body), music_seconds=body, bg_image=art, bg_video=bg)
     hashtags = " ".join("#" + re.sub(r"[^A-Za-z0-9_]", "", h) for h in (p.hashtags or [])[:4] if h.strip())
     description = (f"{p.description.strip()}\n\nLyrics:\n" + "\n".join(p.chorus) +
                    "\n\nAn original AI-generated song: lyrics written with AI, music and vocals made "

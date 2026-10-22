@@ -34,11 +34,11 @@ def test_owner_requests_are_understood():
     assert qv.parse_request("Surah Yaseen")["surah"] == 36
     assert qv.parse_request("surah rehman")["surah"] == 55
     assert qv.parse_request("Al-Mulk")["surah"] == 67
-    assert qv.parse_request("36")["text"] == "Surah Ya-Sin"
+    assert qv.parse_request("36")["text"] == "Surah Yaseen"
     kursi = qv.parse_request("Ayat ul Kursi")
     assert (kursi["surah"], kursi["from"], kursi["to"]) == (2, 255, 255) and kursi["owner"]
     part = qv.parse_request("2:1-20")
-    assert (part["from"], part["to"], part["text"]) == (1, 20, "Surah Al-Baqarah, Ayat 1-20")
+    assert (part["from"], part["to"], part["text"]) == (1, 20, "Surah Baqarah, Ayat 1-20")
     assert qv.parse_request("2:300") is None and qv.parse_request("my favourite song") is None
 
 
@@ -51,12 +51,12 @@ def test_a_long_surah_is_made_in_parts_that_end_on_a_ruku():
     passage, left = qv.plan_next(ideas, {}, cost_fn=lambda s, n: 20.0, open_fn=lambda s, a: 0.0,
                                  rukus_fn=_ruku_every_12)
     assert passage["segments"] == [[36, 1, 12]] and passage["part"] == 1      # 240 s, the first ruku ends
-    assert left[0]["from"] == 13 and left[0]["part"] == 2 and left[0]["text"] == "Surah Ya-Sin, Ayat 13-83"
+    assert left[0]["from"] == 13 and left[0]["part"] == 2 and left[0]["text"] == "Surah Yaseen, Ayat 13-83"
     passage, left = qv.plan_next(left, {}, cost_fn=lambda s, n: 20.0, open_fn=lambda s, a: 0.0,
                                  rukus_fn=_ruku_every_12)
     assert passage["segments"] == [[36, 13, 24]] and passage["part"] == 2
-    assert qv.title_of(passage["segments"], qv.settings_of({}), passage["part"]).startswith(
-        "Surah Ya-Sin Part 2 (Ayat 13-24) | Urdu Tarjuma ke Saath")
+    assert qv.title_of(passage["segments"], qv.settings_of({}), passage["part"]) == (
+        "Surah Yaseen Part 2 (Ayat 13-24) with Urdu Translation | Beautiful Tilawat | Mishary Alafasy")
 
 
 def test_a_video_never_passes_five_minutes_but_always_has_an_ayah():
@@ -74,7 +74,7 @@ def test_short_surahs_share_a_video_but_parts_never_do():
                                  rukus_fn=_ruku_every_12)
     assert passage["segments"] == [[112, 1, 4], [113, 1, 5], [114, 1, 6]] and passage["part"] is None
     assert left[0]["surah"] == 36           # Ya-Sin does not fit whole, so it starts the next video
-    assert qv.title_of(passage["segments"], qv.settings_of({})).startswith("Surah Al-Ikhlas, Al-Falaq, An-Nas |")
+    assert qv.title_of(passage["segments"], qv.settings_of({})).startswith("Surah Ikhlas, Falaq, Naas with Urdu")
 
 
 def test_the_bismillah_opens_a_surah_but_not_al_fatiha_at_tawbah_or_a_later_part():
@@ -140,7 +140,7 @@ def test_the_next_video_is_planned_and_a_finished_surah_is_remembered(monkeypatc
     assert asked["ideas"][0]["surah"] == 1 and asked["settings"]["reciter"] == 7
     assert payload["genre"] == "quran" and payload["quran_plan"]["segments"] == [[1, 1, 7]]
     assert payload["quran_plan"]["voice"] == "urdu" and payload["frame_outro"] is False
-    assert meta["format"] == "quran" and meta["label"] == "Surah Al-Fatihah" and "series" not in meta
+    assert meta["format"] == "quran" and meta["label"].startswith("Surah Fatiha with") and "series" not in meta
     after = mc.get(ch["id"])
     assert "quran:1" in after["used"] and after["ideas"][0]["surah"] == 36
 
@@ -154,7 +154,7 @@ def test_a_failed_passage_is_made_again_before_the_next_one(monkeypatch):
     monkeypatch.setattr(qv, "plan_next", lambda *a: pytest.fail("planned past a failed passage"))
     payload, meta = mc.next_payload(mc.get(ch["id"]), lambda: None)
     assert payload["quran_plan"]["segments"] == [[36, 1, 12]] and meta["passage_try"] == 2
-    assert meta["series"] == "Surah Ya-Sin, Urdu Tarjuma ke Saath" and meta["series_part"] == 1
+    assert meta["series"] == "Surah Yaseen, with Urdu Translation" and meta["series_part"] == 1
     assert mc.get(ch["id"])["jobs"][0]["redone"] is True
 
 
@@ -165,7 +165,7 @@ def test_owner_can_put_a_surah_first_and_drop_one():
     assert mc.get(ch["id"])["ideas"][0]["surah"] == 67
     with pytest.raises(ValueError, match="surah"):
         mc.add_idea(ch["id"], "something funny")
-    mc.drop_idea(ch["id"], "Surah Ya-Sin")
+    mc.drop_idea(ch["id"], "Surah Yaseen")
     after = mc.get(ch["id"])
     assert all(i["surah"] != 36 for i in after["ideas"]) and "quran:36" in after["used"]
     assert all(i["id"] != "36" for i in qv.queue([u[6:] for u in after["used"] if u.startswith("quran:")]))

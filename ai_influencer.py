@@ -58,7 +58,8 @@ INITIATE_URL = "https://rest.fal.ai/storage/upload/initiate?storage_type=gcs"
 DANCE_TERMS = ["woman dancing", "girl dancing", "dance choreography", "dancer studio",
                "hip hop dance woman", "contemporary dance woman", "woman dancing happy"]
 DRIVE_RULE = ("This clip only drives the MOTION of an AI dancer, so judge the movement and framing, not the "
-              "person: exactly ONE person, the WHOLE body from head to feet inside the frame, a still camera "
+              "person: exactly ONE real filmed person (never a cartoon, drawing or animation: the first Pixabay "
+              "picks were line-art girls, 22-oct-2026), the WHOLE body from head to feet inside the frame, a still camera "
               "(no pans, no cuts), real dancing that keeps going (not walking, posing or stretching). Never a "
               "suggestive dance (twerking, grinding, moves that focus on the body). Score 0 for anything else.")
 LOOKS = [

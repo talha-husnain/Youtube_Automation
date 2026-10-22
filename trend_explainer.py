@@ -185,7 +185,8 @@ One per line, each starting with "topic: ", at most 100 characters. Nothing else
 def channel_ideas(client, count=2, avoid=(), best=(), worst=(), notes="", lang="urdu", minutes=10, requests=()):
     import cricket_shorts as cs
     import engage
-    learn = engage.request_hint(requests)
+    import trends
+    learn = trends.searches_hint() + engage.request_hint(requests)
     if best:
         learn += "These did BEST on our channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:

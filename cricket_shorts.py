@@ -39,7 +39,7 @@ import framed_layout as fl
 VOICE_STYLE = "like an excited Pakistani cricket commentator, natural Urdu accent, fast and energetic"
 GAP = 0.25          # between voice lines
 LEAD = 0.5          # before the first line
-MAX_BEATS = 9
+MAX_BEATS = 8           # ~30 s: the Shorts that broke out in this niche run 14-35 s (research 22-oct-2026)
 WATCH_MAX_MINUTES = 45
 
 
@@ -97,7 +97,7 @@ match, the top 3 performers with exact figures (runs and balls, or wickets-runs)
 4 key moments (with the over when known). If the match has not been played, is
 ambiguous, or you cannot find it, say NOT FOUND and why."""
 
-STORY_PROMPT = """You make a 40-50 second animated YouTube Short about a cricket match for
+STORY_PROMPT = """You make a 30-35 second animated YouTube Short about a cricket match for
 Pakistani and Indian fans, voiced by the channel {handle}. Use ONLY the facts below:
 never invent a score, figure, over or name. If the facts say NOT FOUND or do not
 describe a finished match, return found=false and empty lists.
@@ -114,15 +114,18 @@ Return:
 - teams: exactly 2, in batting order: name (country/franchise), short (2-4 capital
   letters), score ("146" or "150/5"), overs ("19.1"), color (the team's usual kit
   colour as #RRGGBB, readable on dark backgrounds).
-- stars: the 1 to 3 best performers: name, team (short), figures ("69* (53)" or
+- stars: the 1 to 2 best performers: name, team (short), figures ("69* (53)" or
   "4/30"), note (Roman Urdu, max 40 characters).
-- moments: 2 to 4 turning points: label (max 14 characters, "OVER 17" or "POWERPLAY"),
+- moments: 1 to 3 turning points: label (max 14 characters, "OVER 17" or "POWERPLAY"),
   text (Roman Urdu, max 70 characters).
-- beats: the voice-over in order, 7 to {max_beats} lines. Each has scene (intro,
+- beats: the voice-over in order, 5 to {max_beats} lines. Each has scene (intro,
   scores, star, moment or result), ref (index into stars or moments for those scenes,
-  else 0) and line: Roman Urdu commentary in Latin letters, 8 to 16 words, excited like
+  else 0) and line: Roman Urdu commentary in Latin letters, 7 to 13 words, excited like
   a TV commentator, every number exactly as in the facts. Order: 1 intro, 1 scores,
   one per star, one per moment, 1 result. The result line ends with the question.
+  The intro line is the HOOK, not a welcome: it opens on the most dramatic fact of the
+  match ("Sirf 3 gend mein 14 run chahiye the, aur phir..."). Never a greeting, never
+  the channel's name, never "dosto" or "swagat": viewers swipe in the first second.
 - question: a cheeky question for the comments, Roman Urdu, max 70 characters,
   ending with "comment mein batao" or similar.
 Roman Urdu always in Latin letters, never Devanagari or Arabic script. No swear words."""
@@ -238,7 +241,7 @@ format and the records that stand out. Say NOT FOUND if nothing reliable comes u
 
 # The rule-steps line is there because "LBW rule explained simply" first came
 # back as LBW trivia (Sachin's 63, Kumble's 156) with no rule in it (8-oct-2026).
-TOPIC_STORY_PROMPT = """You make a 40-55 second YouTube Short for Pakistani and Indian cricket
+TOPIC_STORY_PROMPT = """You make a 30-35 second YouTube Short for Pakistani and Indian cricket
 fans, voiced by the channel {handle}, about: {topic}
 Use ONLY the facts below; never invent a number, date or name. If they say NOT FOUND,
 return found=false and empty lists.
@@ -253,13 +256,13 @@ Return:
   "RECORDS", "DID YOU KNOW", "HISTORY".
 - hook_line: the first voice line, Roman Urdu, 8-14 words, a surprising fact or a
   question that stops the scroll.
-- facts: 4 to 6. When the topic asks how a RULE works, the facts ARE the rule, step
+- facts: 3 to 4 (5 only for a rule). When the topic asks how a RULE works, the facts ARE the rule, step
   by step in order (each condition the umpire checks, then a simple example), and at
   most the last one may be trivia. Otherwise the most surprising first (or a
   countdown). Each: headline (max 30
   characters, Roman Urdu or the English cricket term), stat (the number or short value
   to show big, max 10 characters, "" when there is none), detail (Roman Urdu, max 80
-  characters, what the number means), line (the voice line, Roman Urdu, 10-20 words,
+  characters, what the number means), line (the voice line, Roman Urdu, 8-14 words,
   excited, numbers exactly as in the facts).
 - question: a cheeky question for the comments, Roman Urdu, max 70 characters, ending
   with "comment mein batao" or similar.
@@ -343,7 +346,7 @@ def channel_ideas(client, count=8, avoid=(), best=(), worst=(), requests=()):
     import time
     import engage
     import trends
-    learn = trends.hint("cricket") + engage.request_hint(requests)
+    learn = trends.searches_hint() + trends.hint("cricket") + engage.request_hint(requests)
     if best:
         learn += "These did BEST on the channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:
@@ -785,7 +788,7 @@ economy, hundreds and fifties (or 5-wicket hauls), highest score or best figures
 ICC titles won. Exact numbers only. Say NOT FOUND if either player or the numbers are
 unclear."""
 
-VERSUS_PROMPT = """You make a 35-45 second "who is better?" YouTube Short comparing two
+VERSUS_PROMPT = """You make a 30-40 second "who is better?" YouTube Short comparing two
 cricketers by numbers, for Pakistani and Indian fans, voiced by the channel {handle}.
 Topic: {topic}. Use ONLY the facts below; never invent a number. If they say NOT FOUND,
 return found=false and empty lists.

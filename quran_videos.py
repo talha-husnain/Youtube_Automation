@@ -111,7 +111,18 @@ FOOTAGE_RULE = ("This is the background of a Quran recitation video: calm, beaut
                 "statues, churches, temples, crosses or symbols of other religions, text, logos, watermarks, "
                 "cars, roads, phones, screens, city streets, parties, alcohol, fire, anything scary, and dark or "
                 "night footage (it turns black under the text).")
-TITLE_WORDS = {"urdu": "Urdu Tarjuma ke Saath", "english": "with English Translation"}
+# The biggest Urdu Quran videos say it in English ("Surah Yasin | Surat Yaseen with Urdu
+# Translation | Quran Tilawat Beautiful Voice", 84M views; yt-dlp search, 22-oct-2026).
+TITLE_WORDS = {"urdu": "with Urdu Translation", "english": "with English Translation"}
+TITLE_TAIL = "Beautiful Tilawat"
+# How those searches spell the surahs (Quran.com says "Ya-Sin", "Ar-Rahman", "Al-Mulk").
+SEARCH_NAMES = {1: "Fatiha", 2: "Baqarah", 3: "Al-Imran", 12: "Yusuf", 18: "Kahf", 19: "Maryam", 20: "Taha",
+                24: "Noor", 32: "Sajdah", 36: "Yaseen", 44: "Dukhan", 48: "Fatah", 55: "Rahman", 56: "Waqiah",
+                62: "Jumma", 67: "Mulk", 71: "Nooh", 73: "Muzammil", 76: "Dahr", 78: "Naba", 87: "Aala",
+                89: "Fajr", 90: "Balad", 91: "Shams", 92: "Lail", 93: "Duha", 94: "Alam Nashrah", 95: "Teen",
+                96: "Alaq", 97: "Qadr", 99: "Zilzal", 100: "Adiyat", 101: "Qariah", 102: "Takasur", 103: "Asr",
+                104: "Humazah", 105: "Feel", 106: "Quraish", 107: "Maun", 108: "Kausar", 109: "Kafiroon",
+                110: "Nasr", 111: "Lahab", 112: "Ikhlas", 113: "Falaq", 114: "Naas"}
 FOLLOW = {"urdu": "Roz nayi tilawat, Urdu tarjume ke saath: subscribe karein",
           "english": "A new recitation with translation every day: subscribe"}
 
@@ -326,8 +337,12 @@ def settings_of(raw):
 
 
 def display_name(s):
-    """"Ya-Sin" -> "Surah Ya-Sin" (Quran.com's own transliteration)."""
-    return f"Surah {chapter(s)['name']}"
+    """"Surah Yaseen": the spelling people search for, else Quran.com's own."""
+    return f"Surah {SEARCH_NAMES.get(int(s)) or chapter(s)['name']}"
+
+
+def short_name(s):
+    return SEARCH_NAMES.get(int(s)) or chapter(s)["name"]
 
 
 def label(s, a, b):
@@ -807,7 +822,7 @@ def thumbnail(job_dir, clip, segs, screen, out):
     name = SPECIAL.get(tuple(segs[0])) or display_name(s)
     words = TITLE_WORDS["english" if screen == "english" else "urdu"]
     if len(segs) > 1:
-        sub = " + ".join(chapter(x[0])["name"] for x in segs[1:])
+        sub = " + ".join(short_name(x[0]) for x in segs[1:])
     elif tuple(segs[0]) in SPECIAL:
         sub = f"{display_name(s)} {a}" if a == b else f"{display_name(s)} {a}-{b}"
     elif a == 1 and b == chapter(s)["ayat"]:
@@ -836,7 +851,7 @@ def thumbnail(job_dir, clip, segs, screen, out):
 # ------------------------------------------------------------------ words around the video
 
 def title_of(segs, settings, part=None):
-    """"Surah Ya-Sin Part 2 (Ayat 13-27) | Urdu Tarjuma ke Saath | Mishary Alafasy"."""
+    """"Surah Yaseen Part 2 (Ayat 13-27) with Urdu Translation | Beautiful Tilawat | Mishary Alafasy"."""
     words = TITLE_WORDS["english" if settings["screen"] == "english" else "urdu"]
     qari = RECITER_SHORT[settings["reciter"]]
     if len(segs) == 1:
@@ -845,9 +860,11 @@ def title_of(segs, settings, part=None):
                                           else f"{display_name(s)}{f' Part {part}' if part else ''} "
                                                f"(Ayat {a}-{b})" if a != b else f"{display_name(s)} (Ayat {a})")
     else:
-        head = display_name(segs[0][0]) + ", " + ", ".join(chapter(x[0])["name"] for x in segs[1:])
-    title = f"{head} | {words} | {qari}"
-    return title if len(title) <= 100 else f"{head} | {words}"[:100]
+        head = display_name(segs[0][0]) + ", " + ", ".join(short_name(x[0]) for x in segs[1:])
+    for title in (f"{head} {words} | {TITLE_TAIL} | {qari}", f"{head} {words} | {qari}", f"{head} {words}"):
+        if len(title) <= 100:
+            return title
+    return title[:100]
 
 
 def _tag(text):
@@ -890,8 +907,9 @@ def tags_of(segs, settings):
     out = ["quran", "quran recitation", "tilawat", "quran with urdu translation", "urdu tarjuma",
            "quran tilawat urdu tarjuma", RECITERS[settings["reciter"]].lower()]
     for s, a, b in segs:
-        n = chapter(s)["name"].lower()
-        out += [f"surah {n}", f"surah {_name_key(chapter(s)['name'])}", f"surah {n} urdu translation"]
+        n = short_name(s).lower()
+        out += [f"surah {n}", f"surah {n} urdu translation", f"surah {chapter(s)['name'].lower()}",
+                f"surah {_name_key(chapter(s)['name'])}"]
         if (s, a, b) in SPECIAL:
             out.append(SPECIAL[(s, a, b)].lower())
     if settings["screen"] == "english":
