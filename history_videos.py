@@ -70,7 +70,9 @@ CANVAS_W, CANVAS_H = round(W * PAN) * SUPER, round(H * PAN) * SUPER
 MIN_MINUTES, MAX_MINUTES, DEFAULT_MINUTES = 2, 30, 10
 WORDS_PER_MINUTE = 150
 MIN_SOURCES = 3
-SHOT_SECONDS = 11.0            # a new picture or a closer crop about this often
+# A new picture or a closer crop about this often: 7 s since quality pass 2 (was 11; the audit put
+# pro documentaries at 4-6 s a shot, and every scene is one picture, so shorter means more crops of it).
+SHOT_SECONDS = 7.0 if os.environ.get("HISTORY_MOTION", "1").strip() != "0" else 11.0
 GAP = 0.35                     # after each voice paragraph
 TITLE_CARD, CHAPTER_CARD, END_CARD = 3.2, 2.6, 6.0
 # Free by default (owner, 15-oct-2026: "everything should be free"): Wikipedia
@@ -915,6 +917,16 @@ def end_events(d, handle, lang):
 MOTIONS = ["right", "left", "down", "diag", "up", "left"]
 
 
+def _motion():
+    """Quality pass 2 (22-oct-2026): eased pans, moving footage, shorter shots. HISTORY_MOTION=0: the old look."""
+    return os.environ.get("HISTORY_MOTION", "1").strip() != "0"
+
+
+# One encode is all a long video's picture gets (segments are joined and muxed by copy): 20 keeps more
+# detail than the old 21 without making a 14-minute upload much bigger on this connection.
+CRF = "20"
+
+
 def segment(job_dir, picture, out, frames, motion, events):
     """One shot: ``picture`` (a canvas, relative to job_dir) panned over
     ``frames`` frames under ``events``. Video only; same settings for all."""
@@ -923,7 +935,8 @@ def segment(job_dir, picture, out, frames, motion, events):
         f.write(_ass(events))
     d = frames / FPS
     cw, chh = W * SUPER, H * SUPER
-    p = f"(t/{d:.4f})"
+    # Eased (cosine) since quality pass 2: a linear pan starts and stops with a jolt at every cut.
+    p = f"(0.5-0.5*cos(PI*t/{d:.4f}))" if _motion() else f"(t/{d:.4f})"
     x, y = {"right": (f"(iw-ow)*{p}", "(ih-oh)/2"), "left": (f"(iw-ow)*(1-{p})", "(ih-oh)/2"),
             "down": ("(iw-ow)/2", f"(ih-oh)*{p}"), "up": ("(iw-ow)/2", f"(ih-oh)*(1-{p})"),
             "diag": (f"(iw-ow)*{p}", f"(ih-oh)*{p}"), "still": ("(iw-ow)/2", "(ih-oh)/2")}[motion]
@@ -931,7 +944,7 @@ def segment(job_dir, picture, out, frames, motion, events):
           f"scale={W}:{H}:flags=bicubic,setsar=1,format=yuv420p,"
           f"ass=filename='{escape_filter_value(ass)}':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'")
     r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", picture, "-vf", vf, "-frames:v", str(frames),
-                        "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+                        "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", CRF,
                         "-pix_fmt", "yuv420p", "-video_track_timescale", "30000", "-an", out],
                        cwd=job_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                        errors="replace", timeout=900)
@@ -946,13 +959,20 @@ def segment_video(job_dir, video, out, frames, offset, close, events):
     ass = out[:-4] + ".ass"
     with open(os.path.join(job_dir, ass), "w", encoding="utf-8") as f:
         f.write(_ass(events))
-    zoom = "crop=iw*0.86:ih*0.86," if close else ""
-    vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}scale={W}:{H},fps={FPS},"
-          f"setsar=1,format=yuv420p,"
+    if _motion():
+        import broll
+        a, b = broll.PULL if close else broll.PUSH
+        z = f"({a:.4f}+{b - a:.4f}*{broll._ease(frames / FPS)})"
+        move = (f"fps={FPS},setpts=PTS-STARTPTS,scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+                f"scale=w='trunc({W}*{z}/2)*2':h=-2:eval=frame:flags=bicubic,crop={W}:{H},{broll.SHARPEN},")
+    else:
+        zoom = "crop=iw*0.86:ih*0.86," if close else ""
+        move = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}scale={W}:{H},fps={FPS},"
+    vf = (f"{move}setsar=1,format=yuv420p,"
           f"ass=filename='{escape_filter_value(ass)}':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'")
     r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{offset:.2f}", "-stream_loop", "-1", "-i", video,
                         "-vf", vf, "-frames:v", str(frames), "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",
-                        "-crf", "21", "-pix_fmt", "yuv420p", "-video_track_timescale", "30000", "-an", out],
+                        "-crf", CRF, "-pix_fmt", "yuv420p", "-video_track_timescale", "30000", "-an", out],
                        cwd=job_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                        errors="replace", timeout=900)
     if r.returncode != 0:

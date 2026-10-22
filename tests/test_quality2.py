@@ -56,3 +56,17 @@ def test_generated_shorts_end_quickly_so_they_loop(monkeypatch):
     assert kit.outro_seconds({"outro_seconds": 3.0}) == 1.0
     import cricket_shorts
     assert cricket_shorts.LEAD < 0.2
+
+
+def test_history_shots_are_shorter_and_eased_unless_switched_off():
+    import importlib
+    import os
+    import history_videos as hv
+    assert hv.SHOT_SECONDS == 7.0 and hv._motion() and hv.CRF == "20"
+    os.environ["HISTORY_MOTION"] = "0"
+    try:
+        importlib.reload(hv)
+        assert hv.SHOT_SECONDS == 11.0 and not hv._motion()
+    finally:
+        del os.environ["HISTORY_MOTION"]
+        importlib.reload(hv)
