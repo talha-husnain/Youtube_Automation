@@ -1357,9 +1357,13 @@ def mix(job_dir, video, narration_wav, out, total, whooshes, sections, tracks):
     """The final file: the joined video (copied), the narration, a whoosh per
     card and a music bed per chapter (looped, faded)."""
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", video, "-i", narration_wav]
-    graph = [f"[1:a]{LOUDNORM_FILTER},aresample=48000,aformat=channel_layouts=stereo[vo]"]
+    duck = bool(tracks) and kit.ducking()
+    # Ducked (short_kit.ducking): the beds sit at -24 LUFS and dip under the narration, as on the Shorts.
+    graph = [f"[1:a]{LOUDNORM_FILTER},aresample=48000,aformat=channel_layouts=stereo"
+             + (",asplit=2[vo][vkey]" if duck else "[vo]")]
     mixin = ["[vo]"]
     idx = 2
+    beds = []
     if tracks:
         for k in range(len(sections) - 1):
             a, b = sections[k], sections[k + 1]
@@ -1368,11 +1372,19 @@ def mix(job_dir, video, narration_wav, out, total, whooshes, sections, tracks):
                 continue
             cmd += ["-stream_loop", "-1", "-i", tracks[k % len(tracks)]]
             ms = int(a * 1000)
-            graph.append(f"[{idx}:a]atrim=0:{length:.3f},asetpts=PTS-STARTPTS,{kit.BED_LOUDNORM},"
+            graph.append(f"[{idx}:a]atrim=0:{length:.3f},asetpts=PTS-STARTPTS,"
+                         f"{kit.BED_DUCKED_LOUDNORM if duck else kit.BED_LOUDNORM},"
                          f"afade=t=in:d=1.5,afade=t=out:st={max(0.0, length - 2):.3f}:d=2,"
                          f"aresample=48000,aformat=channel_layouts=stereo,adelay={ms}|{ms}[bed{k}]")
-            mixin.append(f"[bed{k}]")
+            beds.append(f"[bed{k}]")
             idx += 1
+    if duck and beds:
+        graph.append(f"{''.join(beds)}amix=inputs={len(beds)}:normalize=0[beds];[beds][vkey]{kit.DUCK}[bedd]")
+        mixin.append("[bedd]")
+    elif duck:
+        graph.append("[vkey]anullsink")
+    else:
+        mixin += beds
     for k, t in enumerate(whooshes):
         ms = int(t * 1000)
         graph.append(f"aevalsrc='{kit.WHOOSH}':s=48000:d=0.3,aformat=channel_layouts=stereo,adelay={ms}|{ms}[sx{k}]")
