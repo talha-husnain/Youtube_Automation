@@ -152,6 +152,25 @@ def test_a_footage_term_that_echoes_the_line_is_replaced(monkeypatch):
     assert got == ["Fastest centuries in ODI", "cricket stadium night", "Fastest centuries in ODI"]
 
 
+def test_each_channel_grades_its_footage_and_photos_keep_their_colours(monkeypatch, tmp_path):
+    import broll
+    seen = []
+
+    def run(cmd, **k):
+        seen.append(cmd[cmd.index("-vf") + 1])
+        return SimpleNamespace(returncode=0, stderr="")
+    monkeypatch.setattr(broll.subprocess, "run", run)
+    monkeypatch.setenv("CONTENT_GENRE", "controversy")
+    broll._shot(str(tmp_path), 0, 30, {"kind": "video", "path": "a.mp4"}, 0.0, False, 1080, 1920)
+    broll._shot(str(tmp_path), 1, 30, {"kind": "photo", "path": "a.jpg"}, 0.0, False, 1080, 1920)
+    assert broll.GRADES["controversy"] in seen[0] and broll.GRADES["controversy"] not in seen[1]
+    monkeypatch.setenv("CHANNEL_GRADE", "0")
+    assert broll.grade() == ""
+    monkeypatch.setenv("CHANNEL_GRADE", "1")
+    monkeypatch.setenv("CONTENT_GENRE", "comedy")
+    assert broll.grade() == ""                    # the comedy clips are untouched
+
+
 def test_real_swooshes_replace_the_chirp(monkeypatch):
     import short_kit as kit
     cmd, graph, mix = [], [], []

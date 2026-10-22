@@ -1012,7 +1012,8 @@ def segment_video(job_dir, video, out, frames, offset, close, events):
     else:
         zoom = "crop=iw*0.86:ih*0.86," if close else ""
         move = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}scale={W}:{H},fps={FPS},"
-    vf = (f"{move}setsar=1,format=yuv420p,"
+    # The channel's grade on footage (broll.GRADES), never on the archival pictures.
+    vf = (f"{move}setsar=1,{broll.grade()}format=yuv420p,"
           f"ass=filename='{escape_filter_value(ass)}':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'")
     r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{offset:.2f}", "-stream_loop", "-1", "-i", video,
                         "-vf", vf, "-frames:v", str(frames), "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",

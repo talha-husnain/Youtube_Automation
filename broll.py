@@ -28,6 +28,26 @@ FPS = kit.FPS
 CUT = 2.8          # a new shot about this often
 MIN_SHOT = 1.4
 DIM = "eq=brightness=-0.10:saturation=1.08:contrast=1.04"   # text stays readable on bright footage
+# One look per channel (owner, 22-oct-2026): footage from three libraries looked like three films.
+# Applied to footage only (cards, captions and archival pictures keep their colours), before DIM.
+# Previewed side by side on a cached clip; songs and history got a softer vignette (PI/6) because
+# DIM already darkens. CHANNEL_GRADE=0 turns it off.
+GRADES = {
+    "cricket": "eq=contrast=1.05:saturation=1.15,colorbalance=rm=0.03:bm=-0.03:rh=0.02:bh=-0.02",
+    "controversy": "eq=contrast=1.08:saturation=0.82,colorbalance=rs=-0.03:bs=0.05:rh=0.04:bh=-0.03",
+    "quiz": "eq=saturation=1.2:brightness=0.02",
+    "music": "eq=contrast=1.06:saturation=0.9:brightness=0.02,colorbalance=rs=-0.04:bs=0.06:rh=0.05:bh=-0.04,"
+             "vignette=angle=PI/6",
+    "history": "eq=saturation=0.85,colorbalance=rs=0.04:bs=-0.05:rm=0.03:bm=-0.03,vignette=angle=PI/6",
+}
+
+
+def grade():
+    """The channel's grade as a filter prefix ("...," or "") for this job (CONTENT_GENRE)."""
+    if os.environ.get("CHANNEL_GRADE", "1") == "0":
+        return ""
+    g = GRADES.get(os.environ.get("CONTENT_GENRE", ""), "")
+    return g + "," if g else ""
 
 
 class Terms(BaseModel):
@@ -124,10 +144,10 @@ def _shot(job_dir, k, frames, item, offset, close, w, h):
             z = f"({a:.4f}+{b - a:.4f}*{_ease(d)})"
             vf = (f"fps={FPS},setpts=PTS-STARTPTS,scale={w}:{h}:force_original_aspect_ratio=increase,{fill},"
                   f"scale=w='trunc({w}*{z}/2)*2':h=-2:eval=frame:flags=bicubic,crop={w}:{h},"
-                  f"{SHARPEN},setsar=1,{DIM},format=yuv420p")
+                  f"{SHARPEN},setsar=1,{grade()}{DIM},format=yuv420p")
         else:
             vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,{fill},"
-                  f"crop={cw}:{ch},scale={w}:{h},fps={FPS},setsar=1,{DIM},format=yuv420p")
+                  f"crop={cw}:{ch},scale={w}:{h},fps={FPS},setsar=1,{grade()}{DIM},format=yuv420p")
     else:
         # A photo: decoded once, then a slow pan on a 2x canvas (half-pixel steps).
         W2, H2 = round(w * 1.12) * 2, round(h * 1.12) * 2
