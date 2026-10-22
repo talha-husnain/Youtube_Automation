@@ -818,10 +818,14 @@ def burn(job_dir, video, events, out_name):
 
 
 def mix(job_dir, video, narration, out, total):
+    # ffmpeg runs inside job_dir, so it gets bare names: the server passes a relative job_dir
+    # ("output/<id>") and the joined paths then pointed at output/<id>/output/<id>/... (23-oct-2026,
+    # "Error opening input: No such file or directory" on every Quran video).
+    video, narration, out_name = (os.path.basename(p) for p in (video, narration, out))
     r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", video, "-i", narration,
                         "-filter_complex", f"[1:a]{LOUDNORM_FILTER},aresample=48000,aformat=channel_layouts=stereo[a]",
                         "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-                        "-t", f"{total:.3f}", *METADATA_SCRUB, "-movflags", "+faststart", out],
+                        "-t", f"{total:.3f}", *METADATA_SCRUB, "-movflags", "+faststart", out_name],
                        cwd=job_dir, capture_output=True, text=True, errors="replace", timeout=1800)
     if r.returncode != 0:
         raise RuntimeError(f"mix failed: {r.stderr.strip()[-400:]}")
@@ -856,8 +860,10 @@ def thumbnail(job_dir, clip, segs, screen, out):
         f.write(_ass(ev, tw, th, st))
     vf = (f"scale={tw}:{th}:force_original_aspect_ratio=increase,crop={tw}:{th},eq=brightness=-0.12:saturation=1.1,"
           f"ass=filename='.q_thumb.ass':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'")
-    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", "1.5", "-i", clip["path"], "-vf", vf,
-                        "-frames:v", "1", "-q:v", "3", out], cwd=job_dir, capture_output=True, text=True, timeout=120)
+    # Inside job_dir: an absolute source and a bare output name (job_dir may be relative, see mix).
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", "1.5", "-i", os.path.abspath(clip["path"]),
+                        "-vf", vf, "-frames:v", "1", "-q:v", "3", os.path.basename(out)],
+                       cwd=job_dir, capture_output=True, text=True, timeout=120)
     return out if r.returncode == 0 and os.path.isfile(out) else None
 
 

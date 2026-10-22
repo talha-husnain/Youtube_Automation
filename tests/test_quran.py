@@ -197,3 +197,21 @@ def test_process_passes_the_passage_to_the_job(monkeypatch, tmp_path):
 def test_uploads_are_long_videos_in_education():
     import youtube_account
     assert "quran" in youtube_account.LONG_GENRES and youtube_account.CATEGORY["quran"] == "27"
+
+
+def test_the_mix_works_from_a_relative_job_folder(tmp_path, monkeypatch):
+    """The server passes "output/<id>"; ffmpeg runs inside it, so it must get bare names (every Quran
+    video failed with "Error opening input" on 23-oct-2026)."""
+    import os
+    import subprocess
+    job = tmp_path / "output" / "job1"
+    job.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    rel = os.path.join("output", "job1")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=black:s=64x64:d=1", "-pix_fmt",
+                    "yuv420p", os.path.join(rel, ".q_video.mp4")], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=d=1", os.path.join(rel, ".q_voice.wav")],
+                   check=True)
+    out = qv.mix(rel, os.path.join(rel, ".q_video.mp4"), os.path.join(rel, ".q_voice.wav"),
+                 os.path.join(rel, "final.mp4"), 1.0)
+    assert os.path.isfile(out)
