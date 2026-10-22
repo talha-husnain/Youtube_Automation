@@ -47,8 +47,8 @@ UPLOAD_API = "https://www.googleapis.com/upload/youtube/v3/videos"
 ANALYTICS_API = "https://youtubeanalytics.googleapis.com/v2/reports"
 # Comedy, Sports, Film, Music, Education, Music
 CATEGORY = {"comedy": "23", "cricket": "17", "movies": "1", "songs": "10", "quiz": "27", "music": "10",
-            "controversy": "24", "history": "27", "history_teaser": "27"}
-LONG_GENRES = ("history",)    # 16:9 videos, not Shorts
+            "controversy": "24", "history": "27", "history_teaser": "27", "quran": "27"}
+LONG_GENRES = ("history", "quran")    # 16:9 videos, not Shorts
 THUMB_API = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
 TITLE_MAX, DESCRIPTION_MAX, TAGS_MAX = 100, 4900, 480
 _states = {}          # OAuth state -> (time, dashboard origin, account): a callback we did not start is refused

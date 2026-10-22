@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     Loader2, Youtube, Plus, Play, Trash2, LogOut, Layers, X, Copy, Check, ExternalLink, Rocket, AlertTriangle,
-    Trophy, Brain, Music, HelpCircle, Flame, Landmark,
+    Trophy, Brain, Music, HelpCircle, Flame, Landmark, BookOpen,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
@@ -13,7 +13,10 @@ import RecentUploads from './RecentUploads';
 // the main one (comedy, set up in Autopilot) and the others, each with its
 // own Google connection, kind of Short, number a day and posting times.
 
-const KIND_ICON = { comedy: Rocket, cricket: Trophy, quiz: HelpCircle, music: Music, controversy: Flame, history: Landmark };
+const KIND_ICON = { comedy: Rocket, cricket: Trophy, quiz: HelpCircle, music: Music, controversy: Flame, history: Landmark, quran: BookOpen };
+// The Quran channel (quran_videos.py): what is on screen and which translation is read out.
+const QURAN_SCREENS = [['both', 'Arabic, Urdu and English'], ['urdu', 'Arabic and Urdu'], ['english', 'Arabic and English']];
+const QURAN_VOICES = [['urdu', 'Urdu'], ['english', 'English'], ['off', 'none (recitation only)']];
 // Long videos (history_videos.py): minutes per video. Over 15 needs a phone-verified channel.
 const MINUTES = [2, 3, 5, 8, 10, 12, 15, 20, 25, 30];
 const STATUS = { running: 'making', done: 'waiting to upload', uploaded: 'uploaded', failed: 'failed', skipped: 'skipped' };
@@ -187,7 +190,39 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                                 {Array.from({ length: ch.max_per_day || maxPerDay }, (_, k) => k + 1).map((n) => <option key={n} value={n}>{n}</option>)}
                             </select>
                         </label>
-                        {ch.long && (
+                        {ch.kind === 'quran' && ch.quran && (
+                            <>
+                                <label className="flex items-center gap-2">
+                                    qari
+                                    <select value={ch.quran.reciter} onChange={(e) => save({ quran: { reciter: Number(e.target.value) } })}
+                                        className="input-field !w-auto text-xs py-1" aria-label="qari">
+                                        {(ch.quran_options?.reciters || []).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                                    </select>
+                                </label>
+                                <label className="flex items-center gap-2">
+                                    on screen
+                                    <select value={ch.quran.screen} onChange={(e) => save({ quran: { screen: e.target.value } })}
+                                        className="input-field !w-auto text-xs py-1" aria-label="on screen">
+                                        {QURAN_SCREENS.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+                                    </select>
+                                </label>
+                                <label className="flex items-center gap-2">
+                                    translation read out
+                                    <select value={ch.quran.voice} onChange={(e) => save({ quran: { voice: e.target.value } })}
+                                        className="input-field !w-auto text-xs py-1" aria-label="translation read out">
+                                        {QURAN_VOICES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+                                    </select>
+                                </label>
+                                <label className="flex items-center gap-2">
+                                    Urdu translation
+                                    <select value={ch.quran.urdu} onChange={(e) => save({ quran: { urdu: Number(e.target.value) } })}
+                                        className="input-field !w-auto text-xs py-1" aria-label="Urdu translation">
+                                        {(ch.quran_options?.urdu || []).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                                    </select>
+                                </label>
+                            </>
+                        )}
+                        {ch.kind === 'history' && (
                             <>
                                 <label className="flex items-center gap-2">
                                     videos about
@@ -239,6 +274,11 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                         <input defaultValue={ch.notes} onBlur={(e) => e.target.value !== ch.notes && save({ notes: e.target.value })}
                             placeholder="Favourite quiz topics, optional (e.g. Pakistan history, science)"
                             className="input-field text-xs py-1.5" aria-label="quiz topics" maxLength={300} />
+                    )}
+                    {ch.kind === 'quran' && (
+                        <p className="text-xs text-ink2">
+                            The recitation is always the qari&apos;s own recording (from Quran.com), never an AI voice. The AI voice only reads the translation, after each ayah. No music. Add a surah to &quot;Up next&quot; to make it sooner.
+                        </p>
                     )}
                     {ch.kind === 'history' && (
                         <>

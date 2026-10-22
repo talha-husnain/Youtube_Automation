@@ -257,15 +257,20 @@ def align(lyrics, heard):
     return lines
 
 
-def window(lines, song_seconds):
-    """(start, end) of the part used: from just before the first sung line,
-    ending after the last line that finishes by MAX_SONG."""
-    start = max(0.0, lines[0][1] - 1.0) if lines and lines[0][1] > 3.0 else 0.0
-    if song_seconds - start <= MAX_SONG:
+def window(lines, song_seconds, longest=MAX_SONG, chorus=None):
+    """(start, end) of the part used: from just before the first sung line
+    (or the first ``chorus`` line: a dance Short is the hook only), ending
+    after the last line that finishes by ``longest``."""
+    first = next((a for t, a, _b in lines if chorus and t == chorus), None)
+    if first is not None and song_seconds - first > 6:
+        start = max(0.0, first - 0.8)
+    else:
+        start = max(0.0, lines[0][1] - 1.0) if lines and lines[0][1] > 3.0 else 0.0
+    if song_seconds - start <= longest:
         return start, song_seconds
-    ends = [b for _t, _a, b in lines if b - start <= MAX_SONG - 1.5]
-    end = (max(ends) + 1.5) if ends else start + MAX_SONG
-    return start, min(song_seconds, end, start + MAX_SONG)
+    ends = [b for _t, _a, b in lines if b - start <= longest - 1.5]
+    end = (max(ends) + 1.5) if ends else start + longest
+    return start, min(song_seconds, end, start + longest)
 
 
 def media_seconds(path):
@@ -330,6 +335,8 @@ def run(output_dir, pipeline):
     style = (os.environ.get("MUSIC_STYLE") or random.choice(STYLES))[:60]
     theme = (os.environ.get("MUSIC_THEME") or pick_theme())[:60]
     vocal = os.environ.get("MUSIC_VOCAL") or ("female" if random.random() < FEMALE_SHARE else "male")
+    if os.environ.get("MUSIC_DANCE") == "1":
+        vocal = "female"           # the dancer is the singer
     vocal = "a male lead singer" if vocal.lower().startswith("m") else "a female lead singer"
     client = kit.gemini()
     stem = kit.neutral_stem("Song")
@@ -359,7 +366,20 @@ def run(output_dir, pipeline):
     lines = align(lyrics, hear(song, lyrics))
     if len(lines) < 3:
         raise RuntimeError("The sung lyrics could not be timed; trying another song next time.")
-    start, end = window(lines, seconds)
+    dance_bg, dance_clips, dancer = None, [], None
+    if os.environ.get("MUSIC_DANCE") == "1":
+        # The channel's AI singer dances to the chorus (ai_influencer.py); she
+        # costs money per second, so the Short is as long as her dance.
+        import ai_influencer
+        if ai_influencer.available():
+            dancer = ai_influencer.character()
+            dance_bg, dance_clips, usd = ai_influencer.dance_background(
+                client, {"title": p.title, "genre": p.genre, "theme": theme, "scene": p.image_prompt},
+                ai_influencer.SECONDS, output_dir)
+            if usd:
+                ai_influencer.record(usd)
+    start, end = window(lines, seconds, media_seconds(dance_bg) if dance_bg else MAX_SONG,
+                        p.chorus[0] if dance_bg and p.chorus else None)
     lines = [(t, a - start, min(b, end) - start) for t, a, b in lines if a < end - 0.5 and a >= start]
     body = end - start
     print(f"   ✅ {len(lines)} lines timed; using {start:.1f}-{end:.1f}s.")
@@ -379,9 +399,9 @@ def run(output_dir, pipeline):
     # Free mood footage under the lyrics, one clip per line (broll.py); the
     # AI cover (a paid image call) only when no footage is found.
     import broll
-    bg, footage = broll.background_for(f"{p.title}: a {p.genre} song about {theme}",
-                                       [{"start": a, "text": t} for t, a, _b in lines], total, output_dir, client,
-                                       FOOTAGE_RULE)
+    bg, footage = (dance_bg, dance_clips) if dance_bg else broll.background_for(
+        f"{p.title}: a {p.genre} song about {theme}", [{"start": a, "text": t} for t, a, _b in lines], total,
+        output_dir, client, FOOTAGE_RULE)
     art = None if bg else cover(client, p, os.path.join(output_dir, f".{stem}_cover.png"))
     print(f"🎬 Rendering the song short ({total:.0f}s{', with footage' if bg else ', with cover' if art else ''})...")
     kit.render(final, total, [kit.blend(colors[0], "#000000", 0.6), kit.blend(colors[-1], "#000000", 0.5)],
@@ -390,7 +410,10 @@ def run(output_dir, pipeline):
     hashtags = " ".join("#" + re.sub(r"[^A-Za-z0-9_]", "", h) for h in (p.hashtags or [])[:4] if h.strip())
     description = (f"{p.description.strip()}\n\nLyrics:\n" + "\n".join(p.chorus) +
                    "\n\nAn original AI-generated song: lyrics written with AI, music and vocals made "
-                   "with Google Lyria." + (f"\n{__import__('stock_media').credit_line(footage)}" if footage else "")
+                   "with Google Lyria." + (f"\nThe singer, {dancer['name']}, is an AI character, not a real "
+                                            "person; her dance is AI-animated from stock dance clips."
+                                            if dance_bg else "")
+                   + (f"\n{__import__('stock_media').credit_line(footage)}" if footage else "")
                    + (f"\n\n{hashtags} #shorts" if hashtags else "\n\n#shorts"))
     clip = {"start": 0.0, "end": round(total, 3), "seconds": round(total, 3), "file": final,
             "video_title_for_youtube_short": p.title, "viral_hook_text": p.chorus[0],
@@ -399,9 +422,10 @@ def run(output_dir, pipeline):
             "seo_tags": [t for t in p.tags if t][:15], "hashtags": (p.hashtags or [])[:4],
             "video_description_for_tiktok": f"{p.title} {hashtags}".strip(),
             "video_description_for_instagram": description,
-            "ai_voice": "AI music and vocals (Google Lyria)",
+            "ai_voice": "AI music and vocals (Google Lyria)", "ai_made": bool(dance_bg),
             "comment_question": "Which line hit you the hardest? 🎧",
             "song": {"title": p.title, "style": style, "theme": theme, "genre": p.genre, "vocal": vocal,
-                     "lyrics": lyrics, "cover": bool(art)},
+                     "lyrics": lyrics, "cover": bool(art),
+                     **({"dancer": dancer["name"]} if dance_bg else {})},
             "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in footage]}
     kit.finish(output_dir, stem, [clip], None, pipeline, extra={"genre": "music"})

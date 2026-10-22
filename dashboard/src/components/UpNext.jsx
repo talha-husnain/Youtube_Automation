@@ -46,7 +46,7 @@ export default function UpNext({ ch, onChanged }) {
             <form onSubmit={(e) => { e.preventDefault(); if (text.trim()) send({ add: text }, 'add'); }}
                 className="flex gap-2">
                 <input value={text} onChange={(e) => setText(e.target.value)} maxLength={140}
-                    placeholder={ch.kind === 'cricket' ? 'e.g. Babar Azam vs Virat Kohli' : 'your own topic, made next'}
+                    placeholder={ch.kind === 'cricket' ? 'e.g. Babar Azam vs Virat Kohli' : ch.kind === 'quran' ? 'a surah or ayat, e.g. Surah Yaseen, 2:255' : 'your own topic, made next'}
                     className="input-field flex-1 min-w-0 text-xs py-1.5" aria-label="your own topic" />
                 <button type="submit" disabled={!!busy || !text.trim()} className="btn-ghost px-3 py-1.5 text-xs">
                     {busy === 'add' ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} make next

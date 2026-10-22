@@ -779,6 +779,39 @@ never finished:
     clears the planned ideas; "Aaj ki tareekh" is off in explainer mode.
   - World Affairs by Unacademy, StudyIQ IAS, Adda247 Skills and Nitish Rajput answer "This
     channel is not available" from Pakistan, so they are not in RIVALS.
+- **Quran channel** (`quran_videos.py`, channel kind `quran`, `tests/test_quran.py`; owner,
+  22-oct-2026). Nothing in the Quran comes from a model: a real qari's per-ayah recordings, the
+  Uthmani text and published translations, all from the Quran Foundation API (api.quran.com v4,
+  no key; its developer terms allow social videos with credit). Tanzil's translation files say
+  non-commercial only; alquran.cloud's audio terms too. AI recitation was refused: Dar al-Ifta
+  (fatwa 8874, Jan 2026) accepts it only after a full review by the Mushaf authority. The AI
+  voice reads only the translation after each ayah; no music.
+  - Urdu default Junagarhi (died 1941, public domain); Jalandhari offered, its copyright status
+    not confirmed. English Pickthall (1930). Junagarhi's text writes "والا" with U+FEFB, which
+    Noto Nastaliq lacks: a fallback font drew a big "لا" in every line (`_plain_forms`).
+  - Per-ayah files of x:1 have no Bismillah (Whisper on 2:1 heard "Alif Lam Mim"); 1:1 is played
+    first where `bismillah_pre` says so (not Al-Fatiha, not At-Tawbah, not a later part).
+  - `plan_next`: whole ayat, ~225 s, never past 300 s, ends on a ruku after the target; short
+    whole surahs share a video, parts never do. Popular surahs first (`POPULAR`), then 1-114.
+    A failed passage is made again first (`_quran_payload`, 3 tries); "Up next" takes
+    "Surah Yaseen", "36", "2:255", "2:1-20", "Ayat ul Kursi" (`parse_request`).
+  - Fonts `fonts/AmiriQuran-Regular.ttf`, `fonts/NotoNastaliqUrdu.ttf` (OFL, from google/fonts);
+    ffmpeg's libass has harfbuzz, so Arabic joins. U+06DD + digits does NOT enclose the number in
+    libass (digits sit beside it): the ornament and the number are two events at one point.
+  - A starry-night clip under the darkening read as 12 s of black and video_qa refused the
+    video: no night terms, black@0.32, and `too_dark` redoes a shot with video_qa's detector.
+  - The card has `story` off: no teasers, no "Aaj ki tareekh", no minutes/lang; auto replies and
+    cross promotion are off, and `promo_targets`/`promote` never mix it with other channels.
+- **AI singer** (`ai_influencer.py`, songs channel, `tests/test_influencer.py`; owner,
+  22-oct-2026). One fictional woman (`python ai_influencer.py looks` / `pick <file> <name>`,
+  state/influencer/), a new Gemini still per song, a free vertical dance clip (Pixabay has only
+  ~14 usable; a Pexels key adds many), fal.ai Wan 2.2 Animate "move" ($0.04/s at 480p, billed per
+  16 frames, so clips go up at 16 fps). Use fal's returned status/response URLs (the full model
+  path answers 405) and check `error` on COMPLETED. Off until `FAL_KEY` is in .env (read fresh)
+  and a character is picked; `DAILY_MAX` 2 a day; a failure keeps the song's stock footage.
+- The Write tool turns `\uXXXX` written in a file into the literal character (invisible U+FEFF,
+  RTL letters in regex classes): write `chr()` or fix the escapes after (a patch matching
+  `"\\ufeff"` then fails to find it).
 - The Write tool refuses a file it has not read, and a patch script run right after that
   failed Write runs the OLD file: give every patch script a new name.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
@@ -802,6 +835,10 @@ never finished:
   got CLAUDE.md committed as CRLF once). The scratch `patchlib.patch`
   pattern: read bytes, replace CRLF with LF, patch, write bytes. A bash heredoc turned `\n` inside a
   Python string into a real newline three times on 8-oct-2026.
+- Starting autostart.bat from a Claude shell: cmd here does not run a bare `autostart.bat`
+  from the working folder ("not recognized"), so pass its full path, and launch it through a
+  separate `powershell.exe -File` script (processes started straight from the tool's shell can
+  stop when the command ends).
 - Before starting uvicorn, check :8000: a server from an earlier session may
   still answer with old app.py code (job subprocesses load new code anyway).
 - **Every tab needs its own scrolling frame**: the shell and `<main>` are

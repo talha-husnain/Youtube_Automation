@@ -963,9 +963,9 @@ def _recover_jobs_from_disk():
 _RESUME_FILE = ".resume.json"
 # Video types (CONTENT_GENRE): comedy is the main pipeline; the others are
 # song_shorts.py, movie_dub.py and cricket_shorts.py.
-CONTENT_GENRES = ("comedy", "songs", "movies", "cricket", "quiz", "music", "controversy", "history")
+CONTENT_GENRES = ("comedy", "songs", "movies", "cricket", "quiz", "music", "controversy", "history", "quran")
 # Made from nothing but a prompt (main.py --generate): no link, no upload.
-GENERATED_GENRES = ("cricket", "quiz", "music", "controversy", "history")
+GENERATED_GENRES = ("cricket", "quiz", "music", "controversy", "history", "quran")
 MAX_RESUME_ATTEMPTS = 2
 
 # --- Deploy handover (two instances, one disk) -------------------------------
@@ -4682,6 +4682,8 @@ async def process_endpoint(
     history_before: Optional[str] = Form(None),
     history_today: Optional[str] = Form(None),
     history_avoid: Optional[str] = Form(None),
+    music_dance: Optional[str] = Form(None),
+    quran_plan: Optional[str] = Form(None),
     channel: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
@@ -4759,6 +4761,8 @@ async def process_endpoint(
         history_before = body.get("history_before")
         history_today = body.get("history_today")
         history_avoid = body.get("history_avoid")
+        music_dance = body.get("music_dance")
+        quran_plan = body.get("quran_plan")
         channel = body.get("channel")
 
     # Two or more links: one short made of their best moments (compilation.py),
@@ -5059,6 +5063,17 @@ async def process_endpoint(
     if genre_val == "music":
         env["MUSIC_STYLE"] = re.sub(r"\s+", " ", str(music_style or ""))[:60]
         env["MUSIC_THEME"] = re.sub(r"\s+", " ", str(music_theme or ""))[:60]
+        if str(music_dance or "").lower() in ("1", "true", "yes"):
+            env["MUSIC_DANCE"] = "1"       # the channel's AI singer dances (ai_influencer.py)
+    if genre_val == "quran":
+        # The passage and the channel's choices (quran_videos.py checks every value).
+        plan = quran_plan
+        if isinstance(plan, str):
+            try:
+                plan = json.loads(plan)
+            except ValueError:
+                plan = {}
+        env["QURAN_PLAN"] = json.dumps(plan if isinstance(plan, dict) else {})[:4000]
     for name, raw in (("QUIZ_AVOID", quiz_avoid), ("MUSIC_AVOID", music_avoid)):
         if raw:
             try:

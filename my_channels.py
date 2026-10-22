@@ -92,12 +92,21 @@ KINDS = {
               "about": "Original songs under a minute: AI lyrics, sung by Google Lyria, with a cover "
                        "picture and the lyrics on screen. About $0.15 of Gemini per song."},
     # Long 16:9 videos (history_videos.py): 1-3 a day, a job takes 15-60 min on the laptop.
+    # "story": the documentary channel's own settings and extras (minutes, language,
+    # teaser Shorts, "Aaj ki tareekh"); the Quran channel is long but has none of them.
     "history": {"label": "History and stories (long videos)", "genre": "history", "color": "#1F1408",
-                "times": ["18:00", "21:00"], "per_day": 2, "max_per_day": 3, "long": True, "timeout": 3 * 3600,
+                "times": ["18:00", "21:00"], "per_day": 2, "max_per_day": 3, "long": True, "story": True,
+                "timeout": 3 * 3600,
                 "notes": "Rome, Karbala, the Caliphs, the US government, the US economy",
                 "about": "2 to 30 minute documentaries about empires, countries and famous events: researched "
                          "with sources, a narrator, free Wikipedia pictures and AI pictures, chapters and a "
                          "thumbnail. About $1 of Gemini per 10-minute video."},
+    # Long 16:9 videos (quran_videos.py): 2-5 minutes, a real qari's recitation, no AI in the Quran itself.
+    "quran": {"label": "Quran recitation with translation (long videos)", "genre": "quran", "color": "#0B2E22",
+              "times": ["05:30", "20:30"], "per_day": 1, "max_per_day": 3, "long": True, "timeout": 2 * 3600,
+              "about": "2 to 5 minute videos: a famous qari recites, the Arabic and the Urdu or English "
+                       "translation on screen, the translation read out after each ayah, calm nature and "
+                       "mosque footage, no music. Popular surahs first, then the whole Quran in order."},
 }
 # The planner module of each kind that works from a queue of researched ideas.
 PLANNERS = {"cricket": "cricket_shorts", "controversy": "controversy_shorts", "history": "history_videos"}
@@ -214,7 +223,10 @@ def add(kind, name=""):
     ch = {"id": cid, "kind": kind, "name": " ".join(str(name or k["label"]).split())[:60],
           "enabled": True, "auto_upload": True, "per_day": k.get("per_day", 8), "post_times": list(k["times"]),
           "handle": "", "color": k["color"], "notes": k.get("notes", ""), "created": int(time.time()),
-          **ENGAGE_DEFAULTS, **({"minutes": DEFAULT_MINUTES, "lang": "urdu"} if k.get("long") else {}),
+          **ENGAGE_DEFAULTS, **({"minutes": DEFAULT_MINUTES, "lang": "urdu"} if k.get("story") else {}),
+          # No AI replies to religious comments, and no "More from us" line next to the other channels.
+          **({"quran": dict(__import__("quran_videos").DEFAULTS), "auto_reply": False, "cross_promo": False}
+             if kind == "quran" else {}),
           "last_upload": 0, "upload_paused_until": 0, "last_claim_check": 0, "last_learn": 0,
           "jobs": [], "ideas": [], "used": [], "stats": {}}
     _save_channel(ch)
@@ -305,7 +317,10 @@ def update(cid, patch):
                 ch["review_hours"] = max(0, min(REVIEW_MAX_HOURS, int(patch["review_hours"])))
             except (TypeError, ValueError):
                 pass
-        if KINDS.get(ch["kind"], {}).get("long"):
+        if ch["kind"] == "quran" and isinstance(patch.get("quran"), dict):
+            import quran_videos
+            ch["quran"] = quran_videos.settings_of({**(ch.get("quran") or {}), **patch["quran"]})
+        if KINDS.get(ch["kind"], {}).get("story"):
             if "minutes" in patch:
                 try:
                     ch["minutes"] = max(MINUTES_RANGE[0], min(MINUTES_RANGE[1], int(patch["minutes"])))
@@ -414,7 +429,7 @@ EXTRA_FORMATS = ("teaser", "today")
 def today_short_due(ch, now=None):
     """True while the history channel still owes today's "Aaj ki tareekh"
     Short (history_today.py): on by default (daily_short), two tries a day."""
-    if not KINDS.get(ch.get("kind"), {}).get("long") or not ch.get("daily_short", True):
+    if not KINDS.get(ch.get("kind"), {}).get("story") or not ch.get("daily_short", True):
         return False
     if ch.get("mode") == "explainer":      # "on this day" is a history Short
         return False
@@ -443,7 +458,7 @@ def _parts(j):
 def teaser_due(ch, now=None):
     """The history channel's uploaded long video still owed a Short (its
     teaser, then its best moments), or None."""
-    if not KINDS.get(ch.get("kind"), {}).get("long"):
+    if not KINDS.get(ch.get("kind"), {}).get("story"):
         return None
     now = now or time.time()
     for j in sorted(ch.get("jobs") or [], key=lambda j: j.get("at", 0)):
@@ -470,7 +485,7 @@ def keeps(job_id, cid, age_seconds):
         j.get("status") in ("running", "done")
         # An uploaded long video stays until its Shorts are made from it, and
         # no longer than teaser_due would still offer it (its folder is GBs).
-        or (j.get("status") == "uploaded" and KINDS.get(ch.get("kind"), {}).get("long")
+        or (j.get("status") == "uploaded" and KINDS.get(ch.get("kind"), {}).get("story")
             and j.get("format") not in EXTRA_FORMATS
             and _parts(j) < shorts_per_long(ch) and time.time() - j.get("at", 0) < TEASER_WINDOW))
         for j in ch.get("jobs") or [])
@@ -604,9 +619,15 @@ def summary(ch):
     day = today()
     out = {k: v for k, v in ch.items() if k not in ("jobs", "ideas", "used")}
     long = bool(KINDS.get(ch["kind"], {}).get("long"))
-    if long:
+    if KINDS.get(ch["kind"], {}).get("story"):
         out.update(minutes=ch.get("minutes", DEFAULT_MINUTES), lang=ch.get("lang", "urdu"),
                    mode=ch.get("mode", "history"))
+    if ch["kind"] == "quran":
+        import quran_videos as qv
+        out.update(quran=qv.settings_of(ch.get("quran")),
+                   quran_options={"reciters": [[k, v] for k, v in qv.RECITERS.items()],
+                                  "urdu": [[k, v] for k, v in qv.URDU.items()],
+                                  "english": [[k, v] for k, v in qv.ENGLISH.items()]})
     out.update({
         "max_per_day": cap(ch), "long": long,
         **engage_settings(ch), "match_watch": bool(ch.get("match_watch", True)),
@@ -617,7 +638,7 @@ def summary(ch):
         "waiting": len(waiting(ch)), "running": [j.get("label") for j in running(ch)],
         "jobs": sorted(ch.get("jobs") or [], key=lambda j: j.get("at", 0), reverse=True)[:12],
         "uploads": rows[:12], "ideas_left": len(ch.get("ideas") or []),
-        "plans_ideas": ch["kind"] in PLANNERS,
+        "plans_ideas": ch["kind"] in PLANNERS or ch["kind"] == "quran",
         "up_next": [i.get("text", "") for i in (ch.get("ideas") or [])[:UP_NEXT_SHOWN]],
         "up_next_series": [f"{i['series']}, part {i['part']} of {i['parts']}" if i.get("series") else ""
                            for i in (ch.get("ideas") or [])[:UP_NEXT_SHOWN]],
@@ -642,11 +663,18 @@ def add_idea(cid, text):
     """The owner's own topic, made next."""
     text = re.sub(r"\s+", " ", str(text or "")).strip()[:140]
     ch = get(cid)
-    if not ch or ch["kind"] not in PLANNERS:
+    if not ch or (ch["kind"] not in PLANNERS and ch["kind"] != "quran"):
         raise ValueError("This channel picks its own topics.")
     if not text:
         raise ValueError("Write a topic first.")
-    idea = _owner_idea(ch["kind"], text)
+    if ch["kind"] == "quran":
+        import quran_videos
+        idea = quran_videos.parse_request(text)
+        if not idea:
+            raise ValueError("Write a surah's name or number (Surah Yaseen, 36), or ayat like 2:255 or 2:1-20.")
+        text = idea["text"]
+    else:
+        idea = _owner_idea(ch["kind"], text)
 
     def fn(c):
         rest = [i for i in c.get("ideas") or [] if i.get("text", "").lower() != text.lower()]
@@ -667,7 +695,9 @@ def drop_idea(cid, text):
         series = next((i.get("series") for i in ideas if i.get("text") == text and i.get("series")), None)
         gone = [i.get("text", "") for i in ideas if i.get("text") == text or (series and i.get("series") == series)]
         c["ideas"] = [i for i in ideas if i.get("text", "") not in gone]
-        c["used"] = ((c.get("used") or []) + [t[:140] for t in gone or [text]])[-300:]
+        c["used"] = ((c.get("used") or []) + [t[:140] for t in gone or [text]]
+                     + [f"quran:{i['id']}" for i in ideas if i.get("kind") == "quran" and i.get("id")
+                        and i.get("text") in gone])[-300:]
     return _change(cid, fn)
 
 
@@ -816,7 +846,7 @@ LENGTH_SHORTEST = 5
 def length_tip(ch):
     """A length suggestion for a long-video channel, or None: shorter when
     people leave early, longer when they watch most of each video."""
-    if not KINDS.get(ch.get("kind"), {}).get("long"):
+    if not KINDS.get(ch.get("kind"), {}).get("story"):
         return None
     f = ((ch.get("stats") or {}).get("formats") or {}).get(KINDS[ch["kind"]].get("format", "history")) or {}
     watched = f.get("watched")
@@ -930,6 +960,8 @@ def _next_payload(ch, client_fn, log=print):
         return ({**look, "genre": "history", "history_today": True, "history_lang": ch.get("lang", "urdu"),
                  "history_avoid": made[-40:], "bg_music": True},
                 {"label": f"Aaj ki tareekh: {datetime.now():%d %B}", "format": "today", "topic": ""})
+    if kind == "quran":
+        return _quran_payload(ch, look, log)
     if kind in PLANNERS:
         if ch.get("mode") == "explainer" and ch.get("ideas"):
             # News goes stale: ideas planned more than a day and a half ago are dropped.
@@ -1000,14 +1032,67 @@ def _next_payload(ch, client_fn, log=print):
                 {"label": f"{fmt}{': ' + topic if topic else ''}", "format": fmt, "topic": topic})
     if kind == "music":
         import music_shorts
+        import ai_influencer
         style = pick_format(ch, music_shorts.STYLES)
         theme = music_shorts.pick_theme()
+        # The channel's AI singer dances in the first songs of the day, up to
+        # ai_influencer.DAILY_MAX (she costs about $0.70 a Short); the rest are
+        # the usual songs. Off until there is a fal.ai key and a chosen character.
+        dance = ai_influencer.available()
         # No end card on songs: a Short that ends on the music loops straight
         # back into the first line, and replays count as views.
         return ({**look, "genre": "music", "music_style": style, "music_theme": theme, "frame_outro": False,
-                 "music_avoid": (ch.get("used") or [])[-60:]},
-                {"label": f"{style} song about {theme}", "format": style, "topic": theme})
+                 "music_avoid": (ch.get("used") or [])[-60:], **({"music_dance": True} if dance else {})},
+                {"label": f"{'Dance: ' if dance else ''}{style} song about {theme}",
+                 "format": "dance" if dance else style, "topic": theme})
     return None, None
+
+
+QURAN_TRIES = 3
+
+
+def _quran_job(look, settings, passage, label, tries):
+    import quran_videos as qv
+    s = passage["segments"][0][0]
+    part = passage.get("part")
+    return ({**look, "genre": "quran", "quran_plan": {**settings, **passage}, "frame_outro": False},
+            {"label": label, "format": "quran", "topic": label, "passage": passage, "passage_try": tries,
+             # The parts of a long surah share a playlist (engage.py names it after the series).
+             **({"series": f"{qv.display_name(s)}, {qv.TITLE_WORDS['english' if settings['screen'] == 'english' else 'urdu']}",
+                 "series_part": part} if part else {})})
+
+
+def _quran_payload(ch, look, log=print):
+    """The next passage of the Quran channel: a passage whose video failed
+    first (the order matters here), then the queue of surahs (popular ones,
+    then the whole Quran in order; the owner's own requests go first)."""
+    import quran_videos as qv
+    settings = qv.settings_of(ch.get("quran"))
+    for j in sorted(ch.get("jobs") or [], key=lambda j: j.get("at", 0), reverse=True):
+        if j.get("format") == "quran" and j.get("status") == "failed" and j.get("passage") and not j.get("redone"):
+            _set_job(ch["id"], j["job_id"], redone=True)
+            tries = int(j.get("passage_try") or 1)
+            if tries < QURAN_TRIES:
+                return _quran_job(look, settings, j["passage"], j.get("label", ""), tries + 1)
+            log(f"⚠️ {ch['name']}: '{j.get('label', '')[:60]}' failed {tries} times; going on to the next passage.")
+            break
+    if time.time() - _ideas_failed.get(ch["id"], 0) < IDEAS_RETRY:
+        return None, None
+    ideas = ch.get("ideas") or qv.queue([u[6:] for u in ch.get("used") or [] if str(u).startswith("quran:")])
+    try:
+        passage, left = qv.plan_next(ideas, settings)
+    except Exception as e:  # noqa: BLE001 — Quran.com unreachable: try again later
+        _ideas_failed[ch["id"]] = time.time()
+        log(f"⚠️ {ch['name']}: could not plan the next passage ({type(e).__name__}: {str(e)[:120]}).")
+        return None, None
+    if not passage:
+        return None, None
+    still = {i.get("id") for i in left}
+    finished = [i["id"] for i in ideas if i.get("id") and i["id"] not in still]
+    _change(ch["id"], lambda c: c.update(ideas=left, used=((c.get("used") or [])
+                                                           + [f"quran:{x}" for x in finished])[-300:]))
+    label = qv.title_of(passage["segments"], settings, passage.get("part")).split(" | ")[0]
+    return _quran_job(look, settings, passage, label, 1)
 
 
 def wants_more(ch, now=None):
@@ -1342,7 +1427,7 @@ def upload_waiting(ch, job_clips, log=print):
                 log(f"🚫 {ch['name']}: not uploading '{clip.get('title', '')[:60]}': it has no description.")
                 continue
             desc = promote(clip["description"], ch["id"])
-            if KINDS[ch["kind"]].get("long") and j.get("format") not in EXTRA_FORMATS:
+            if KINDS[ch["kind"]].get("story") and j.get("format") not in EXTRA_FORMATS:
                 import history_videos
                 ups = youtube_account.uploads()
                 if j.get("series"):
@@ -1496,7 +1581,7 @@ def promo_targets(exclude):
         if yt.get("connected") and (yt.get("channel") or {}).get("handle"):
             out.append((yt["channel"]["handle"], "comedy"))
     for c in channels():
-        if c["id"] == exclude:
+        if c["id"] == exclude or c.get("kind") == "quran":
             continue
         with ya.use(account(c["id"])):
             yt = ya.status()
@@ -1516,6 +1601,8 @@ def promote(description, cid):
     """The description with a "More from us" line, when that channel's
     cross_promo switch is on and there is another connected channel."""
     import engage
+    if (get(cid) or {}).get("kind") == "quran":
+        return description             # never a comedy or dance channel under a recitation
     on = main_settings()["cross_promo"] if cid == "main" else engage_settings(get(cid) or {})["cross_promo"]
     try:
         return engage.with_promo(description, promo_targets(cid)) if on else description
