@@ -88,26 +88,52 @@ def plan_shots(windows, items, seed=7):
     return shots
 
 
+# Quality pass 2 (22-oct-2026): every footage shot used to be static (every other one a fixed 0.86 crop)
+# and photos panned in a straight line. Now each shot moves: a slow push-in, or on the "close" shots a
+# pull-out from the old 0.86 framing, eased in and out (cosine), and upscaled stock gets a light sharpen.
+# BROLL_MOTION=0 restores the static shots.
+PUSH = (1.0, 1.08)
+PULL = (1 / 0.86, 1.08)
+SHARPEN = "unsharp=5:5:0.4"
+
+
+def _ease(d):
+    return f"(0.5-0.5*cos(PI*t/{d:.3f}))"
+
+
+def motion():
+    return os.environ.get("BROLL_MOTION", "1").strip() != "0"
+
+
 def _shot(job_dir, k, frames, item, offset, close, w, h):
     out = f".broll/s{k:03d}.mp4"
     zoom = 0.86 if close else 1.0      # a closer crop on every other shot: a cut that feels new
     cw, ch = round(w * zoom / 2) * 2, round(h * zoom / 2) * 2
+    d = frames / FPS
     if item["kind"] == "video":
         src = ["-ss", f"{offset:.2f}", "-stream_loop", "-1", "-i", item["path"]]
-        vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
-              f"crop={cw}:{ch},scale={w}:{h},fps={FPS},setsar=1,{DIM},format=yuv420p")
+        if motion():
+            a, b = PULL if close else PUSH
+            z = f"({a:.4f}+{b - a:.4f}*{_ease(d)})"
+            vf = (f"fps={FPS},setpts=PTS-STARTPTS,scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+                  f"scale=w='trunc({w}*{z}/2)*2':h=-2:eval=frame:flags=bicubic,crop={w}:{h},"
+                  f"{SHARPEN},setsar=1,{DIM},format=yuv420p")
+        else:
+            vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+                  f"crop={cw}:{ch},scale={w}:{h},fps={FPS},setsar=1,{DIM},format=yuv420p")
     else:
         # A photo: decoded once, then a slow pan on a 2x canvas (half-pixel steps).
         W2, H2 = round(w * 1.12) * 2, round(h * 1.12) * 2
-        d = frames / FPS
-        x = random.Random(k).choice([f"(iw-ow)*t/{d:.3f}", f"(iw-ow)*(1-t/{d:.3f})", "(iw-ow)/2"])
-        y = f"(ih-oh)*t/{d:.3f}" if x.endswith("/2") else "(ih-oh)/2"
+        e = _ease(d) if motion() else f"t/{d:.3f}"
+        x = random.Random(k).choice([f"(iw-ow)*{e}", f"(iw-ow)*(1-{e})", "(iw-ow)/2"])
+        y = f"(ih-oh)*{e}" if x.endswith("/2") else "(ih-oh)/2"
         src = ["-i", item["path"]]
         vf = (f"scale={W2}:{H2}:force_original_aspect_ratio=increase,crop={W2}:{H2},"
               f"loop=loop={frames - 1}:size=1:start=0,setpts=N/{FPS}/TB,"
               f"crop={cw * 2}:{ch * 2}:x='{x}':y='{y}',scale={w}:{h}:flags=bicubic,setsar=1,{DIM},format=yuv420p")
+    # crf 17 (was 20): this is the first of three encodes (shot, render, captions); each one loses detail.
     r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", *src, "-vf", vf, "-frames:v", str(frames), "-r", str(FPS),
-                        "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+                        "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "17" if motion() else "20", "-pix_fmt", "yuv420p",
                         "-video_track_timescale", "30000", out],
                        cwd=job_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace",
                        timeout=600)
