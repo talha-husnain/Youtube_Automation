@@ -22,6 +22,7 @@ os.environ["VIDEO_QA"] = "0"       # upload tests pass fake paths; test_video_qa
 # Caption timing from the voice's pauses only: no Whisper model load per test.
 os.environ["EXACT_CAPTIONS"] = "pauses"
 os.environ["VOICE_ENGINE"] = "gemini"   # the free voice is a network service: tests fake ai_take.speak
+os.environ["LOCAL_VOICE"] = "0"         # OmniVoice is installed on this laptop: a test would load the real model
 
 import pytest
 

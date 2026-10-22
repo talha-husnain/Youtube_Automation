@@ -847,6 +847,16 @@ never finished:
   - `upscale.py`: Real-ESRGAN ncnn-vulkan (`REALESRGAN_EXE`), `realesr-animevideov3` x2 took an 8 s
     360p Omni Flash clip to 720p in ~60 s on both GPUs (`-g 0,1`), sharper than lanczos, close to real
     720p: 360p clips cost a third. One GPU alone took ~100 s.
+  - `local_voice.py` + `omnivoice_worker.py`: OmniVoice (k2-fsa, Apache code; its audio tokenizer is
+    Boson's Higgs Audio 2 community licence: commercial OK, "Built with Higgs Materials licensed from
+    Boson AI USA, Inc." on an about page, expanded licence past 100k annual active users). Reads the
+    lines the edge voice fails before the paid Gemini voice (short_kit.voice_lines, Quran translations);
+    `VOICE_ENGINE=omni` puts it first, `LOCAL_VOICE=0` (tests) turns it off. Its own venv in
+    D:\youtube\oss\OmniVoice (torch + transformers 5), one worker process per batch, HF_HUB_OFFLINE=1.
+    One designed voice per gender is made once (state/voices/omni_<gender>.pt) and cloned for every
+    line: a designed voice comes out different on each call. Whisper heard Urdu narration and a Quran
+    line back word for word; CPU ~5.4x real time (16 steps), a cloned voice ~12x; English loanwords
+    ("match", "wickets") come out bent. Its 3.1 GB model took 41 min to download here (~1.3 MB/s).
   - GitHub's anonymous API (60 calls/h) runs out fast when research agents use it in parallel.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
   player born today; `cricket_shorts.birthday_ok` keeps it only when the

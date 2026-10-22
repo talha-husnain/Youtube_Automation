@@ -686,7 +686,9 @@ def voice_translations(client, texts, job_dir, lang, log=print, wait=30):
     fails, once more after a pause; raises when a line still has no voice."""
     import ai_take
     import free_voice
+    import local_voice
     out = [None] * len(texts)
+    path_of = [os.path.join(job_dir, f".qv_{k + 1}.wav") for k in range(len(texts))]
     for attempt in range(2):
         if attempt:
             log(f"   🔁 {sum(1 for o in out if not o)} translation line(s) failed; trying again in {wait} s...")
@@ -694,18 +696,29 @@ def voice_translations(client, texts, job_dir, lang, log=print, wait=30):
         for k, text in enumerate(texts):
             if out[k] or not text:
                 continue
-            path = os.path.join(job_dir, f".qv_{k + 1}.wav")
-            secs = None
             if free_voice.engine() == "edge" and not free_voice.resting():
-                secs = free_voice.speak(text, path, EDGE_VOICE[lang], VOICE_RATE)
+                secs = free_voice.speak(text, path_of[k], EDGE_VOICE[lang], VOICE_RATE)
                 time.sleep(free_voice.PAUSE)
-            if not secs and client is not None:
-                if os.path.exists(path + ".words.json"):
-                    os.remove(path + ".words.json")
-                secs = ai_take.speak(client, text, path, GEMINI_VOICE, VOICE_STYLE,
-                                     language="Urdu" if lang == "urdu" else "English")
+                if secs:
+                    out[k] = (path_of[k], secs)
+        # The edge voice's misses go to the free local voice (local_voice.py), then to Gemini.
+        todo = [k for k, t in enumerate(texts) if t and not out[k]]
+        if todo and free_voice.engine() in ("edge", "omni") and local_voice.available():
+            for k in todo:
+                if os.path.exists(path_of[k] + ".words.json"):
+                    os.remove(path_of[k] + ".words.json")
+            for k, secs in zip(todo, local_voice.speak_many([(texts[k], path_of[k], "male", VOICE_RATE) for k in todo])):
+                if secs:
+                    out[k] = (path_of[k], secs)
+        for k, text in enumerate(texts):
+            if out[k] or not text or client is None:
+                continue
+            if os.path.exists(path_of[k] + ".words.json"):
+                os.remove(path_of[k] + ".words.json")
+            secs = ai_take.speak(client, text, path_of[k], GEMINI_VOICE, VOICE_STYLE,
+                                 language="Urdu" if lang == "urdu" else "English")
             if secs:
-                out[k] = (path, secs)
+                out[k] = (path_of[k], secs)
         if all(o or not t for o, t in zip(out, texts)):
             return out
     raise RuntimeError(f"{sum(1 for o, t in zip(out, texts) if t and not o)} translation lines could not be "

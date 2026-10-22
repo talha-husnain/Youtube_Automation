@@ -397,16 +397,31 @@ def voice_lines(client, items, job_dir, prefix):
     back met no rate limit (8-oct-2026)."""
     import ai_take
     import free_voice
-    use_free = free_voice.engine() == "edge" and not free_voice.resting()
-    free = free_voice.voice_items(client, items) if use_free else [None] * len(items)
+    import local_voice
+    eng = free_voice.engine()
+    use_free = eng == "edge" and not free_voice.resting()
+    use_local = eng in ("edge", "omni") and local_voice.available()
+    free = free_voice.voice_items(client, items) if use_free or use_local else [None] * len(items)
     path_of = [os.path.join(job_dir, f".{prefix}_{k + 1}.wav") for k in range(len(items))]
     out = [None] * len(items)
     for k in range(len(items)):
-        if free[k]:
+        if use_free and free[k]:
             secs = free_voice.speak(free[k][0], path_of[k], free[k][1], free[k][2])
             if secs:
                 out[k] = (path_of[k], secs)
             time.sleep(free_voice.PAUSE)
+    # What the edge voice could not read (all of it with VOICE_ENGINE=omni) goes to the free local
+    # voice before the paid one: when edge rested, every line used to cost a Gemini call.
+    todo = [k for k in range(len(items)) if out[k] is None and free[k]] if use_local else []
+    for k in todo:
+        if os.path.exists(path_of[k] + ".words.json"):
+            os.remove(path_of[k] + ".words.json")
+    if todo:
+        print(f"   🗣️ Local voice reads {len(todo)} line(s)...")
+    for k, secs in zip(todo, local_voice.speak_many([(free[k][0], path_of[k], free_voice.gender(items[k].get("voice")),
+                                                       free[k][2]) for k in todo])):
+        if secs:
+            out[k] = (path_of[k], secs)
 
     def gemini_line(k):
         it = items[k]
