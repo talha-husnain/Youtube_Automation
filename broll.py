@@ -48,8 +48,11 @@ showed three courthouse domes in a row), and match the line's mood: serious line
 def terms_for(client, topic, lines, rule=""):
     got = kit.ask_json(client, Terms, TERMS_PROMPT.format(
         topic=topic, n=len(lines), rule=rule, lines="\n".join(f"{k}: {t[:200]}" for k, t in enumerate(lines))))
-    terms = [t.strip()[:60] for t in got.terms][:len(lines)]
-    return terms + [topic[:60]] * (len(lines) - len(terms))
+    # A term longer than 5 words is the line echoed back: on 22-oct-2026 the hook "Sirf 31 balls par ODI
+    # century, yeh pagalpan kisne kiya?" went to the libraries as is and found nothing.
+    short = " ".join(topic.split()[:4])[:60]
+    terms = [t.strip()[:60] if 0 < len(t.split()) <= 5 else short for t in got.terms][:len(lines)]
+    return terms + [short] * (len(lines) - len(terms))
 
 
 def windows_from(segments, total):

@@ -144,6 +144,14 @@ def test_footage_is_cropped_around_the_biggest_face(monkeypatch, tmp_path):
     assert "iw*0." not in seen[1] and "crop=1080:1920," in seen[1]
 
 
+def test_a_footage_term_that_echoes_the_line_is_replaced(monkeypatch):
+    import broll
+    monkeypatch.setattr(broll.kit, "ask_json", lambda *a, **k: broll.Terms(
+        terms=["Sirf 31 balls par ODI century, yeh pagalpan kisne kiya?", "cricket stadium night"]))
+    got = broll.terms_for(object(), "Fastest centuries in ODI cricket history", ["a", "b", "c"])
+    assert got == ["Fastest centuries in ODI", "cricket stadium night", "Fastest centuries in ODI"]
+
+
 def test_real_swooshes_replace_the_chirp(monkeypatch):
     import short_kit as kit
     cmd, graph, mix = [], [], []
