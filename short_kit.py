@@ -798,6 +798,8 @@ def finish(output_dir, stem, clips, transcript, pipeline, extra=None, margin=Non
     fl.write_job(output_dir, cfg, margin,
                  {os.path.basename(c["file"]): c.get("video_title_for_youtube_short") or ""
                   for c in clips})
+    # Numbers and names in a second colour (subtitles.EMPHASIS_COLOR); only generated Shorts come here.
+    os.environ.setdefault("CAPTION_EMPHASIS", "1")
     for i, c in enumerate(clips):
         served = c["file"]
         if c.get("captions"):

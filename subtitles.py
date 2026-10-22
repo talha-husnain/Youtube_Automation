@@ -351,6 +351,40 @@ def _dim_hex_color(hex_color, opacity, fallback="FFFFFF"):
     return f"{r:02X}{g:02X}{b:02X}"
 
 
+# Quality pass 2 (22-oct-2026): on generated Shorts the numbers and names in a caption carry a second
+# colour, the way pro caption styles mark the words a viewer should catch. Only where short_kit.finish
+# sets CAPTION_EMPHASIS=1: the comedy clips' captions stay as they are.
+EMPHASIS_COLOR = "#38E1FF"
+
+
+def _emphasised(words):
+    """Indexes of the words to colour: anything with a digit, and capitalised words that do not start a
+    sentence (Roman Urdu capitalises names: "Babar Azam", "Lahore")."""
+    out = set()
+    for j, w in enumerate(words):
+        bare = w.strip().strip("\"'()[]{},.!?;:")
+        if not bare:
+            continue
+        if re.search(r"\d", bare):
+            out.add(j)
+        elif len(bare) > 2 and bare[0].isupper() and not bare.isupper() and j > 0 \
+                and not words[j - 1].rstrip().endswith((".", "!", "?")):
+            out.add(j)
+    # A capitalised word before a marked name is the name's first half ("Babar" in "Babar Azam"), even at
+    # the start of a sentence, where the rule above leaves it out.
+    for j in sorted(out):
+        prev = words[j - 1].strip().strip("\"'()[]{},.!?;:") if j > 0 else ""
+        if prev[:1].isupper() and prev.lower() not in SENTENCE_STARTS and not words[j].strip()[:1].isdigit():
+            out.add(j - 1)
+    return out
+
+
+# Roman Urdu / Hindi words that open sentences: capitalised there, never the first half of a name.
+SENTENCE_STARTS = {"phir", "aaj", "ab", "yeh", "ye", "is", "us", "kya", "lekin", "magar", "aur", "jab", "woh",
+                   "wo", "ek", "hum", "main", "aap", "kal", "pehle", "sab", "kyun", "kaise", "agar", "to", "iske",
+                   "uske", "unhon", "inhon", "jo", "har", "kabhi", "sirf", "bas", "the", "in", "on", "at", "this"}
+
+
 def generate_ass(transcript, clip_start, clip_end, output_path,
                  max_chars=20, max_duration=2.0, alignment='bottom',
                  fontsize=16, font_name="Verdana", font_color="#FFFFFF",
@@ -486,7 +520,10 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     )
 
     events = []
+    emphasis = os.environ.get("CAPTION_EMPHASIS", "0").strip() == "1"
+    emph_inline = _hex_to_ass_inline_color(EMPHASIS_COLOR, fallback="38E1FF")
     for block in blocks:
+        marked = _emphasised([w['word'] for w in block]) if emphasis else set()
         for i, word in enumerate(block):
             # Event runs until the next word starts (no flicker in gaps);
             # the last word holds until the block ends.
@@ -504,6 +541,8 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                     parts.append(f"{active_prefix}{text}{{\\r}}")
                 elif reveal and j > i:
                     parts.append(f"{{\\alpha&HFF&}}{text}{{\\r}}")
+                elif j in marked:
+                    parts.append(f"{{\\c{emph_inline}}}{text}{{\\r}}")
                 else:
                     parts.append(text)
 
