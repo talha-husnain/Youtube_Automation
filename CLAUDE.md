@@ -857,6 +857,8 @@ never finished:
     line: a designed voice comes out different on each call. Whisper heard Urdu narration and a Quran
     line back word for word; CPU ~5.4x real time (16 steps), a cloned voice ~12x; English loanwords
     ("match", "wickets") come out bent. Its 3.1 GB model took 41 min to download here (~1.3 MB/s).
+    PyTorch's Intel Arc build (D:\youtube\oss\OmniVoice\.venv-xpu, torch 2.14.1+xpu) saw no device:
+    the Arc driver here is 31.0.101.4502 (2023). Point OMNIVOICE_PYTHON at it after a driver update.
   - GitHub's anonymous API (60 calls/h) runs out fast when research agents use it in parallel.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
   player born today; `cricket_shorts.birthday_ok` keeps it only when the
