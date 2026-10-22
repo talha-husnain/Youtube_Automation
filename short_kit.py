@@ -772,6 +772,17 @@ def mix_audio(path, seconds, voices=(), sfx=(), bed=None):
     return path
 
 
+def outro_seconds(cfg):
+    """The end card's length on a generated Short: the brand setting, at most SHORT_OUTRO_SECONDS (1.5).
+    A 3 s card is a swipe-away point and stops the Short from looping into itself (replays count as
+    views); the comedy clips keep the brand setting."""
+    try:
+        cap = float(os.environ.get("SHORT_OUTRO_SECONDS") or 1.5)
+    except ValueError:
+        cap = 1.5
+    return min(float(cfg["outro_seconds"]), max(1.0, cap))
+
+
 def end_card(t0, secs):
     """Events + sound of the brand end card at t0 (the comedy one)."""
     cfg = fl.settings()

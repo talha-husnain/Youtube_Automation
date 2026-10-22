@@ -38,7 +38,7 @@ import framed_layout as fl
 
 VOICE_STYLE = "like an excited Pakistani cricket commentator, natural Urdu accent, fast and energetic"
 GAP = 0.25          # between voice lines
-LEAD = 0.5          # before the first line
+LEAD = 0.15         # before the first line (was 0.5: half a second of silence on the frame that decides the swipe)
 MAX_BEATS = 8           # ~30 s: the Shorts that broke out in this niche run 14-35 s (research 22-oct-2026)
 WATCH_MAX_MINUTES = 45
 
@@ -674,7 +674,7 @@ def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_e
     if broll_rule is None:
         broll_rule = CRICKET_FOOTAGE if genre == "cricket" else ""
     import seo_copy
-    outro_s = cfg["outro_seconds"]
+    outro_s = kit.outro_seconds(cfg)
     card_ev, card_sfx = kit.end_card(body_end, outro_s)
     total = body_end + (outro_s if card_ev else 0.0)
     track = _bed(genre)

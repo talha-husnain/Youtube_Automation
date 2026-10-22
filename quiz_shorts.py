@@ -596,7 +596,7 @@ def run(output_dir, pipeline):
     caps.append((lines[-1], o0 + 0.1, o0 + 0.1 + lens[-1], said[-1][0]))
     body_end = o0 + lens[-1] + 0.8
 
-    outro_s = cfg["outro_seconds"]
+    outro_s = kit.outro_seconds(cfg)
     card_ev, card_sfx = kit.end_card(body_end, outro_s)
     total = body_end + (outro_s if card_ev else 0.0)
     if total > 175:

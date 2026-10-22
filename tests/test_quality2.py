@@ -46,3 +46,13 @@ def test_numbers_and_names_are_coloured_only_when_asked(monkeypatch, tmp_path):
     off = open(out, encoding="utf-8-sig").read()
     colour = subtitles._hex_to_ass_inline_color(subtitles.EMPHASIS_COLOR)
     assert colour in on and colour not in off
+
+
+def test_generated_shorts_end_quickly_so_they_loop(monkeypatch):
+    monkeypatch.delenv("SHORT_OUTRO_SECONDS", raising=False)
+    assert kit.outro_seconds({"outro_seconds": 3.0}) == 1.5
+    assert kit.outro_seconds({"outro_seconds": 1.2}) == 1.2
+    monkeypatch.setenv("SHORT_OUTRO_SECONDS", "0.2")
+    assert kit.outro_seconds({"outro_seconds": 3.0}) == 1.0
+    import cricket_shorts
+    assert cricket_shorts.LEAD < 0.2
