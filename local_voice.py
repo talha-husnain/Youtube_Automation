@@ -26,6 +26,9 @@ STEPS = int(os.environ.get("OMNIVOICE_STEPS") or 16)
 DESIGN = {"male": "male, middle-aged, low pitch", "female": "female, young adult, moderate pitch"}
 # The one reference line each narrator is cloned from (Urdu, ~5 s): see omnivoice_worker.
 REFERENCE = "السلام علیکم، آج ہم آپ کو ایک بہت دلچسپ کہانی سناتے ہیں۔"
+# Urdu runs ~15 characters a second of speech, so 2,000 is ~2 minutes of voice and ~25 minutes of CPU
+# with a cloned voice: a long video's whole narration would hold the one-job channel loop for hours.
+MAX_CHARS = int(os.environ.get("LOCAL_VOICE_MAX_CHARS") or 2000)
 LOAD_SECONDS = 180       # torch + model load, and making a missing reference voice
 PER_ITEM_SECONDS = 240   # a long line on the CPU with a cloned voice
 
@@ -62,6 +65,9 @@ def speak_many(jobs, run=subprocess.run):
     """jobs: [(text, wav path, "male"|"female", edge rate)] -> [seconds | None] per job, one worker
     process for all of them. Never raises: a line it cannot voice is None (Gemini takes it)."""
     if not jobs or not available():
+        return [None] * len(jobs)
+    if sum(len(t) for t, *_ in jobs) > MAX_CHARS:
+        print(f"   ℹ️ {len(jobs)} lines are too long for the local voice; Gemini reads them.")
         return [None] * len(jobs)
     os.makedirs(VOICES_DIR, exist_ok=True)
     prompts = {prompt_path(g): {"instruct": DESIGN["female" if g == "female" else "male"], "text": REFERENCE}

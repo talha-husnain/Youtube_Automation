@@ -107,3 +107,12 @@ def test_quran_translation_lines_use_the_local_voice_before_gemini(monkeypatch, 
     monkeypatch.setattr(ai_take, "speak", lambda client, text, path, voice, style, **kw: paid.append(text) or 4.0)
     got = qv.voice_translations(object(), ["edge", "local", "paid"], str(tmp_path), "urdu", log=lambda *a: None, wait=0)
     assert [s for _p, s in got] == [2.0, 3.0, 4.0] and paid == ["paid"]
+
+
+def test_a_long_batch_goes_to_gemini_instead_of_holding_the_loop(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCAL_VOICE", "1")
+    monkeypatch.setenv("OMNIVOICE_PYTHON", __file__)
+    monkeypatch.setattr(local_voice, "MAX_CHARS", 10)
+    run, calls = _fake_worker()
+    assert local_voice.speak_many([("a" * 11, str(tmp_path / "1.wav"), "male", "+0%")], run=run) == [None]
+    assert calls == []
