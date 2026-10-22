@@ -87,3 +87,24 @@ def test_parallax_renders_every_frame_and_falls_back_without_its_model(monkeypat
     assert probe.stdout.strip().replace("\r", "") == "192,108,12"
     monkeypatch.setattr(parallax, "MODEL", str(tmp_path / "missing.onnx"))
     assert not parallax.available()
+
+
+def test_a_cutout_is_used_only_for_cricket_and_only_when_it_is_clean(monkeypatch, tmp_path):
+    import player_photo as pp
+    from PIL import Image
+    src = str(tmp_path / "p.jpg")
+    Image.new("RGB", (300, 400), (90, 90, 90)).save(src)
+    mask = Image.new("L", (300, 400), 0)
+    mask.paste(255, (80, 60, 220, 400))           # a bust: a third of the picture, down to the bottom edge
+    monkeypatch.setenv("CUTOUT", "1")
+    monkeypatch.setattr(pp, "CUTOUT_MODEL", __file__)
+    monkeypatch.setattr(pp, "person_mask", lambda path: mask)
+    monkeypatch.setattr(pp, "_clean_cut", lambda im: True)
+    assert pp.cutout_card(src, str(tmp_path / "c.png"), (140, 160)) == str(tmp_path / "c.png")
+    monkeypatch.setattr(pp, "_clean_cut", lambda im: False)
+    assert pp.cutout_card(src, str(tmp_path / "d.png"), (140, 160)) is None
+    floating = Image.new("L", (300, 400), 0)
+    floating.paste(255, (100, 50, 200, 200))     # does not reach the bottom: not a person's bust
+    monkeypatch.setattr(pp, "person_mask", lambda path: floating)
+    monkeypatch.setattr(pp, "_clean_cut", lambda im: True)
+    assert pp.cutout_card(src, str(tmp_path / "e.png"), (140, 160)) is None

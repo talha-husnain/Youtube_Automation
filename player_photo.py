@@ -298,11 +298,44 @@ def cutout_card(src, out_path, size=(700, 760), outline=10):
         layer = Image.new("RGBA", out.size, (0, 0, 0, 0))
         layer.paste(im, (pad, pad), im)
         out = Image.alpha_composite(out, layer)
+        if not _clean_cut(out):
+            return None
         out.save(out_path)
         return out_path
     except Exception as e:  # noqa: BLE001 — the framed card is the fallback
         print(f"   ℹ️ No cut-out ({type(e).__name__}); framed card instead.")
         return None
+
+
+CLEAN_PROMPT = ("This is a cut-out sticker of a person on a plain green background. Answer true only if it shows "
+                "exactly one person, cleanly cut out, with no leftover part of another person (a second head, a "
+                "shoulder, a blurred figure behind) and no stray chunk of background.")
+
+
+def _clean_cut(rgba):
+    """One yes/no vision call on the finished cut-out: on Babar Azam's Wikipedia photo the mask kept a
+    blurred man standing behind him, one shape with Babar that no mask rule or YOLO separated
+    (22-oct-2026). Any doubt or failure: False, and the framed card is used."""
+    try:
+        import io
+        from google.genai import types
+        from PIL import Image
+        from pydantic import BaseModel
+
+        import short_kit as kit
+
+        class Clean(BaseModel):
+            clean: bool
+
+        bg = Image.new("RGBA", rgba.size, (40, 120, 70, 255))
+        im = Image.alpha_composite(bg, rgba).convert("RGB")
+        im.thumbnail((512, 512))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=85)
+        part = types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg")
+        return bool(kit.ask_json(kit.gemini(), Clean, [part, CLEAN_PROMPT]).clean)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _cover_rgba(img, w, h, lean=0.18):
