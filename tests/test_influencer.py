@@ -146,3 +146,16 @@ def test_process_passes_the_dance_switch(monkeypatch, tmp_path):
     assert r.status_code == 200, r.text
     assert app_module.jobs[r.json()["job_id"]]["env"]["MUSIC_DANCE"] == "1"
     assert os.path.basename(ai.CHARACTER_FILE) == "character.json"
+
+
+def test_a_drawn_dancer_is_dropped_even_when_the_picker_chose_it(monkeypatch, tmp_path):
+    import stock_media
+    clips = [{"id": f"pixabay:v{k}", "seconds": 9.0, "thumb": f"t{k}", "kind": "video"} for k in (1, 2)]
+    monkeypatch.setattr(stock_media, "recently_used", lambda: set())
+    monkeypatch.setattr(stock_media, "search", lambda term, portrait, kind: clips)
+    monkeypatch.setattr(stock_media, "choose", lambda client, topic, scenes, pools, rule="": [clips[0], clips[1], None])
+    monkeypatch.setattr(stock_media, "download", lambda c: str(tmp_path / f"{c['id'][-1]}.mp4"))
+    monkeypatch.setattr(stock_media, "mark_used", lambda ids: None)
+    monkeypatch.setattr(ai, "filmed", lambda client, c: c["id"] != "pixabay:v1")   # v1 is line art on green
+    got = ai.dance_clips(None, 8.0)
+    assert [c["id"] for c in got] == ["pixabay:v2"]

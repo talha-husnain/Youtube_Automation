@@ -62,6 +62,11 @@ DRIVE_RULE = ("This clip only drives the MOTION of an AI dancer, so judge the mo
               "picks were line-art girls, 22-oct-2026), the WHOLE body from head to feet inside the frame, a still camera "
               "(no pans, no cuts), real dancing that keeps going (not walking, posing or stretching). Never a "
               "suggestive dance (twerking, grinding, moves that focus on the body). Score 0 for anything else.")
+# Asked of each picked clip alone: with DRIVE_RULE in a 31-thumbnail call the model still picked a line-art
+# girl on green (22-oct-2026). A yes/no on one picture is the closed choice it gets right.
+FILMED_PROMPT = ("Is this picture a frame of real camera footage of a real human being? Answer false for a "
+                 "drawing, cartoon, line art, animation, 3D render or illustration on any background, and false "
+                 "when no person is in it.")
 LOOKS = [
     "a South Asian woman in her mid twenties, long dark wavy hair, warm brown eyes, a confident friendly smile",
     "a Latina woman in her mid twenties, long light-brown curly hair, hazel eyes, a playful smile",
@@ -202,7 +207,7 @@ def dance_clips(client, seconds, log=print):
         return []
     scenes = [f"dance clip {k + 1}: one person dancing, whole body in frame" for k in range(MAX_CLIPS)]
     picks = [c for c in stock_media.choose(client, "an AI pop singer dancing to her song", scenes,
-                                           [pool] * MAX_CLIPS, rule=DRIVE_RULE) if c]
+                                           [pool] * MAX_CLIPS, rule=DRIVE_RULE) if c and filmed(client, c)]
     out, total = [], 0.0
     for c in picks:
         path = stock_media.download(c)
@@ -220,6 +225,23 @@ def dance_clips(client, seconds, log=print):
         return []
     stock_media.mark_used([c["id"] for c in out])
     return out
+
+
+def filmed(client, cand):
+    """True when the clip's thumbnail is real footage of a person (FILMED_PROMPT); False on any doubt."""
+    import stock_media
+    from pydantic import BaseModel
+
+    import short_kit as kit
+
+    class Filmed(BaseModel):
+        filmed: bool
+
+    try:
+        part = stock_media._thumb_part(cand["thumb"])
+        return bool(part) and kit.ask_json(client, Filmed, [part, FILMED_PROMPT]).filmed
+    except Exception:
+        return False
 
 
 def driving(src, seconds, out):

@@ -809,6 +809,8 @@ never finished:
   16 frames, so clips go up at 16 fps). Use fal's returned status/response URLs (the full model
   path answers 405) and check `error` on COMPLETED. Off until `FAL_KEY` is in .env (read fresh)
   and a character is picked; `DAILY_MAX` 2 a day; a failure keeps the song's stock footage.
+  The 31-thumbnail pick call chose line-art girls twice even with "never a cartoon" in its rule;
+  each pick now gets its own yes/no `filmed()` call (10 of 10 right on known clips, 22-oct-2026).
 - **Quality pass** (22-oct-2026, `tests/test_quality.py`; owner: ~1,200 views a week on six channels).
   Our numbers: median watch 2 s (songs), 7 s (quiz), 10 s (cricket), 19 s (controversy); 8 uploads
   a day per new channel, 51 refused at the daily limit. Every channel in these niches with a median
