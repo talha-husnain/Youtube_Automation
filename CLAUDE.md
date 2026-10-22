@@ -941,6 +941,34 @@ never finished:
   one starts. Judgement, not measured. **Song hook**: `SongPlan.hook` (3-7 words, POV / send-this /
   AI reveal) shows big for the first 2.6 s (`lyric_events(hook=)`, outlined): the songs channel's
   median viewer left at 2 s with only a song title and grey stock footage on screen.
+- **Round 2 the same night** (owner: "do these all"):
+  - A blind judge (`script_craft.judge`) decides every polish: the writer's and the polished script go
+    in shuffled order, unlabelled. The opening polish's self-score said 9/10 for a rewrite that swapped a
+    real question for "Yeh video dikhayegi ke...", now banned ("yeh video", "is video", "this video").
+  - A/B tests on the generated channels (`my_channels.EXPERIMENTS`, `ab_stats`, `ab_winner`): the end
+    card (all Shorts channels) and the quiz countdown (`quiz_timer_add` -> QUIZ_TIMER_ADD, "long" puts
+    back the second cut tonight). A side wins only with 10+ counted a side, a 1.2x median lead, a
+    permutation p <= 0.1 on log views (`perm_p`, no scipy) and not watched 5+ points less; Shorts before
+    `AB_SINCE` (3 s card, old scripts) are left out. The first end card run: p 0.55-0.95, nothing. The
+    week report has a line per test (`ab_line`).
+  - Grades per channel on footage only (`broll.GRADES`, before DIM; CHANNEL_GRADE=0), history footage too.
+  - Beat cuts for songs (`beats.py`, numpy spectral flux + autocorrelation tempo + Ellis DP; a fixed grid
+    drifted a beat a minute; 18 ms median error on test clicks); `plan_shots(beats=)` moves each cut to
+    the nearest beat within 0.35 s, never the last. BEAT_CUTS=0.
+  - RIFE slow motion (`slowmo.py`, rife-ncnn-vulkan rife-v4.6 in D:\youtube\oss\rife, `-n` frame count):
+    a clip shorter than its shot (1.15-4x) is stretched instead of looped; 2 s -> 4 s in 11-14 s at a
+    1280 long side. SLOWMO=0.
+  - Noto animated stickers (`stickers.py`, CC BY 4.0, D:\youtube\oss\noto-emoji-animation): one Gemini
+    pick per Short in `cricket_shorts._finish` (cricket, controversy, history_today), code spaces them and
+    blocks death/tragedy/religion/allegation lines; `render(stickers=)`; credit in the description.
+    `-f webp_anim -ignore_loop 0` (stream_loop does not loop them). STICKERS=0.
+  - The mix measured, not judged by ear: a real voice + Lyria bed through `mix_audio` with and without
+    the bed, subtracted: music 20 dB under the voice while it speaks, -31 dBFS in the gaps. Gemini's
+    "slightly too loud" at every level was a habit, not a measurement.
+  - Old Windows test failures: 6 read source files without encoding (cp1252), restoring_static split a
+    backslash path on "/" (fixed in the code), the fcntl ASR slot tests skip on Windows; the billing
+    tests need requirements-billing.txt (installed in .venv from cp314 wheels: sqlalchemy 2.1.6 and
+    asyncpg 0.32, the pins have no Python 3.14 builds; production pins unchanged).
 - **Wikipedia most-read** (`trends.wiki_top`, pageviews API, CC0, no key): yesterday's top English (120)
   and Hindi (30) articles go to the cricket, controversy and explainer planners (`wiki_hint`).
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a

@@ -581,7 +581,7 @@ def bg_source(colors, seconds):
 
 def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=(),
            music=None, visualizer=False, silent=False, fades=None, music_seconds=None, bed=None,
-           images=(), bg_image=None, bg_video=None, fast=False):
+           images=(), bg_image=None, bg_video=None, fast=False, stickers=()):
     """Make a 1080x1920 short: gradient (or ``bg_image``), an optional wave
     line from ``music``, pictures, then the text layer.
 
@@ -598,6 +598,7 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     panning slowly (the AI songs' cover art).
     bg_video: a finished background (broll.py's stock footage at the canvas
     size, at least ``seconds`` long) instead of either.
+    stickers: stickers.place() output, animated emoji over the picture and under the text.
     """
     ass_path = os.path.join(os.path.dirname(os.path.abspath(out_path)),
                             f"gen_{os.getpid()}_{int(time.time() * 1000) % 10**8}.ass")
@@ -675,6 +676,16 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
                      f"eof_action=pass:enable='between(t,{t0:.3f},{t1:.3f})'[v_im{k}]")
         v = f"[v_im{k}]"
         idx += 1
+    if stickers:
+        import stickers as stk
+        for k, st in enumerate(stickers):
+            # Over footage the input runs to the end like the pictures above (the ffmpeg 9 stall).
+            inputs, filters, v = stk.overlay_args(st["path"], idx, st["t0"], st["t1"], st["x"], st["y"],
+                                                  st.get("size", stk.SIZE), src=v, label=f"stk{k}",
+                                                  alive_until=seconds if bg_video else None)
+            cmd += inputs
+            graph += filters
+            idx += 1
     idx = _voice_sfx_inputs(cmd, graph, mix, idx, voices, sfx)
     graph.append(f"{v}ass=filename='{escape_filter_value(ass_path)}'"
                  f":fontsdir='{escape_filter_value(fl.FONTS_DIR)}',format=yuv420p[v]")

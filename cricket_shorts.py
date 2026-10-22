@@ -685,6 +685,24 @@ def _photo(name, output_dir, kind="cricket"):
     return got
 
 
+def _stickers(clip, seconds):
+    """Animated emoji (stickers.py, Noto, CC BY 4.0) on a few voice lines: one Gemini pick, code keeps
+    them apart and off lines about a death, a tragedy, religion or an allegation. [] when off or on any
+    failure."""
+    import stickers
+    if not stickers.available():
+        return []
+    segs = [s for s in ((clip.get("captions") or {}).get("segments") or []) if (s.get("text") or "").strip()]
+    if not segs:
+        return []
+    try:
+        picks = stickers.pick(kit.gemini(), [s["text"] for s in segs])
+        return stickers.place(picks, [(s["start"], s["end"]) for s in segs], seconds=seconds)
+    except Exception as e:  # noqa: BLE001 — a Short without stickers is still a Short
+        print(f"   ℹ️ No stickers ({type(e).__name__}).")
+        return []
+
+
 def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_end, clip, seo,
             images=(), photos=(), genre="cricket", after_seo=None, broll_rule=None):
     import broll
@@ -700,11 +718,13 @@ def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_e
     bg, footage = broll.background_for(seo.get("source_title") or clip.get("video_title_for_youtube_short") or genre,
                                        clip["captions"]["segments"], total, output_dir, rule=broll_rule)
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
+    stuck = _stickers(clip, body_end)
     print(f"🎬 Rendering the {genre} short ({total:.0f}s"
-          + (f", music: {os.path.basename(track)}" if track else "") + ")...")
+          + (f", music: {os.path.basename(track)}" if track else "")
+          + (f", stickers: {' '.join(s['name'] for s in stuck)}" if stuck else "") + ")...")
     kit.render(final, total, colors, ([] if bg else kit.ambient_events(total)) + events + card_ev, STYLES,
                voices=voices, sfx=sfx + card_sfx, bed=(track, body_end) if track else None, images=images,
-               bg_video=bg, fast=bool(clip.get("captions")))
+               bg_video=bg, fast=bool(clip.get("captions")), stickers=stuck)
     clip.update({"end": round(total, 3), "seconds": round(total, 3), "file": final,
                  "background_music": os.path.basename(track) if track else None,
                  "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in footage]})
@@ -717,6 +737,12 @@ def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_e
         for field in ("seo_description", "video_description_for_instagram"):
             if clip.get(field):
                 clip[field] = credits.insert(clip[field], stock_media.credit_line(footage))
+    if stuck:
+        import credits
+        import stickers
+        for field in ("seo_description", "video_description_for_instagram"):
+            if clip.get(field):
+                clip[field] = credits.insert(clip[field], stickers.CREDIT)
     if photos:
         # Free licences ask for credit: in the copy, never on screen.
         import credits
