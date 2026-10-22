@@ -821,6 +821,8 @@ def _wrap(text, width):
 
 STYLES = [
     kit.style("HvCap", "Montserrat ExtraBold", 52, "#FFFFFF", outline=3, shadow=1, align=2),
+    # Karaoke captions: words fill from white to gold as they are said (\kf; see _karaoke).
+    kit.style("HvCapK", "Montserrat ExtraBold", 52, fl.GOLD, outline=3, shadow=1, align=2, secondary="#FFFFFF"),
     kit.style("HvLabel", "Montserrat ExtraBold", 38, "#FFFFFF", outline=0, shadow=2, align=4, spacing=2),
     kit.style("HvKicker", "Montserrat ExtraBold", 34, fl.GOLD, outline=0, shadow=2, spacing=8),
     kit.style("HvTitle", "Noto Serif Bold", 84, "#FFFFFF", outline=0, shadow=4),
@@ -890,13 +892,36 @@ def shot_events(d, label=None, caps=(), handle="", question=None):
                                rf"{{\an4\move(60,88,80,88,0,300)\fad(250,250)}}{text}"))
     for text, a, b in caps:
         if b - a > 0.05:
-            ev.append(kit.dialogue(6, a, b, "HvCap", rf"{{\an2\pos({W // 2},{H - 46})}}{_esc(text)}"))
+            if _karaoke_on():
+                ev.append(kit.dialogue(6, a, b, "HvCapK", rf"{{\an2\pos({W // 2},{H - 46})}}{_karaoke(text, b - a)}"))
+            else:
+                ev.append(kit.dialogue(6, a, b, "HvCap", rf"{{\an2\pos({W // 2},{H - 46})}}{_esc(text)}"))
     if question:
         a = max(0.0, question[1])
         ev.append(_rect(2, a, d, 0, 0, W, H, alpha="90", fade=(300, 0)))
         ev.append(kit.dialogue(4, a, d, "HvQ", rf"{{\an5\pos({W // 2},{H // 2 - 20})\fad(300,0)}}"
                                                rf"{_wrap(question[0], 36)}"))
     return ev
+
+
+def _karaoke_on():
+    """Quality pass 2: the long videos' captions were static blocks; they now fill word by word.
+    HISTORY_KARAOKE=0 brings the static captions back."""
+    return os.environ.get("HISTORY_KARAOKE", "1").strip() != "0"
+
+
+def _karaoke(text, seconds):
+    """``text`` with an ASS \\kf sweep per word, each word's share of ``seconds`` by its length: the chunk
+    already starts and ends with the voice, and a smooth fill hides the small drift of a length guess
+    (the same idea as the AI take's gold words)."""
+    words = _esc(text).split()
+    if not words:
+        return ""
+    lead = 0.08 * seconds                       # a breath before the first word
+    weights = [len(w) + 2 for w in words]
+    total = sum(weights)
+    cs = [max(1, round((seconds - lead) * 100 * wt / total)) for wt in weights]
+    return f"{{\\k{round(lead * 100)}}}" + " ".join(f"{{\\kf{c}}}{w}" for c, w in zip(cs, words))
 
 
 def card_events(d, kicker, title):

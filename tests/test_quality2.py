@@ -108,3 +108,15 @@ def test_a_cutout_is_used_only_for_cricket_and_only_when_it_is_clean(monkeypatch
     monkeypatch.setattr(pp, "person_mask", lambda path: floating)
     monkeypatch.setattr(pp, "_clean_cut", lambda im: True)
     assert pp.cutout_card(src, str(tmp_path / "e.png"), (140, 160)) is None
+
+
+def test_history_captions_fill_word_by_word_within_their_time(monkeypatch):
+    import re
+    import history_videos as hv
+    text = hv._karaoke("Sultan Mehmed ne 1453 mein Constantinople fatah kiya", 3.2)
+    cs = [int(x) for x in re.findall(r"\kf?(\d+)", text)]
+    assert text.startswith("{\k") and text.count("\kf") == 8 and abs(sum(cs) - 320) <= 8
+    ev = hv.shot_events(4.0, caps=[("ek do", 0.2, 1.4)])
+    assert any("HvCapK" in e for e in ev)
+    monkeypatch.setenv("HISTORY_KARAOKE", "0")
+    assert any("HvCap," in e for e in hv.shot_events(4.0, caps=[("ek do", 0.2, 1.4)]))
