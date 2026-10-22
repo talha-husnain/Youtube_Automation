@@ -114,8 +114,8 @@ def test_history_captions_fill_word_by_word_within_their_time(monkeypatch):
     import re
     import history_videos as hv
     text = hv._karaoke("Sultan Mehmed ne 1453 mein Constantinople fatah kiya", 3.2)
-    cs = [int(x) for x in re.findall(r"\kf?(\d+)", text)]
-    assert text.startswith("{\k") and text.count("\kf") == 8 and abs(sum(cs) - 320) <= 8
+    cs = [int(x) for x in re.findall(r"\\kf?(\d+)", text)]
+    assert text.startswith("{\\k") and text.count("\\kf") == 8 and abs(sum(cs) - 320) <= 8
     ev = hv.shot_events(4.0, caps=[("ek do", 0.2, 1.4)])
     assert any("HvCapK" in e for e in ev)
     monkeypatch.setenv("HISTORY_KARAOKE", "0")
