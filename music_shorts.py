@@ -314,7 +314,7 @@ def lyric_events(lines, total, title, genre, handle, hook=""):
         # left at 2 s with only a song title on screen, 22-oct-2026).
         end = min(2.6, total)
         ev.append(kit.dialogue(6, 0, end, "MuTitle",
-                               rf"{{\an5\pos({CX},760)\fscx60\fscy60\t(0,220,\fscx108\fscy108)"
+                               rf"{{\an5\pos({CX},760)\fscx85\fscy85\t(0,220,\fscx108\fscy108)"
                                rf"\t(220,320,\fscx100\fscy100)\fad(0,250)\bord5\3c&H000000&}}{_t(hook, 44)}"))
     # A dark wash behind the lyrics so they read on any cover.
     ev.append(kit.dialogue(1, 0, total, "Shape",
@@ -326,12 +326,13 @@ def lyric_events(lines, total, title, genre, handle, hook=""):
     if handle:
         ev.append(kit.dialogue(2, 0, total, "MuSmall", rf"{{\an5\pos({CX},70)\alpha&H30&}}{handle}"))
     w = max(240, 24 * len(genre) + 100)
-    ev.append(kit.dialogue(2, 0.2, total, "Shape",
+    # Genre tag and title on frame 0 (no fade from nothing): the frame the feed shows while people swipe.
+    ev.append(kit.dialogue(2, 0, total, "Shape",
                            rf"{{\an7\pos({CX - w // 2},{170 - 36})\1c{fl._ass_colour(fl.GOLD)}\bord0\shad0"
-                           rf"\fad(200,0)\p1}}{fl._round_rect(w, 72, 36)}{{\p0}}"))
-    ev.append(kit.dialogue(3, 0.2, total, "MuPill", rf"{{\an5\pos({CX},170)\fad(200,0)}}{_t(genre, 22).upper()}"))
+                           rf"\p1}}{fl._round_rect(w, 72, 36)}{{\p0}}"))
+    ev.append(kit.dialogue(3, 0, total, "MuPill", rf"{{\an5\pos({CX},170)}}{_t(genre, 22).upper()}"))
     ev.append(kit.dialogue(3, 0, total, "MuTitle",
-                           rf"{{\an5\pos({CX},290)\fscx70\fscy70\t(0,300,\fscx100\fscy100)\fad(200,0)}}"
+                           rf"{{\an5\pos({CX},290)\fscx92\fscy92\t(0,300,\fscx100\fscy100)}}"
                            rf"{_t(title, 30)}"))
     for k, (text, a, b) in enumerate(lines):
         nxt = lines[k + 1] if k + 1 < len(lines) else None

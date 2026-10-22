@@ -441,11 +441,11 @@ def _shape(layer, t0, t1, drawing, colour, at, alpha="00", extra="", move=None):
                         rf"{{\an7{where}\1c{colour}\1a&H{alpha}&\bord0\shad0{extra}\p1}}{drawing}{{\p0}}")
 
 
-def _pill(t0, t1, y, text):
+def _pill(t0, t1, y, text, fade_in=150):
     w, h = max(260, 26 * len(text) + 110), 78
     return [_shape(3, t0, t1, fl._round_rect(w, h, h // 2), _c(fl.GOLD), (CX - w // 2, y - h // 2),
-                   extra=r"\fad(150,150)"),
-            kit.dialogue(4, t0, t1, "QzPill", rf"{{\an5\pos({CX},{y})\fad(150,150)}}{text}")]
+                   extra=rf"\fad({fade_in},150)"),
+            kit.dialogue(4, t0, t1, "QzPill", rf"{{\an5\pos({CX},{y})\fad({fade_in},150)}}{text}")]
 
 
 def _flash(t0):
@@ -485,14 +485,18 @@ def timer_add():
 def question_events(k, n, label, q, q0, timer0, reveal0, end, picture=False):
     """One question: card (or the flag above, drawn by render), options
     swiping in, countdown, the reveal."""
-    ev = [_flash(q0)]
-    ev += _pill(q0, end, 190, f"{label} {k}/{n}")
+    # A question that opens the Short is on frame 0: no flash, no fade from nothing.
+    first = q0 <= 0.05
+    fin = 0 if first else 200
+    ev = [] if first else [_flash(q0)]
+    ev += _pill(q0, end, 190, f"{label} {k}/{n}", fade_in=0 if first else 150)
     if picture:
-        ev.append(kit.dialogue(4, q0 + 0.2, end, "QzNote", rf"{{\an5\pos({CX},735)\fad(200,200)}}{_t(q.question, 60)}"))
+        ev.append(kit.dialogue(4, q0 if first else q0 + 0.2, end, "QzNote",
+                               rf"{{\an5\pos({CX},735)\fad({fin},200)}}{_t(q.question, 60)}"))
     else:
         ev.append(_shape(2, q0, end, fl._round_rect(980, 360, 40), "&H2B140E&", (50, 250), alpha="40",
-                         extra=r"\fad(200,200)"))
-        ev.append(kit.dialogue(4, q0, end, "QzQ", rf"{{\an5\pos({CX},430)\fad(200,200)\fscx90\fscy90"
+                         extra=rf"\fad({fin},200)"))
+        ev.append(kit.dialogue(4, q0, end, "QzQ", rf"{{\an5\pos({CX},430)\fad({fin},200)\fscx90\fscy90"
                                                    rf"\t(0,220,\fscx100\fscy100)}}{_t(q.question, 140)}"))
     rows = option_rows(len(q.options), picture)
     timer_y = 1340 if picture else 1290
@@ -584,13 +588,18 @@ def run(output_dir, pipeline):
         raise RuntimeError("The AI voice failed for every line; try again in a minute.")
     lens = [s or max(2.0, len(t.split()) / 2.6) for t, (_p, s) in zip(lines, said)]
 
-    t, voices, caps, events, sfx, images = 0.4, [], [], [], [], []
-    # Hook: the title pops in the middle.
+    # Cold open (QUIZ_COLD_OPEN, default on): question 1 (or its flag) is on screen from frame 0 while the
+    # hook is spoken. With a title card over stock footage first, 93% of viewers swiped away before the
+    # engaged-view mark (YouTube Analytics engagedViews/views, quiz channel, 22-oct-2026).
+    cold = os.environ.get("QUIZ_COLD_OPEN", "1").strip() != "0"
+    t, voices, caps, events, sfx, images = (0.15 if cold else 0.4), [], [], [], [], []
     hook_end = t + lens[0] + GAP
-    events.append(kit.dialogue(4, t, hook_end, "QzTitle",
-                               rf"{{\an5\pos({CX},820)\fscx60\fscy60\t(0,260,\fscx105\fscy105)"
-                               rf"\t(260,400,\fscx100\fscy100)\fad(0,200)}}{fl.clean_title(quiz.title)}"))
-    events += _pill(t + 0.2, hook_end, 1040, (f"QUIZ #{number} | " if number else "") + f"{len(quiz.questions)} {f['label']}")
+    if not cold:
+        # Hook: the title pops in the middle.
+        events.append(kit.dialogue(4, t, hook_end, "QzTitle",
+                                   rf"{{\an5\pos({CX},820)\fscx60\fscy60\t(0,260,\fscx105\fscy105)"
+                                   rf"\t(260,400,\fscx100\fscy100)\fad(0,200)}}{fl.clean_title(quiz.title)}"))
+        events += _pill(t + 0.2, hook_end, 1040, (f"QUIZ #{number} | " if number else "") + f"{len(quiz.questions)} {f['label']}")
     if said[0][0]:
         voices.append((said[0][0], t))
     caps.append((lines[0], t, t + lens[0], said[0][0]))
@@ -612,10 +621,12 @@ def run(output_dir, pipeline):
             voices.append((said[ri][0], reveal0 + 0.15))
         caps.append((lines[ri], reveal0 + 0.15, reveal0 + 0.15 + lens[ri], said[ri][0]))
         end = reveal0 + 0.15 + lens[ri] + 0.5
-        events += question_events(k + 1, len(quiz.questions), f["label"], q, q0, timer0, reveal0, end,
+        shown = 0.0 if cold and k == 0 else q0
+        events += question_events(k + 1, len(quiz.questions), f["label"], q, shown, timer0, reveal0, end,
                                   picture=bool(pictures))
         if pictures:
-            images.append({"path": pictures[k], "t0": q0, "t1": end, "y": FLAG_Y, "zoom": 0.03})
+            images.append({"path": pictures[k], "t0": shown, "t1": end, "y": FLAG_Y, "zoom": 0.03,
+                           **({"fade_in": 0} if shown == 0.0 else {})})
         t = end
     o0 = t
     events.append(_flash(o0))

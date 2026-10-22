@@ -346,6 +346,38 @@ def _cover_rgba(img, w, h, lean=0.18):
     return img.crop((x, y, x + w, y + h))
 
 
+def mystery(card_path, out_path, gold=(255, 210, 63)):
+    """The same card or badge as a navy "guess who" silhouette with a gold "?". A hook that asks who did
+    it must not show who did it: two sample Shorts put the player's photo and name on screen 0.3 s into
+    "Fastest ODI century kisne banayi?" (22-oct-2026), while 83-93% of viewers swiped away early."""
+    from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+    im = Image.open(card_path).convert("RGBA")
+    alpha = im.getchannel("A")
+    if sum(alpha.histogram()[:10]) > 0.3 * im.width * im.height:
+        # A cutout: a solid silhouette of the player's shape.
+        out = Image.new("RGBA", im.size, (36, 52, 96, 255))
+    else:
+        # A framed photo (a navy box alone read as empty): the photo blurred past recognising, darkened.
+        out = ImageEnhance.Brightness(im.convert("RGB").filter(ImageFilter.GaussianBlur(max(8, im.height // 14)))
+                                      ).enhance(0.7).convert("RGBA")
+    out.putalpha(alpha)
+    box = alpha.point(lambda a: 255 if a > 200 else 0).getbbox()
+    if box and sum(alpha.histogram()[:10]) <= 0.3 * im.width * im.height:
+        # The gold frame again (the blur smeared it): a ring on a round badge, a rounded box on a card.
+        w, h = box[2] - box[0], box[3] - box[1]
+        width = max(3, h // 80)
+        if abs(w - h) <= 0.05 * w:
+            ImageDraw.Draw(out).ellipse(box, outline=gold + (255,), width=width)
+        else:
+            ImageDraw.Draw(out).rounded_rectangle(box, 44, outline=gold + (255,), width=width)
+    font = ImageFont.truetype(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts",
+                                           "Anton-Regular.ttf"), max(24, int(im.height * 0.42)))
+    ImageDraw.Draw(out).text((im.width / 2, im.height / 2), "?", font=font, fill=gold + (255,), anchor="mm",
+                             stroke_width=max(3, im.height // 60), stroke_fill=(0, 0, 0, 255))
+    out.save(out_path)
+    return out_path
+
+
 def card(src, out_path, size=(700, 760), radius=44, border=10, gold=(255, 210, 63)):
     from PIL import Image, ImageDraw, ImageFilter
     w, h = size

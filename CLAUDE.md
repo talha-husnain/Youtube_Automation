@@ -985,6 +985,15 @@ never finished:
     backslash path on "/" (fixed in the code), the fcntl ASR slot tests skip on Windows; the billing
     tests need requirements-billing.txt (installed in .venv from cp314 wheels: sqlalchemy 2.1.6 and
     asyncpg 0.32, the pins have no Python 3.14 builds; production pins unchanged).
+- **First second** (23-oct-2026): engagedViews/views showed 7-17% of viewers staying past the first seconds
+  on cricket and quiz. Frame 0 was an empty gradient (everything faded in) and "kisne banayi?" hooks showed
+  the player's photo and name at 0.3 s. Now title, tag and picture are on frame 0 (`fade_in` 0), a hidden
+  player shows as `player_photo.mystery` (blurred card, gold "?", "KAUN?") until a line names him
+  (`cricket_shorts.says`/`reveal_at`), quizzes open on question 1 (QUIZ_COLD_OPEN=0 = old title card).
+  `youtube_account.video_analytics` reads engagedViews (`a_views`/`engaged`, never "views": what_works
+  merges rows); learn stores `stayed`; `hook_lessons` (10+ starts, 6+ Shorts, 10-point gap) goes to the
+  writer and polish prompts as HOOK_LESSONS. Patch scripts: heredocs ate backslashes twice more tonight;
+  build backslashes with chr(92) in a Write-tool script.
 - **Title tournament** (`script_craft.pick_title`, POLISH=0 off): every generated Short (via
   `short_kit.seo_or_fail`, so never the comedy channel) and every non-sacred history/explainer video gets 5
   other title angles; `title_ok` drops any with a number or name not in the script/research, "#", "|",

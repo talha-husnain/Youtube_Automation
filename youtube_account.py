@@ -805,16 +805,30 @@ def _iso_seconds(d):
     return dd * 86400 + h * 3600 + mi * 60 + s
 
 
+ANALYTICS_METRICS = "views,averageViewDuration,averageViewPercentage,shares,subscribersGained"
+
+
 def video_analytics(days=90):
-    """{video_id: {avg_percent, avg_seconds, shares, subs}} from YouTube Analytics."""
+    """{video_id: {avg_percent, avg_seconds, shares, subs, a_views, engaged}} from YouTube Analytics.
+    ``engaged`` is engagedViews: since 31-mar-2025 a Short's view counts the moment it starts, an engaged
+    view only past its first seconds, so engaged/views is the share who did not swipe away. It came back
+    per Short even at 1-60 views (22-oct-2026), where the retention curve came back empty."""
     end = datetime.now(timezone.utc).date()
-    res = _get(ANALYTICS_API, {
-        "ids": "channel==MINE", "startDate": str(end - timedelta(days=days)), "endDate": str(end),
-        "metrics": "views,averageViewDuration,averageViewPercentage,shares,subscribersGained",
-        "dimensions": "video", "sort": "-views", "maxResults": 200})
+    params = {"ids": "channel==MINE", "startDate": str(end - timedelta(days=days)), "endDate": str(end),
+              "metrics": ANALYTICS_METRICS + ",engagedViews", "dimensions": "video", "sort": "-views",
+              "maxResults": 200}
+    try:
+        res = _get(ANALYTICS_API, params)
+    except Exception:  # noqa: BLE001 — a refused metric must not cost the rest
+        res = _get(ANALYTICS_API, {**params, "metrics": ANALYTICS_METRICS})
+    names = [h.get("name") for h in res.get("columnHeaders") or []] or (
+        ["video"] + ANALYTICS_METRICS.split(","))
     out = {}
     for row in res.get("rows") or []:
-        vid, views, secs, pct, shares, subs = row
-        out[vid] = {"avg_seconds": round(float(secs), 1), "avg_percent": round(float(pct), 1),
-                    "shares": int(shares), "subs": int(subs)}
+        v = dict(zip(names, row))
+        out[v["video"]] = {"avg_seconds": round(float(v.get("averageViewDuration") or 0), 1),
+                           "avg_percent": round(float(v.get("averageViewPercentage") or 0), 1),
+                           "shares": int(v.get("shares") or 0), "subs": int(v.get("subscribersGained") or 0),
+                           "a_views": int(v.get("views") or 0),   # not "views": what_works merges these rows
+                           **({"engaged": int(v["engagedViews"])} if v.get("engagedViews") is not None else {})}
     return out

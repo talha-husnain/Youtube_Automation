@@ -2864,6 +2864,7 @@ def _job_clips(job_id):
                     "description": c.get("seo_description") or "",
                     "tags": c.get("seo_tags") or [], "genre": genre,
                     "hook": c.get("video_title_for_youtube_short") or "", "take": c.get("ai_take") or "",
+                    "opening": c.get("viral_hook_text") or "",
                     "tiktok": c.get("video_description_for_tiktok") or "",
                     "instagram": c.get("video_description_for_instagram") or "",
                     "seconds": round(float(c.get("end", 0)) - float(c.get("start", 0)), 1),
@@ -4714,6 +4715,7 @@ async def process_endpoint(
     take_voice: Optional[str] = Form(None),
     quiz_format: Optional[str] = Form(None),
     quiz_timer_add: Optional[str] = Form(None),
+    hook_lessons: Optional[str] = Form(None),
     quiz_topic: Optional[str] = Form(None),
     quiz_avoid: Optional[str] = Form(None),
     quiz_number: Optional[str] = Form(None),
@@ -4794,6 +4796,7 @@ async def process_endpoint(
         take_voice = body.get("take_voice")
         quiz_format = body.get("quiz_format")
         quiz_timer_add = body.get("quiz_timer_add")
+        hook_lessons = body.get("hook_lessons")
         quiz_topic = body.get("quiz_topic")
         quiz_avoid = body.get("quiz_avoid")
         quiz_number = body.get("quiz_number")
@@ -5106,6 +5109,9 @@ async def process_endpoint(
             # 0 = the opening teaser, 1-2 = a Short of one of its best moments.
             part = str(history_teaser_part or "0")
             env["HISTORY_TEASER_PART"] = part if part in ("0", "1", "2") else "0"
+    # The channel's own openings ranked by viewers who stayed (my_channels.hook_lessons).
+    if hook_lessons:
+        env["HOOK_LESSONS"] = " ".join(str(hook_lessons).split())[:1500]
     # The channel kinds of my_channels.py; avoid lists keep a channel from
     # asking a question or making a song title twice.
     if genre_val == "quiz":

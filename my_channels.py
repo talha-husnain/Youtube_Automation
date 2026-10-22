@@ -808,6 +808,8 @@ def learn(ch, log=print):
             a = watched.get(r["video_id"])
             if a:
                 r.update(retention=a["avg_percent"], watch_seconds=a["avg_seconds"])
+                if a.get("engaged") is not None and a.get("a_views"):
+                    r.update(stayed=round(100 * a["engaged"] / a["a_views"], 1), a_views=a["a_views"])
                 youtube_account._save_upload(r)
     by_format, kept = {}, {}
     for r in mature:
@@ -830,6 +832,7 @@ def learn(ch, log=print):
              if len(ranked) >= 8 else []}
     # The A/B tests (ab_choice): views and % watched per side, Shorts since AB_SINCE only.
     stats["ab"] = ab_stats(mature)
+    stats["hooks"] = hook_lessons(mature)
     stats["hours"] = _by_hour(mature)
 
     def fn(c):
@@ -960,6 +963,39 @@ def perm_p(a, b, n=2000, seed=7):
     return hits / n
 
 
+HOOK_MIN_VIEWS = 10   # fewer starts than this and one viewer moves "stayed" by 10+ points
+HOOK_GAP = 10         # the best must beat the worst by this many points, or it is noise
+
+
+def hook_lessons(rows, n=3):
+    """{"best": [...], "worst": [...]} openings of this channel's own Shorts ranked by how many viewers
+    stayed past the first seconds (engagedViews / views), for the writer prompts (HOOK_LESSONS). Shorts
+    from before the opening line was stored teach with their title. {} until there is a clear gap."""
+    seen = [r for r in rows if r.get("stayed") is not None and (r.get("a_views") or 0) >= HOOK_MIN_VIEWS
+            and r.get("format") not in EXTRA_FORMATS and (r.get("opening") or r.get("title"))]
+    if len(seen) < 2 * n:
+        return {}
+    seen.sort(key=lambda r: r["stayed"], reverse=True)
+    best, worst = seen[:n], seen[-n:][::-1]
+    if best[0]["stayed"] - worst[0]["stayed"] < HOOK_GAP:
+        return {}
+
+    def line(r):
+        said = (r.get("opening") or r.get("title") or "").strip()[:110]
+        return f"\"{said}\" ({r['stayed']:.0f}% stayed)"
+    return {"best": [line(r) for r in best], "worst": [line(r) for r in worst]}
+
+
+def hook_text(stats):
+    """The lessons as one prompt line ("" without them)."""
+    h = (stats or {}).get("hooks") or {}
+    if not h.get("best"):
+        return ""
+    return ("THIS CHANNEL'S OWN VIEWERS (share who stayed past the first seconds): openings that kept them: "
+            + "; ".join(h["best"]) + ". Openings they swiped away from: " + "; ".join(h["worst"])
+            + ". Learn what the first kind does differently; never copy their words.")[:1500]
+
+
 def ab_stats(rows, since=AB_SINCE):
     """{test: {side: {"shorts", "median", "watched"?}, "p": p}} over counted Shorts since ``since``."""
     out = {}
@@ -1076,6 +1112,8 @@ def next_payload(ch, client_fn, log=print):
         if ch["kind"] in EXPERIMENTS["timer"]["kinds"]:
             meta["timer"] = ab_choice(ch, "timer")
             payload["quiz_timer_add"] = 0 if meta["timer"] == "short" else 1
+    if payload and hook_text(ch.get("stats")):
+        payload["hook_lessons"] = hook_text(ch.get("stats"))
     return payload, meta
 
 
@@ -1593,6 +1631,8 @@ def upload_waiting(ch, job_clips, log=print):
                 meta={"job_id": j["job_id"], "clip_index": clip["index"], "channel": ch["id"],
                       "format": j.get("format"), "topic": j.get("topic"), "seconds": clip.get("seconds"),
                       "question": clip.get("question") or "", "answers": clip.get("answers") or [],
+                      # What the first seconds say and show, for hook_lessons.
+                      "opening": clip.get("opening") or "", "screen": clip.get("hook") or "",
                       **({"series": j["series"], "series_part": j.get("series_part")} if j.get("series") else {}),
                       **({"outro": j["outro"]} if j.get("outro") is not None else {}),
                       **({"timer": j["timer"]} if j.get("timer") is not None else {})})

@@ -131,11 +131,18 @@ def short_rules(structure=None, exclude=()):
     import random
     pool = [s for s in STRUCTURES if s.split(":")[0] not in exclude] or STRUCTURES
     return SHORT_CRAFT.format(banned=", ".join(f'"{b}"' for b in BANNED),
-                              structure=structure or random.choice(pool))
+                              structure=structure or random.choice(pool)) + lessons()
 
 
 def long_rules():
-    return LONG_CRAFT.format(banned=", ".join(f'"{b}"' for b in BANNED))
+    return LONG_CRAFT.format(banned=", ".join(f'"{b}"' for b in BANNED)) + lessons()
+
+
+def lessons():
+    """This channel's own best and worst openings by viewers who stayed (my_channels.hook_lessons,
+    sent as HOOK_LESSONS), as a last rule line; "" until the channel has the numbers."""
+    text = (os.environ.get("HOOK_LESSONS") or "").strip()
+    return ("- " + text) if text else ""
 
 
 def banned_hits(text):
@@ -284,7 +291,7 @@ def polish(client, story, facts, what="cricket facts YouTube Short", fields=None
     try:
         got = kit.ask_json(client, Doctored, POLISH_PROMPT.format(
             what=what, facts=facts, script=script, last=len(lines) - 1, n=len(lines), language=language,
-            banned=", ".join(BANNED)), model=writer_model())
+            banned=", ".join(BANNED)) + (chr(10) + lessons() if lessons() else ""), model=writer_model())
     except Exception as e:  # noqa: BLE001 — the writer's lines are fine on their own
         log(f"   ℹ️ Script polish skipped ({type(e).__name__}).")
         return story

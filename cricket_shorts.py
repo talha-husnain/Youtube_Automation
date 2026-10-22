@@ -462,7 +462,7 @@ def _count_up(t0, t1, x, y, score, style_name="CkScore", steps=12, secs=0.9):
 PILL_MAX = 1000
 
 
-def _pill(t0, t1, y, text, colour=fl.GOLD, text_colour="#14142B", layer=3):
+def _pill(t0, t1, y, text, colour=fl.GOLD, text_colour="#14142B", layer=3, fade_in=150):
     # A long match line made a bar wider than the screen (1202 px for 42
     # characters): the pill stops at PILL_MAX and the text shrinks to fit.
     need = 26 * len(text) + 110
@@ -470,9 +470,9 @@ def _pill(t0, t1, y, text, colour=fl.GOLD, text_colour="#14142B", layer=3):
     size = rf"\fs{max(22, int(36 * PILL_MAX / need))}" if need > PILL_MAX else ""
     return [
         _shape(layer, t0, t1, fl._round_rect(w, h, h // 2), _c(colour), at=(CX - w // 2, y - h // 2),
-               extra=r"\fad(150,150)"),
+               extra=rf"\fad({fade_in},150)"),
         kit.dialogue(layer + 1, t0, t1, "CkPill",
-                     rf"{{\an5\pos({CX},{y})\1c{_c(text_colour)}{size}\fad(150,150)}}{text}"),
+                     rf"{{\an5\pos({CX},{y})\1c{_c(text_colour)}{size}\fad({fade_in},150)}}{text}"),
     ]
 
 
@@ -557,16 +557,18 @@ def scene_events(beat, t0, t1, story, with_photo=False):
     return ev
 
 
+# Visible on frame 0 (no fade from nothing), still a small pop.
+TITLE_POP = r"\fscx92\fscy92\t(0,180,\fscx104\fscy104)\t(180,300,\fscx100\fscy100)"
+
+
 def frame_events(story, total, handle, title):
     """What stays up the whole time: handle, match line, title."""
     ev = []
     if handle:
         ev.append(kit.dialogue(1, 0, total, "CkSmall", rf"{{\an5\pos({CX},70)\alpha&H40&}}{handle}"))
-    ev += _pill(0.1, total, 190, _txt(story.match_line, 52), colour="#FFFFFF")
+    ev += _pill(0, total, 190, _txt(story.match_line, 52), colour="#FFFFFF", fade_in=0)
     if title:
-        ev.append(kit.dialogue(1, 0, total, "CkTitle",
-                               rf"{{\an5\pos({CX},380)\fad(150,0)\fscx70\fscy70\t(0,260,\fscx106\fscy106)"
-                               rf"\t(260,400,\fscx100\fscy100)}}{fl.clean_title(title)}"))
+        ev.append(kit.dialogue(1, 0, total, "CkTitle", rf"{{\an5\pos({CX},380){TITLE_POP}}}{fl.clean_title(title)}"))
     return ev
 
 
@@ -622,11 +624,20 @@ def topic_frame_events(story, total, handle):
     ev = []
     if handle:
         ev.append(kit.dialogue(1, 0, total, "CkSmall", rf"{{\an5\pos({CX},70)\alpha&H40&}}{handle}"))
-    ev += _pill(0.1, total, 190, _txt(story.kicker.upper(), 24))
-    ev.append(kit.dialogue(1, 0, total, "CkTitle",
-                           rf"{{\an5\pos({CX},380)\fad(150,0)\fscx70\fscy70\t(0,260,\fscx106\fscy106)"
-                           rf"\t(260,400,\fscx100\fscy100)}}{fl.clean_title(story.title)}"))
+    ev += _pill(0, total, 190, _txt(story.kicker.upper(), 24), fade_in=0)
+    ev.append(kit.dialogue(1, 0, total, "CkTitle", rf"{{\an5\pos({CX},380){TITLE_POP}}}{fl.clean_title(story.title)}"))
     return ev
+
+
+def says(text, name):
+    """True when a line names the player: any part of his name of 3+ letters ("Villiers", "Babar")."""
+    low = (text or "").lower()
+    return any(re.search(rf"\b{re.escape(w)}\b", low) for w in re.findall(r"[a-z]{3,}", (name or "").lower()))
+
+
+def reveal_at(lines, windows, name, n_facts):
+    """Index of the line where a hidden player is first named; the last fact when no line names him."""
+    return next((k for k, _a, _b in windows if k and says(lines[k], name)), n_facts)
 
 
 # Stadium pictures of other sports passed as "a stadium at night": a hockey
@@ -797,18 +808,32 @@ def run_topic(topic, output_dir, pipeline):
     windows, voices, caps, body_end = _voice_timeline(client, lines, output_dir, stem)
     events, sfx, n = topic_frame_events(story, body_end, cfg["handle"]), [], len(story.facts)
     images = []
+    name = photo["info"]["player"] if photo else ""
+    # A hook that asks who ("Fastest ODI century kisne banayi?") keeps him hidden until a line names him.
+    hidden = bool(photo) and not says(story.hook_line, name) and not says(story.title, name)
+    reveal = reveal_at(lines, windows, name, n) if hidden else 0
+    reveal_t = next((a for k, a, _b in windows if k == reveal), body_end)
     for k, a, b in windows:
         sfx.append((kit.WHOOSH, 0.3, max(0.0, a - 0.15)))
+        if hidden and k == reveal and k:
+            events += _pill(a, min(b, a + 2.5), 1385, _txt(name, 26).upper())
         if k == 0 and photo:
-            # The player opens the Short: his photo, his name, the hook in the captions.
-            images.append({"path": photo["card"], "t0": a, "t1": b, "y": 850, "zoom": 0.06})
-            events += _pill(a + 0.3, b, 1290, _txt(photo["info"]["player"], 26).upper())
-            # Then a round badge of him next to the label for the rest.
-            images.append({"path": photo["badge"], "t0": b, "t1": body_end, "y": 200, "zoom": 0.0,
+            # The player opens the Short (or his silhouette does), on frame 0.
+            import player_photo
+            card, label = photo["card"], _txt(name, 26).upper()
+            if hidden:
+                card, label = player_photo.mystery(photo["card"], os.path.join(output_dir, ".mystery_card.png")), "KAUN?"
+            images.append({"path": card, "t0": 0.0, "t1": b, "y": 850, "zoom": 0.06, "fade_in": 0})
+            events += _pill(0.0, b, 1290, label, fade_in=0)
+            # Then a round badge of him next to the label for the rest ("?" until he is named).
+            if hidden and reveal_t > b:
+                images.append({"path": player_photo.mystery(photo["badge"], os.path.join(output_dir, ".mystery_badge.png")),
+                               "t0": b, "t1": reveal_t, "y": 200, "zoom": 0.0, "x": kit.OUT_W - 150})
+            images.append({"path": photo["badge"], "t0": max(b, reveal_t), "t1": body_end, "y": 200, "zoom": 0.0,
                            "x": kit.OUT_W - 150})
         elif k == 0:
-            events.append(kit.dialogue(4, a, b, "CkText",
-                                       rf"{{\an5\pos({CX},900)\fad(200,200)\fscx90\fscy90"
+            events.append(kit.dialogue(4, 0.0, b, "CkText",
+                                       rf"{{\an5\pos({CX},900)\fad(0,200)\fscx90\fscy90"
                                        rf"\t(0,250,\fscx100\fscy100)}}{_txt(story.hook_line, 90)}"))
         elif k <= n:
             events += fact_events(k, n, story.facts[k - 1], a, b)

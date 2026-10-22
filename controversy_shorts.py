@@ -253,12 +253,13 @@ def run(output_dir, pipeline):
         sfx.append((kit.WHOOSH, 0.3, max(0.0, a - 0.15)))
         if k == 0:
             if photo:
-                images.append({"path": photo["card"], "t0": a, "t1": b, "y": 850, "zoom": 0.06})
-                events += cs._pill(a + 0.3, b, 1290, cs._txt(photo["info"]["player"], 26).upper())
+                # On frame 0, no fade from nothing: the frame the feed shows while people decide to swipe.
+                images.append({"path": photo["card"], "t0": 0.0, "t1": b, "y": 850, "zoom": 0.06, "fade_in": 0})
+                events += cs._pill(0.0, b, 1290, cs._txt(photo["info"]["player"], 26).upper(), fade_in=0)
                 images.append({"path": photo["badge"], "t0": b, "t1": body_end, "y": 200, "zoom": 0.0,
                                "x": kit.OUT_W - 150})
             else:
-                events.append(kit.dialogue(4, a, b, "CkText", rf"{{\an5\pos({cs.CX},900)\fad(200,200)}}"
+                events.append(kit.dialogue(4, 0.0, b, "CkText", rf"{{\an5\pos({cs.CX},900)\fad(0,200)}}"
                                                               rf"{cs._txt(story.hook_line, 90)}"))
         elif k <= n:
             beat = story.beats[k - 1]

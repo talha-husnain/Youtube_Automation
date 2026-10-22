@@ -599,8 +599,8 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     music_seconds: how long the music (and its wave) run; the end card after
     it is quiet.
     bed: (track, seconds) background music under the voices, looped, faded.
-    images: [{"path", "t0", "t1", "x", "y", "zoom"}] RGBA pictures centred at (x, y)
-    between t0 and t1, fading in and out and growing by ``zoom`` (0.05 = 5%).
+    images: [{"path", "t0", "t1", "x", "y", "zoom", "fade_in"}] RGBA pictures centred at (x, y)
+    between t0 and t1, fading in (``fade_in`` s, 0.3 by default) and out and growing by ``zoom`` (0.05 = 5%).
     bg_image: a picture for the whole background instead of the gradient,
     panning slowly (the AI songs' cover art).
     bg_video: a finished background (broll.py's stock footage at the canvas
@@ -674,9 +674,11 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
         # each picture runs to the end, hidden after t1 by enable= and the fade.
         length = max(d, seconds - t0 + 0.5) if bg_video else d
         cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{length:.3f}", "-i", im["path"]]
+        fade_in = float(im.get("fade_in", 0.3))
         graph.append(f"[{idx}:v]format=rgba,setpts=PTS-STARTPTS+{t0:.3f}/TB,"
                      f"scale=w='trunc(iw*(1+{z:g}*(t-{t0:.3f})/{d:.3f})/2)*2':h=-2:eval=frame,"
-                     f"fade=t=in:st={t0:.3f}:d=0.3:alpha=1,fade=t=out:st={max(t0, t1 - 0.3):.3f}:d=0.3:alpha=1"
+                     + (f"fade=t=in:st={t0:.3f}:d={fade_in:g}:alpha=1," if fade_in > 0 else "")
+                     + f"fade=t=out:st={max(t0, t1 - 0.3):.3f}:d=0.3:alpha=1"
                      f"[im{k}]")
         graph.append(f"{v}[im{k}]overlay=x='{float(im.get('x', OUT_W / 2)):.0f}-w/2':"
                      f"y='{float(im.get('y', OUT_H / 2)):.0f}-h/2':"
