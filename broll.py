@@ -85,15 +85,32 @@ def windows_from(segments, total):
     return [(a, b, s["text"]) for a, b, s in zip(starts, ends, segs) if b - a > 0.05]
 
 
-def plan_shots(windows, items, seed=7):
+BEAT_TOLERANCE = 0.35    # a cut moves at most this far to land on a beat
+
+
+def _on_beat(t, beats, after):
+    """``t`` moved to the nearest beat within BEAT_TOLERANCE, if that keeps the shot at least
+    MIN_SHOT long after ``after``; else ``t``."""
+    import bisect
+    i = bisect.bisect_left(beats, t)
+    near = [x for x in beats[max(0, i - 1):i + 1] if abs(x - t) <= BEAT_TOLERANCE]
+    if not near:
+        return t
+    x = min(near, key=lambda v: abs(v - t))
+    return x if x - after >= MIN_SHOT else t
+
+
+def plan_shots(windows, items, seed=7, beats=None):
     """[(frames, item, offset, close)]: each window cut into shots of about CUT
     seconds; a window without an item borrows the nearest earlier one (else the
-    next). Frame counts add up exactly to the windows' total."""
+    next). Frame counts add up exactly to the windows' total. ``beats`` (a song's
+    beat times, beats.py): every cut but the last lands on the nearest beat."""
     rnd = random.Random(seed)
     have = [k for k, it in enumerate(items) if it]
     if not have:
         return []
     shots, frames_done, t_done = [], 0, 0.0
+    end = windows[-1][1] if windows else 0.0
     for k, (a, b, _line) in enumerate(windows):
         it = items[k] or items[max([j for j in have if j < k], default=have[0])]
         borrowed = items[k] is None
@@ -101,7 +118,10 @@ def plan_shots(windows, items, seed=7):
         while n > 1 and (b - a) / n < MIN_SHOT:
             n -= 1
         for s in range(n):
+            before = t_done
             t_done = a + (b - a) * (s + 1) / n
+            if beats and t_done < end - 1e-6:
+                t_done = _on_beat(t_done, beats, before)
             f = round(t_done * FPS) - frames_done
             if f <= 0:
                 continue
@@ -239,7 +259,7 @@ def prefetch(job_dir, topic, lines, rule="", client=None, log=print):
     _pending[os.path.abspath(job_dir)] = ([t for t in lines], _early.submit(safe))
 
 
-def background_for(topic, segments, total, job_dir, client=None, rule="", log=print):
+def background_for(topic, segments, total, job_dir, client=None, rule="", log=print, beats=None):
     """The whole step for one Short: (background video path, footage items) or
     (None, []) when footage is off, there are no keys or nothing was found.
     Never raises: a Short without footage is still a Short."""
@@ -260,7 +280,7 @@ def background_for(topic, segments, total, job_dir, client=None, rule="", log=pr
         if found < len(windows) * MIN_COVERAGE:
             log(f"   ℹ️ Good footage for only {found} of {len(windows)} lines: this Short keeps its own look.")
             return None, []
-        shots = plan_shots(windows, items)
+        shots = plan_shots(windows, items, beats=beats)
         if not shots:
             return None, []
         path = build(job_dir, shots)

@@ -29,6 +29,7 @@ os.environ["CUTOUT"] = "0"              # and the photo cut-out model
 # that story back instead of a Doctored. test_craft turns both on with its own fakes.
 os.environ["POLISH"] = "0"
 os.environ["FACE_CROP"] = "0"           # faces.py runs ffmpeg + YuNet per footage shot
+os.environ["BEAT_CUTS"] = "0"           # beats.py decodes the song with ffmpeg
 os.environ["VIRAL_REMIX"] = "0"         # studies a real viral Short with yt-dlp + Gemini
 
 import pytest

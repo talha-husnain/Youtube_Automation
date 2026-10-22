@@ -171,6 +171,33 @@ def test_each_channel_grades_its_footage_and_photos_keep_their_colours(monkeypat
     assert broll.grade() == ""                    # the comedy clips are untouched
 
 
+def test_beats_are_found_and_footage_cuts_land_on_them():
+    import numpy as np
+    import beats
+    import broll
+    sr = beats.SR
+    t = np.arange(int(12 * sr)) / sr
+    y = 0.02 * np.random.default_rng(1).standard_normal(len(t)).astype(np.float32)
+    for b in np.arange(0.4, 12, 0.625):                        # 96 BPM clicks
+        i, n = int(b * sr), int(0.05 * sr)
+        y[i:i + n] += (np.sin(2 * np.pi * 1000 * t[:n]) * np.exp(-60 * t[:n])).astype(np.float32)
+    env = beats.onset_envelope(y)
+    found = beats.beat_times(env, beats.tempo_period(env))
+    true = np.arange(0.4, 12, 0.625)
+    assert len(found) >= len(true) - 1 and max(min(abs(true - x)) for x in found) < 0.06
+    windows = [(0.0, 6.0, "a"), (6.0, 12.0, "b")]
+    items = [{"path": "x.mp4", "seconds": 30}, {"path": "y.mp4", "seconds": 30}]
+    grid = [round(x, 3) for x in np.arange(0.4, 12, 0.625)]
+    plain = broll.plan_shots(windows, items)
+    synced = broll.plan_shots(windows, items, beats=grid)
+    assert sum(s[0] for s in synced) == sum(s[0] for s in plain) == 12 * broll.FPS     # same total
+    cuts, at = [], 0
+    for frames, *_rest in synced[:-1]:
+        at += frames
+        cuts.append(at / broll.FPS)
+    assert all(min(abs(c - g) for g in grid) <= 1 / broll.FPS + 1e-6 for c in cuts)  # every cut on a beat
+
+
 def test_real_swooshes_replace_the_chirp(monkeypatch):
     import short_kit as kit
     cmd, graph, mix = [], [], []

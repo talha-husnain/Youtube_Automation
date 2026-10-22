@@ -419,10 +419,15 @@ def run(output_dir, pipeline):
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
     # Free mood footage under the lyrics, one clip per line (broll.py); the
     # AI cover (a paid image call) only when no footage is found.
+    import beats as beat_track
     import broll
+    # Footage cuts land on the song's beats (beats.py, numpy only).
+    on_beat = beat_track.track(song, start, body)
+    if on_beat:
+        print(f"   🥁 {len(on_beat)} beats (~{beat_track.bpm(on_beat) or 0:.0f} BPM): footage cuts on the beat.")
     bg, footage = (dance_bg, dance_clips) if dance_bg else broll.background_for(
         f"{p.title}: a {p.genre} song about {theme}", [{"start": a, "text": t} for t, a, _b in lines], total,
-        output_dir, client, FOOTAGE_RULE)
+        output_dir, client, FOOTAGE_RULE, beats=on_beat)
     art = None if bg else cover(client, p, os.path.join(output_dir, f".{stem}_cover.png"))
     print(f"🎬 Rendering the song short ({total:.0f}s{', with footage' if bg else ', with cover' if art else ''})...")
     kit.render(final, total, [kit.blend(colors[0], "#000000", 0.6), kit.blend(colors[-1], "#000000", 0.5)],
