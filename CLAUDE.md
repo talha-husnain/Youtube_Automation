@@ -840,6 +840,14 @@ never finished:
   `"\\ufeff"` then fails to find it).
 - The Write tool refuses a file it has not read, and a patch script run right after that
   failed Write runs the OLD file: give every patch script a new name.
+- **Open-source tools live in D:\youtube\oss** (22-oct-2026), outside the repo, each in its own
+  folder/venv, each clone checked with `sh ~/.git-guard/worm-guard.sh worktree` first. This laptop
+  has an Intel Arc A370M (4 GB) + Iris Xe and no NVIDIA: Vulkan (ncnn) and PyTorch XPU work, CUDA-only
+  tools (HeyGem, MuseTalk, LatentSync, local video models) do not.
+  - `upscale.py`: Real-ESRGAN ncnn-vulkan (`REALESRGAN_EXE`), `realesr-animevideov3` x2 took an 8 s
+    360p Omni Flash clip to 720p in ~60 s on both GPUs (`-g 0,1`), sharper than lanczos, close to real
+    720p: 360p clips cost a third. One GPU alone took ~100 s.
+  - GitHub's anonymous API (60 calls/h) runs out fast when research agents use it in parallel.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
   player born today; `cricket_shorts.birthday_ok` keeps it only when the
   Wikipedia intro's "(born 15 October 1994)" matches (`player_photo.born`).
