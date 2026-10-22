@@ -70,3 +70,20 @@ def test_history_shots_are_shorter_and_eased_unless_switched_off():
     finally:
         del os.environ["HISTORY_MOTION"]
         importlib.reload(hv)
+
+
+def test_parallax_renders_every_frame_and_falls_back_without_its_model(monkeypatch, tmp_path):
+    import subprocess
+    import numpy as np
+    import parallax
+    src = str(tmp_path / "pic.png")
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=240x140",
+                    "-frames:v", "1", src], check=True, capture_output=True)
+    monkeypatch.setattr(parallax, "_depth_cached", lambda path, bgr: np.tile(
+        np.linspace(0, 1, bgr.shape[1], dtype=np.float32), (bgr.shape[0], 1)))
+    out = parallax.render(src, str(tmp_path / "out.mp4"), 12, 30, "right", (192, 108))
+    probe = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-show_entries",
+                            "stream=width,height,nb_read_frames", "-of", "csv=p=0", out], capture_output=True, text=True)
+    assert probe.stdout.strip().replace("\r", "") == "192,108,12"
+    monkeypatch.setattr(parallax, "MODEL", str(tmp_path / "missing.onnx"))
+    assert not parallax.available()

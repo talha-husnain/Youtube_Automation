@@ -934,6 +934,17 @@ def segment(job_dir, picture, out, frames, motion, events):
     with open(os.path.join(job_dir, ass), "w", encoding="utf-8") as f:
         f.write(_ass(events))
     d = frames / FPS
+    ass_vf = f"ass=filename='{escape_filter_value(ass)}':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'"
+    if _motion() and motion != "still":
+        # Depth parallax (parallax.py) when its model is there; any failure keeps the plain pan below.
+        try:
+            import parallax
+            if parallax.available():
+                parallax.render(picture, out, frames, FPS, motion, (W, H), vf_tail=ass_vf, crf=CRF, cwd=job_dir)
+                os.remove(os.path.join(job_dir, ass))
+                return out
+        except Exception as e:  # noqa: BLE001
+            print(f"   ℹ️ Parallax skipped for one shot ({type(e).__name__}: {str(e)[:80]}).")
     cw, chh = W * SUPER, H * SUPER
     # Eased (cosine) since quality pass 2: a linear pan starts and stops with a jolt at every cut.
     p = f"(0.5-0.5*cos(PI*t/{d:.4f}))" if _motion() else f"(t/{d:.4f})"
