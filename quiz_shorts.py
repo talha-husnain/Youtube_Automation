@@ -37,20 +37,23 @@ VOICE_STYLE = "like a friendly, energetic TV quiz show host, natural Urdu accent
 GAP = 0.25
 TICK = "0.5*sin(2*PI*1500*t)*exp(-40*t)"
 DING = "0.35*sin(2*PI*1046*t)*exp(-5*t)+0.25*sin(2*PI*1568*t)*exp(-6*t)"
+# Countdowns are one second shorter than at first (22-oct-2026): the quiz channel's median viewer
+# left at 7 s, about when the first countdown starts (hook + the question read aloud). A judgement
+# call, not a measured one: the week report's new-scripts line shows whether watch time moved.
 FORMATS = {
-    "mcq": {"count": 3, "options": 4, "timer": 5, "label": "SAWAL"},
-    "riddle": {"count": 2, "options": 0, "timer": 7, "label": "PAHELI"},
-    "math": {"count": 2, "options": 3, "timer": 6, "label": "DIMAGH LAGAO"},
-    "flags": {"count": 4, "options": 4, "timer": 4, "label": "JHANDA"},
+    "mcq": {"count": 3, "options": 4, "timer": 4, "label": "SAWAL"},
+    "riddle": {"count": 2, "options": 0, "timer": 6, "label": "PAHELI"},
+    "math": {"count": 2, "options": 3, "timer": 5, "label": "DIMAGH LAGAO"},
+    "flags": {"count": 4, "options": 4, "timer": 3, "label": "JHANDA"},
     # Added 15-oct-2026 for variety (the channel learns which formats get views).
-    "truefalse": {"count": 4, "options": 2, "timer": 4, "label": "SACH YA JHOOT"},
-    "oddone": {"count": 3, "options": 4, "timer": 5, "label": "ODD ONE OUT"},
+    "truefalse": {"count": 4, "options": 2, "timer": 3, "label": "SACH YA JHOOT"},
+    "oddone": {"count": 3, "options": 4, "timer": 4, "label": "ODD ONE OUT"},
     # A famous woman's free Wikipedia photo to name (owner, 19-oct-2026: the
     # channels had no glamour at all). One group of stars per Short.
-    "stars": {"count": 4, "options": 4, "timer": 4, "label": "PEHCHANO"},
+    "stars": {"count": 4, "options": 4, "timer": 3, "label": "PEHCHANO"},
     # Urdu GK Shorts sit at a median of 0.8k-3k views, "quran urdu quiz" ones at 16.5k
     # (research 22-oct-2026): Islamic general knowledge, under ISLAMIC_RULE.
-    "islamic": {"count": 3, "options": 4, "timer": 5, "label": "ISLAMI SAWAL"},
+    "islamic": {"count": 3, "options": 4, "timer": 4, "label": "ISLAMI SAWAL"},
 }
 # Formats whose facts the answer check confirms with Google Search, and that take a topic.
 FACT_FORMATS = ("mcq", "truefalse", "oddone", "islamic")
