@@ -37,7 +37,9 @@ def python():
     if os.environ.get("OMNIVOICE_PYTHON"):
         return os.environ["OMNIVOICE_PYTHON"]
     import glob
-    for venv in (".venv-xpu", ".venv"):
+    # .venv-xpu has PyTorch's Intel Arc build, but the Arc driver here (31.0.101.4502, 2023) is too old
+    # for it: torch.xpu saw no device on 22-oct-2026. After a driver update set OMNIVOICE_PYTHON to it.
+    for venv in (".venv",):
         exe = os.path.join(OSS, venv, "Scripts", "python.exe")
         # A venv whose install has not finished has python.exe but no omnivoice yet.
         if os.path.isfile(exe) and glob.glob(os.path.join(OSS, venv, "Lib", "site-packages", "omnivoice-*.dist-info")):
