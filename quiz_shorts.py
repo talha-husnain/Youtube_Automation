@@ -460,6 +460,21 @@ def option_rows(n, picture=False):
     return [700 + k * 140 for k in range(n)] if n == 4 else [720 + k * 160 for k in range(n)]
 
 
+# What people type into YouTube for each format (seeds for its autocomplete); a quiz has no named subject.
+SEARCH_SEEDS = {"mcq": "gk quiz", "riddle": "paheliyan", "math": "maths puzzle", "flags": "flag quiz",
+                "truefalse": "true or false quiz", "oddone": "odd one out quiz", "stars": "guess the actress",
+                "islamic": "islamic quiz"}
+
+
+def _search_hint(fmt, topic=""):
+    """cricket_shorts._search_hint for this quiz: the topic when it has one, else the format's seed."""
+    import cricket_shorts as cs
+    try:
+        return cs._search_hint(topic if topic and len(topic.split()) <= 4 else SEARCH_SEEDS.get(fmt, "quiz"))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def timer_add():
     """Extra countdown seconds for this job: the "long" side of the channel's countdown A/B test
     (my_channels.EXPERIMENTS "timer") puts back the second cut on 22-oct-2026."""
@@ -647,7 +662,8 @@ def run(output_dir, pipeline):
                    # first words (the ones a viewer reads) on nothing (audit, 22-oct-2026).
                    + " The title opens on the challenge or the stake, never on the quiz number."
                    + (f" It is the channel's daily quiz number {number}: end the title with \" | Quiz #{number}\"."
-                      if number else ""),
+                      if number else "")
+                   + _search_hint(fmt, topic),
                    text_limit=4000)
     if star_photos:
         import credits

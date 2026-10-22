@@ -968,6 +968,16 @@ never finished:
     segment_video (captions, motion, grade). `add_maps`: at most 2, history mode only, never a polity
     whose data runs past 1925 (Kashmir and modern borders; the Ottomans end 1923, the Raj 1947 is out).
     Names in brackets are composites ("(Delhi Sultanate)"). 7 s at 1080p in 7-22 s. HISTORY_MAPS=0.
+  - Translated titles (`localize.py`, `youtube_account.upload(localizations=)`): Hindi (Devanagari) and
+    Urdu-script title + hook sent with videos.insert (part adds "localizations", no extra quota),
+    snippet.defaultLanguage "en" so the Roman Urdu title stays the default; translated descriptions put
+    the original in full below the translated hook (credits stay). cricket/quiz/controversy/history
+    only. Passed as a kwarg only when present (test fakes of upload have fixed signatures). LOCALIZE=0.
+  - Search phrases (`cricket_shorts._search_hint`, YouTube autocomplete, no key): the topic's first 2
+    and 4 words go to suggestqueries; the SEO writer (cricket, controversy, on-this-day via `_finish`),
+    the history script and quizzes (`quiz_shorts.SEARCH_SEEDS` per format) hear them. TRENDS=0 off.
+  - Tried and dropped: YouTube Analytics retention curves (elapsedVideoTimeRatio) came back EMPTY for
+    every Short at 11-110 views; worth adding once Shorts pass a few hundred views.
   - The mix measured, not judged by ear: a real voice + Lyria bed through `mix_audio` with and without
     the bed, subtracted: music 20 dB under the voice while it speaks, -31 dBFS in the gaps. Gemini's
     "slightly too loud" at every level was a habit, not a measurement.
