@@ -209,6 +209,21 @@ def test_titles_are_translated_for_hindi_and_urdu_viewers_and_sent_with_the_uplo
     assert sent["body"]["snippet"]["defaultLanguage"] == "en" and sent["body"]["localizations"]["hi"]["title"]
 
 
+def test_the_seo_writer_hears_what_people_search(monkeypatch):
+    import cricket_shorts as cs
+    monkeypatch.setenv("TRENDS", "1")
+    asked = []
+
+    def suggest(q):
+        asked.append(q)
+        return [q + " bowling", q + " wickets"]
+    hint = cs._search_hint("Wasim Akram's best spells", suggest=suggest)
+    assert asked == ["wasim akram", "wasim akram best spells"]
+    assert "wasim akram bowling" in hint and "title's first words" in hint
+    monkeypatch.setenv("TRENDS", "0")
+    assert cs._search_hint("Wasim Akram", suggest=suggest) == ""
+
+
 def test_a_scene_naming_an_empire_gets_its_own_map_entry(monkeypatch):
     import history_maps
     import history_videos as hv

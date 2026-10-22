@@ -685,6 +685,32 @@ def _photo(name, output_dir, kind="cricket"):
     return got
 
 
+def _search_hint(topic, suggest=None):
+    """What people really type into YouTube about this topic (its autocomplete, free, no key) as a
+    line for the SEO writer, or "". Shorts titles and tags were the model's guesses; the explainer
+    channel already used these (trend_explainer.keywords). Names lead most topics, so the first two
+    words, then the first four. Off with TRENDS=0 (tests) or SEARCH_HINT=0."""
+    if os.environ.get("TRENDS", "1") == "0" or os.environ.get("SEARCH_HINT", "1") == "0":
+        return ""
+    if suggest is None:
+        import trend_explainer
+        suggest = trend_explainer.suggestions
+    words = re.sub(r"'s\b|[^\w\s]", " ", (topic or "").lower()).split()
+    seen, out = set(), []
+    for q in (" ".join(words[:2]), " ".join(words[:4])):
+        if len(q) < 4 or q in seen:
+            continue
+        seen.add(q)
+        for s in suggest(q)[:8]:
+            if s not in out:
+                out.append(s)
+    if not out:
+        return ""
+    return ("\nWHAT PEOPLE TYPE INTO YOUTUBE SEARCH about this (YouTube's own suggestions): " + "; ".join(out[:14])
+            + ". Put the best fitting phrase in the title's first words and use others in the tags and the "
+              "description, only where they are true for this video.")
+
+
 def _stickers(clip, seconds):
     """Animated emoji (stickers.py, Noto, CC BY 4.0) on a few voice lines: one Gemini pick, code keeps
     them apart and off lines about a death, a tragedy, religion or an allegation. [] when off or on any
@@ -728,6 +754,9 @@ def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_e
     clip.update({"end": round(total, 3), "seconds": round(total, 3), "file": final,
                  "background_music": os.path.basename(track) if track else None,
                  "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in footage]})
+    hint = _search_hint(seo.get("source_title") or "")
+    if hint and seo.get("context"):
+        seo = {**seo, "context": seo["context"] + hint}
     kit.seo_or_fail([clip], clip["captions"], **seo)
     if after_seo:
         after_seo(clip)
