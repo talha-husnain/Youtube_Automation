@@ -934,6 +934,13 @@ never finished:
 - **Face-aware footage crops** (`faces.py`, YuNet 2023mar ONNX, MIT, D:\youtube\oss\models\yunet): the
   9:16 crop of a footage shot centres on the biggest face (~0.7 s a shot). MediaPipe's face API is
   absent from the installed version, so main.py's face_detection is None on this laptop. FACE_CROP=0.
+- **Measuring it** (`reminders.craft_line`): the Sunday week report compares each channel's Shorts
+  uploaded after `script_craft.SINCE` (22-oct-2026 22:00) with the month before (median views and %
+  watched, 3+ counted Shorts a side, long videos left out). Before/after, not an A/B test.
+- **Quiz countdowns one second shorter** (min 3): the median viewer left at 7 s, about when the first
+  one starts. Judgement, not measured. **Song hook**: `SongPlan.hook` (3-7 words, POV / send-this /
+  AI reveal) shows big for the first 2.6 s (`lyric_events(hook=)`, outlined): the songs channel's
+  median viewer left at 2 s with only a song title and grey stock footage on screen.
 - **Wikipedia most-read** (`trends.wiki_top`, pageviews API, CC0, no key): yesterday's top English (120)
   and Hindi (30) articles go to the cricket, controversy and explainer planners (`wiki_hint`).
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a

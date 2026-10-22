@@ -89,6 +89,7 @@ class SongPlan(BaseModel):
     description: str
     tags: List[str]
     hashtags: List[str]
+    hook: str = ""
 
 
 PLAN_PROMPT = """Write an ORIGINAL catchy English song for a YouTube Shorts music channel.
@@ -122,7 +123,12 @@ Return:
 - colors: 2 hex colours (#RRGGBB) that match the cover's mood.
 - description: 2 short sentences for YouTube about the song's feeling, in English.
 - tags: 10-15 search tags (genre, mood, "new song 2026", "ai music"...).
-- hashtags: 4 hashtags without the # sign."""
+- hashtags: 4 hashtags without the # sign.
+- hook: 3-7 words shown BIG on screen for the first 2.5 seconds, before any lyric, so a
+  scroller stays (most leave in the first 2 seconds, and many watch with the sound off):
+  the moment as a POV ("POV: she left her earring behind"), a feeling people send to
+  someone ("Send this to the one who left"), or the true AI reveal ("An AI wrote this
+  heartbreak"). Not the title again, no emoji, no hashtags."""
 
 
 def _avoid():
@@ -301,8 +307,15 @@ def _t(text, limit):
     return fl.clean_title(re.sub(r"\s*[·•–—]\s*", " - ", text or ""))[:limit]
 
 
-def lyric_events(lines, total, title, genre, handle):
+def lyric_events(lines, total, title, genre, handle, hook=""):
     ev = []
+    if hook.strip():
+        # The first 2.6 s: a big hook line before any lyric (the songs channel's median viewer
+        # left at 2 s with only a song title on screen, 22-oct-2026).
+        end = min(2.6, total)
+        ev.append(kit.dialogue(6, 0, end, "MuTitle",
+                               rf"{{\an5\pos({CX},760)\fscx60\fscy60\t(0,220,\fscx108\fscy108)"
+                               rf"\t(220,320,\fscx100\fscy100)\fad(0,250)\bord5\3c&H000000&}}{_t(hook, 44)}"))
     # A dark wash behind the lyrics so they read on any cover.
     ev.append(kit.dialogue(1, 0, total, "Shape",
                            rf"{{\an7\pos(0,980)\1c&H000000&\1a&H60&\bord0\shad0\blur80\p1}}"
@@ -396,7 +409,7 @@ def run(output_dir, pipeline):
     card_ev, card_sfx = kit.end_card(body, outro_s)
     total = body + (outro_s if card_ev else 0.0)
     colors = [c for c in p.colors if re.fullmatch(r"#[0-9A-Fa-f]{6}", c or "")][:2] or [cfg["bg"]]
-    events = lyric_events(lines, body, p.title, p.genre, cfg["handle"]) + card_ev
+    events = lyric_events(lines, body, p.title, p.genre, cfg["handle"], hook=p.hook) + card_ev
     if not card_ev:
         # Loop-friendly ending (no end card): a small follow line over the
         # last seconds of the music instead.
