@@ -37,7 +37,43 @@ BANNED = [
     "milte hain agli video mein", "aaiye jaante hain", "aaiye jante hain", "hairan reh jayenge",
     "rongte khade ho jayenge", "hosh uda dene wala", "ek aisa raaz", "itihaas ke panno mein",
     "aaj ke is daur mein", "aham kirdar ada kiya", "gehri chhaap", "behad dilchasp", "muaziz nazreen",
+    # Meta narration ("this video will show..."): an opening rewrite on 22-oct-2026 swapped a real
+    # question for "Yeh video dikhayegi ke..." and scored itself 9/10.
+    "yeh video", "is video", "video dikhayegi", "this video",
 ]
+
+
+class Pick(BaseModel):
+    better: int
+    why: str
+
+
+JUDGE_PROMPT = """Two versions of the {part} of a YouTube {what} for Pakistani and Indian viewers.
+Which one makes more people keep watching? Judge only that: the first seconds grab (a specific number,
+name, conflict or question that needs an answer), concrete words, no slow set-up, no "this video will
+show", no greeting. Both say the same facts. Answer better = 1 or 2, and why in one short sentence.
+
+VERSION 1:
+{one}
+
+VERSION 2:
+{two}"""
+
+
+def judge(client, what, part, original, rewrite, rnd=None):
+    """True when a blind judge prefers ``rewrite``. The two go in shuffled order with no label, because
+    a writer that scores its own work drifts up (research 22-oct-2026: judge in shuffled order); any
+    failure keeps the original."""
+    import random
+    rnd = rnd or random
+    swap = rnd.random() < 0.5
+    one, two = (rewrite, original) if swap else (original, rewrite)
+    try:
+        got = kit.ask_json(client, Pick, JUDGE_PROMPT.format(part=part, what=what, one=one, two=two),
+                           model=writer_model())
+        return got.better == (1 if swap else 2)
+    except Exception:  # noqa: BLE001
+        return False
 
 # A different shape per video: one template read out again and again is what YouTube's
 # "inauthentic content" rule (July 2025) calls mass production.
@@ -252,23 +288,38 @@ def polish(client, story, facts, what="cricket facts YouTube Short", fields=None
     except Exception as e:  # noqa: BLE001 — the writer's lines are fine on their own
         log(f"   ℹ️ Script polish skipped ({type(e).__name__}).")
         return story
+    new_lines = dict(lines)
     kept = 0
     if len(got.lines) == len(lines):
         for (path, old), new in zip(lines, got.lines):
             if new.strip() != old.strip() and line_ok(new, old, facts, hook=path == lines[0][0]):
-                _set(story, path, new.strip())
+                new_lines[path] = new.strip()
                 kept += 1
     hook_path, hook_old = lines[0]
     best = max((h for h in got.hooks if line_ok(h.text, hook_old, facts, hook=True)),
                key=lambda h: h.score, default=None)
-    # A self-scored rubric drifts by a point or two: only a clear gain replaces the hook,
+    stale = bool(banned_hits(hook_old))
+    # A self-scored rubric drifts by a point or two: only a clear gain is a candidate hook,
     # unless the writer's own hook is a stale opener.
-    if best and (best.score >= got.hook_score + 2 or banned_hits(hook_old)):
-        _set(story, hook_path, best.text.strip())
-        log(f"   🪝 Hook {got.hook_score}/10 -> {best.score}/10: {best.text.strip()[:90]}")
+    if best and (best.score >= got.hook_score + 2 or stale):
+        new_lines[hook_path] = best.text.strip()
+    changed = [p for p, t in lines if new_lines[p] != t]
+    if changed:
+        before = "\n".join(t for _p, t in lines)
+        after = "\n".join(new_lines[p] for p, _t in lines)
+        # The doctor scores its own work; a blind judge decides (a stale opener always goes).
+        if stale or judge(client, what, "voice-over script (one line per row, the first is the hook)",
+                          before, after):
+            for p in changed:
+                _set(story, p, new_lines[p])
+            if new_lines[hook_path] != hook_old:
+                log(f"   🪝 Hook {got.hook_score}/10 -> {new_lines[hook_path][:90]}")
+            log(f"   ✍️ Script polish: {len(changed)} of {len(lines)} lines changed (a blind judge agreed).")
+        else:
+            log(f"   ⚖️ Script polish: a blind judge preferred the writer's own script ({got.hook_score}/10 hook);"
+                " kept.")
     else:
-        log(f"   🪝 Hook kept ({got.hook_score}/10).")
-    log(f"   ✍️ Script polish: {kept} of {len(lines)} lines tightened.")
+        log(f"   🪝 Hook kept ({got.hook_score}/10); no line needed changing.")
     _scrub(client, story, facts, fields, hook_path, language, log)
     return story
 
@@ -321,14 +372,25 @@ def polish_opening(client, script, facts, what="history documentary", language="
     if len(got.paragraphs) != len(old) or got.score_after < got.score_before + 2:
         log(f"   🎬 Opening kept ({got.score_before}/10).")
         return script
-    kept = 0
-    for scene, new, before in zip(scenes, got.paragraphs, old):
+    cand = list(old)
+    for k, (new, before) in enumerate(zip(got.paragraphs, old)):
         if re.search(r"\b(hazrat|sallallahu|allah|imam|prophet|nabi|rasool)\b", before, re.I):
             continue      # a paragraph about faith keeps the writer's checked wording
         if line_ok(new, before, facts):
-            scene.line = new.strip()
-            kept += 1
-    log(f"   🎬 Opening {got.score_before}/10 -> {got.score_after}/10: {kept} of {len(old)} paragraph(s) rewritten.")
+            cand[k] = new.strip()
+    kept = sum(1 for a, b in zip(cand, old) if a != b)
+    if not kept:
+        log(f"   🎬 Opening kept ({got.score_before}/10): no rewrite passed the checks.")
+        return script
+    # The rewriter's own 6 -> 9 meant little: on 22-oct-2026 it swapped a real question for
+    # "Yeh video dikhayegi ke...". A blind judge, shown both in shuffled order, decides.
+    if not judge(client, what, "opening (about the first 30 seconds)", "\n\n".join(old), "\n\n".join(cand)):
+        log(f"   ⚖️ Opening: a blind judge preferred the writer's own; kept ({got.score_before}/10).")
+        return script
+    for scene, text in zip(scenes, cand):
+        scene.line = text
+    log(f"   🎬 Opening {got.score_before}/10 -> {got.score_after}/10: {kept} of {len(old)} paragraph(s) rewritten "
+        "(a blind judge agreed).")
     return script
 
 

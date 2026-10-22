@@ -79,18 +79,26 @@ def test_a_long_videos_opening_is_rewritten_only_on_a_clear_gain(monkeypatch):
     script = SimpleNamespace(hook=[SimpleNamespace(line=p) for p in old])
     new = ["53 din, 1,000 saal purani deewarein, aur ek jawan Sultan. Constantinople gir sakta tha?",
            "Sultan Mehmed ne 1453 mein shehar gher liya. Lekin deewarein toot nahi rahi thi. Kya Rome bacha?"]
-    monkeypatch.setattr(craft.kit, "ask_json", lambda *a, **k: craft.Opening(score_before=3, score_after=8,
-                                                                             paragraphs=new))
+    def fake(before, after, prefer_new=True):
+        def ask(client, schema, prompt, model=None):
+            if schema is craft.Pick:                  # the blind judge: pick the version holding "53 din"
+                first = prompt.split("VERSION 2:")[0]
+                return craft.Pick(better=1 if ("53 din" in first) == prefer_new else 2, why="")
+            return craft.Opening(score_before=before, score_after=after, paragraphs=new)
+        return ask
+    monkeypatch.setattr(craft.kit, "ask_json", fake(3, 8))
     craft.polish_opening(object(), script, facts, log=lambda m: None)
     assert script.hook[0].line == new[0]          # "Lekin" and "Constantinople" start sentences: fine
     assert script.hook[1].line == old[1]          # "Rome" is a name the facts do not have
-    monkeypatch.setattr(craft.kit, "ask_json", lambda *a, **k: craft.Opening(score_before=7, score_after=8,
-                                                                             paragraphs=new))
+    monkeypatch.setattr(craft.kit, "ask_json", fake(3, 8, prefer_new=False))
+    script = SimpleNamespace(hook=[SimpleNamespace(line=p) for p in old])
+    craft.polish_opening(object(), script, facts, log=lambda m: None)
+    assert [s.line for s in script.hook] == old   # the blind judge preferred the original
+    monkeypatch.setattr(craft.kit, "ask_json", fake(7, 8))
     script = SimpleNamespace(hook=[SimpleNamespace(line=p) for p in old])
     craft.polish_opening(object(), script, facts, log=lambda m: None)
     assert [s.line for s in script.hook] == old   # a one-point gain is noise
-    monkeypatch.setattr(craft.kit, "ask_json", lambda *a, **k: craft.Opening(score_before=3, score_after=9,
-                                                                             paragraphs=new))
+    monkeypatch.setattr(craft.kit, "ask_json", fake(3, 9))
     faith = ["Hazrat Muhammad (SAW) ki peshgoi thi. 53 din, 1,000 saal purani deewarein.", old[1]]
     script = SimpleNamespace(hook=[SimpleNamespace(line=p) for p in faith], sacred=False)
     craft.polish_opening(object(), script, facts, log=lambda m: None)
@@ -113,6 +121,25 @@ def test_the_week_report_compares_new_scripts_with_the_month_before():
     line = reminders.craft_line(rows, lambda r: r["views"], now, since=since)
     assert line == "  New scripts: median 500 views, 80% watched (3 Shorts); the month before: median 200 views, 50% watched (3 Shorts)."
     assert reminders.craft_line(rows[:5], lambda r: r["views"], now, since=since) == ""     # too few after
+
+
+def test_a_blind_judge_decides_whether_the_polished_script_replaces_the_writers(monkeypatch):
+    monkeypatch.setenv("POLISH", "1")
+    for prefer_new in (True, False):
+        s = _story()
+        s.hook_line = "Babar Azam ke ODI records dekhte hain"                 # plain, not stale
+        orders = []
+
+        def ask(client, schema, prompt, model=None):
+            if schema is craft.Pick:
+                first = prompt.split("VERSION 2:")[0]
+                orders.append("Sirf 97" in first)
+                return craft.Pick(better=1 if ("Sirf 97" in first) == prefer_new else 2, why="")
+            return craft.Doctored(hook_score=5, lines=[t for _p, t in craft.spoken(s)],
+                                  hooks=[craft.Hook(text="Sirf 97 innings mein 5000 runs, kisi ne nahi kiya", score=9)])
+        monkeypatch.setattr(craft.kit, "ask_json", ask)
+        craft.polish(object(), s, FACTS, log=lambda m: None)
+        assert (s.hook_line.startswith("Sirf 97")) == prefer_new and len(orders) == 1
 
 
 def test_polish_never_breaks_a_video(monkeypatch):

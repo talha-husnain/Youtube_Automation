@@ -59,7 +59,10 @@ class RestoringStaticFiles(StaticFiles):
         except HTTPException as exc:
             if exc.status_code != 404 or self.restorer is None:
                 raise
-            job_id = path.split("/", 1)[0] if "/" in path else ""
+            # Starlette passes an OS path: "job\clip_1.mp4" on Windows, where a split on "/" found
+            # no job id and the restore never ran (media_auth.normalise_relpath already handles both).
+            rel = path.replace("\\", "/")
+            job_id = rel.split("/", 1)[0] if "/" in rel else ""
             if not job_id:
                 raise
             try:
