@@ -33,6 +33,7 @@ os.environ["BEAT_CUTS"] = "0"           # beats.py decodes the song with ffmpeg
 os.environ["SLOWMO"] = "0"              # RIFE runs on the GPU for real
 os.environ["STICKERS"] = "0"            # sticker picks are a Gemini call
 os.environ["HISTORY_MAPS"] = "0"        # history_maps reads the real Cliopatria cache
+os.environ["LOCALIZE"] = "0"            # translated titles are a Gemini call per upload
 os.environ["VIRAL_REMIX"] = "0"         # studies a real viral Short with yt-dlp + Gemini
 
 import pytest

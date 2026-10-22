@@ -495,9 +495,11 @@ def _send_resuming(location, path, size, sleep=None):
 
 
 def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
-           privacy="public", ai_made=False, meta=None):
+           privacy="public", ai_made=False, meta=None, localizations=None):
     """Upload one file. ``publish_at``: aware datetime to schedule it (the video
-    is private until then, YouTube publishes it). Returns the uploads.json row."""
+    is private until then, YouTube publishes it). ``localizations``: localize.build()
+    output, translated titles/descriptions sent with the insert (no extra quota).
+    Returns the uploads.json row."""
     row = {"id": secrets.token_hex(6), "file": os.path.basename(path), "title": _clean_title(title),
            "genre": genre, "publish_at": publish_at.astimezone(timezone.utc).isoformat() if publish_at else None,
            "asked": "scheduled" if publish_at else privacy, "status": "uploading",
@@ -514,9 +516,18 @@ def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
                        "containsSyntheticMedia": bool(ai_made)}}
     if publish_at:
         body["status"]["publishAt"] = row["publish_at"].replace("+00:00", "Z")
+    parts = "snippet,status"
+    if localizations:
+        import localize
+        body["snippet"]["defaultLanguage"] = localize.DEFAULT_LANGUAGE
+        body["localizations"] = {k: {"title": _clean_title(v["title"]) or row["title"],
+                                     "description": _clean_description(v["description"])}
+                                 for k, v in localizations.items()}
+        parts += ",localizations"
+        row["localized"] = sorted(localizations)
     try:
         size = os.path.getsize(path)
-        start = httpx.post(UPLOAD_API, params={"uploadType": "resumable", "part": "snippet,status"},
+        start = httpx.post(UPLOAD_API, params={"uploadType": "resumable", "part": parts},
                            headers={"Authorization": f"Bearer {_token()}",
                                     "Content-Type": "application/json; charset=UTF-8",
                                     "X-Upload-Content-Length": str(size),

@@ -179,6 +179,36 @@ def test_a_footage_term_that_echoes_the_line_is_replaced(monkeypatch):
     assert got == ["Fastest centuries in ODI", "cricket stadium night", "Fastest centuries in ODI"]
 
 
+def test_titles_are_translated_for_hindi_and_urdu_viewers_and_sent_with_the_upload(monkeypatch, tmp_path):
+    import localize
+    import youtube_account as ya
+    monkeypatch.setenv("LOCALIZE", "1")
+    desc = "Sirf 31 balls mein century! AB de Villiers ka record.\n\nCredit: photo by X, CC BY-SA 4.0\n\n#shorts #cricket"
+    monkeypatch.setattr(localize.kit, "ask_json", lambda *a, **k: localize.Out(items=[
+        localize.Item(lang="hi", title="सिर्फ 31 गेंदों में शतक! #shorts", hook="एबी डिविलियर्स का रिकॉर्ड।"),
+        localize.Item(lang="ur", title="Sirf 31 balls", hook=""),                 # not translated: dropped
+        localize.Item(lang="fr", title="Seulement 31 balles", hook="x")]))        # not asked for: dropped
+    got = localize.build(object(), "Sirf 31 balls mein century! #shorts", desc, "cricket", log=lambda m: None)
+    assert list(got) == ["hi"] and got["hi"]["title"].startswith("सिर्फ")
+    assert got["hi"]["description"].startswith("एबी") and got["hi"]["description"].endswith(desc)  # credits kept
+    assert localize.build(object(), "t", desc, "music") == {}                                    # songs: none
+    sent = {}
+
+    def post(url, params=None, json=None, **k):
+        sent.update(params=params, body=json)
+        raise RuntimeError("stop here")
+    monkeypatch.setattr(ya.httpx, "post", post)
+    monkeypatch.setattr(ya, "_token", lambda: "tok")
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"x")
+    try:
+        ya.upload(str(clip), "Sirf 31 balls mein century!", desc, ["cricket"], "cricket", localizations=got)
+    except Exception:  # noqa: BLE001
+        pass
+    assert sent["params"]["part"] == "snippet,status,localizations"
+    assert sent["body"]["snippet"]["defaultLanguage"] == "en" and sent["body"]["localizations"]["hi"]["title"]
+
+
 def test_a_scene_naming_an_empire_gets_its_own_map_entry(monkeypatch):
     import history_maps
     import history_videos as hv

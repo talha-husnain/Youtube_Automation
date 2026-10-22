@@ -1576,10 +1576,20 @@ def upload_waiting(ch, job_clips, log=print):
                     desc = history_videos.series_links(desc, ups, j["series"], j.get("series_part") or 1,
                                                        ch.get("lang", "urdu"))
                 desc = history_videos.watch_next(desc, ups, ch.get("lang", "urdu"))
+            # Hindi and Urdu-script titles for viewers searching in those scripts (localize.py).
+            import localize
+            translated = {}
+            if localize.available(ch["kind"]):
+                try:
+                    import short_kit
+                    translated = localize.build(short_kit.gemini(), clip["title"], desc, ch["kind"], log=log)
+                except Exception:  # noqa: BLE001 — never holds an upload back
+                    translated = {}
             row = youtube_account.upload(
                 clip["path"], clip["title"], desc, clip["tags"],
                 "history_teaser" if j.get("format") in EXTRA_FORMATS else KINDS[ch["kind"]]["genre"],
                 publish_at=slot, ai_made=clip.get("ai_made", False),
+                **({"localizations": translated} if translated else {}),
                 meta={"job_id": j["job_id"], "clip_index": clip["index"], "channel": ch["id"],
                       "format": j.get("format"), "topic": j.get("topic"), "seconds": clip.get("seconds"),
                       "question": clip.get("question") or "", "answers": clip.get("answers") or [],
