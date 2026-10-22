@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     Loader2, Youtube, Plus, Play, Trash2, LogOut, Layers, X, Copy, Check, ExternalLink, Rocket, AlertTriangle,
-    Trophy, Brain, Music, HelpCircle, Flame, Landmark, BookOpen,
+    Trophy, Brain, Music, HelpCircle, Flame, Landmark, BookOpen, Share2,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
@@ -123,7 +123,77 @@ function EngageSwitches({ ch, save }) {
     );
 }
 
-function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
+// meta_publish.py: the same Shorts on the owner's Facebook Pages and Instagram.
+const META_STEPS = (redirect) => `1. Open developers.facebook.com with your Facebook account and press Create App.
+2. Choose the uses for publishing to a Facebook Page and to Instagram (the names on Meta's screen may differ a little).
+3. Add "Facebook Login for Business". In its settings, add this to Valid OAuth Redirect URIs:
+   ${redirect}
+4. In App settings > Basic, copy the App ID and the App Secret.
+5. Open D:\\youtube\\Automate\\.env in Notepad and add two lines:
+   META_APP_ID=your app id
+   META_APP_SECRET=your app secret
+6. Make a Facebook Page (one per channel, or one for all), and switch your Instagram to a Professional account linked to that Page.
+7. Restart Shortkaar, then press "connect Facebook" here. Keep the app in Development mode: it only posts to your own Pages.`;
+
+function MetaPanel({ meta, onChanged }) {
+    const [busy, setBusy] = useState(false);
+    const hash = window.location.hash || '';
+    const err = /meta_error=([^&]*)/.exec(hash);
+    if (!meta) return null;
+    const disconnect = async () => {
+        setBusy(true);
+        try { await apiJson('/api/meta/disconnect', { method: 'POST' }); await onChanged(); } finally { setBusy(false); }
+    };
+    const posted = (meta.queue || []).filter((q) => q.fb?.status === 'posted' || q.ig?.status === 'posted').length;
+    const waiting = (meta.queue || []).filter((q) => q.fb?.status === 'pending' || q.ig?.status === 'pending').length;
+    return (
+        <div className="card p-5 space-y-2">
+            <p className="text-sm text-ink flex items-center gap-1.5"><Share2 size={15} /> Facebook and Instagram</p>
+            <p className="text-xs text-muted leading-relaxed">
+                Each channel can also post its Shorts as Reels on a Facebook Page and its Instagram, at the same time as YouTube, marked as made with AI. Long videos stay on YouTube; Facebook takes Reels up to 90 seconds.
+            </p>
+            {!meta.configured && <CopyBox text={META_STEPS(meta.redirect)} />}
+            {meta.configured && !meta.connected && (
+                <a href={getApiUrl(`/api/meta/connect?back=${encodeURIComponent(window.location.origin)}`)} className="btn-primary px-4 py-2 text-sm inline-flex items-center gap-1.5">
+                    <Share2 size={15} /> connect Facebook
+                </a>
+            )}
+            {meta.connected && (
+                <div className="space-y-1">
+                    <p className="text-xs text-ok">Connected{meta.user ? ` as ${meta.user}` : ''}: {meta.pages.map((p) => `${p.name}${p.instagram ? ` + Instagram @${p.instagram}` : ''}`).join(', ')}</p>
+                    <p className="text-xs text-muted">{waiting} waiting, {posted} posted in the last month. Pick a Page on each channel below.</p>
+                    <button onClick={disconnect} disabled={busy} className="btn-ghost px-3 py-1.5 text-xs"><LogOut size={13} /> disconnect Facebook</button>
+                </div>
+            )}
+            {/meta_connected=1/.test(hash) && <p className="text-xs text-ok">Facebook connected.</p>}
+            {err && <p className="text-xs text-danger" role="alert">{decodeURIComponent(err[1])}</p>}
+        </div>
+    );
+}
+
+function MetaTarget({ ch, meta, save }) {
+    if (!meta?.connected || ch.main) return null;
+    const page = (meta.pages || []).find((p) => p.id === ch.meta_page);
+    return (
+        <div className="flex flex-wrap items-center gap-3 text-xs text-ink2">
+            <span className="flex items-center gap-1"><Share2 size={13} /> Also post to</span>
+            <select value={ch.meta_page || ''} onChange={(e) => save({ meta_page: e.target.value })}
+                className="input-field !w-auto text-xs py-1" aria-label={`Facebook Page for ${ch.name}`}>
+                <option value="">nowhere else</option>
+                {meta.pages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            {page && (
+                <>
+                    <label className="flex items-center gap-1"><input type="checkbox" checked={!!ch.meta_fb} onChange={() => save({ meta_fb: !ch.meta_fb })} /> Facebook Reels</label>
+                    <label className="flex items-center gap-1"><input type="checkbox" checked={!!ch.meta_ig && !!page.instagram} disabled={!page.instagram}
+                        onChange={() => save({ meta_ig: !ch.meta_ig })} /> Instagram{page.instagram ? ` @${page.instagram}` : ' (none linked to this Page)'}</label>
+                </>
+            )}
+        </div>
+    );
+}
+
+function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot, meta }) {
     const [busy, setBusy] = useState('');
     const [error, setError] = useState('');
     const [sure, setSure] = useState(false);
@@ -312,6 +382,7 @@ function ChannelCard({ ch, maxPerDay, onChanged, onOpenAutopilot }) {
                         {ch.review_hours > 0 && <span className="text-muted">(match results still go at once; Telegram tells you when one is ready, with a Skip button)</span>}
                     </label>
                     <EngageSwitches ch={ch} save={save} />
+                    <MetaTarget ch={ch} meta={meta} save={save} />
                     <ChannelKit ch={ch} />
                     <UpNext ch={ch} onChanged={onChanged} />
                     <RecentUploads ch={ch} />
@@ -449,10 +520,14 @@ function AddChannel({ kinds, onAdded }) {
 
 export default function ChannelsTab({ notice, onOpenAutopilot }) {
     const [data, setData] = useState(null);
+    const [meta, setMeta] = useState(null);
     const [error, setError] = useState('');
 
-    const load = useCallback(() => apiJson('/api/my-channels').then((d) => { setData(d); setError(''); })
-        .catch((e) => setError(e.detail || 'Could not load your channels.')), []);
+    const load = useCallback(() => Promise.all([
+        apiJson('/api/my-channels').then((d) => { setData(d); setError(''); })
+            .catch((e) => setError(e.detail || 'Could not load your channels.')),
+        apiJson('/api/meta/status').then(setMeta).catch(() => setMeta(null)),
+    ]), []);
     useEffect(() => { load(); }, [load]);
     // While a Short is being made, follow it.
     const busy = (data?.channels || []).some((c) => c.running?.length > 0);
@@ -494,8 +569,10 @@ export default function ChannelsTab({ notice, onOpenAutopilot }) {
                 </div>
             )}
 
+            <MetaPanel meta={meta} onChanged={load} />
+
             {data.channels.map((ch) => (
-                <ChannelCard key={ch.id} ch={ch} maxPerDay={data.max_per_day} onChanged={load} onOpenAutopilot={onOpenAutopilot} />
+                <ChannelCard key={ch.id} ch={ch} maxPerDay={data.max_per_day} onChanged={load} onOpenAutopilot={onOpenAutopilot} meta={meta} />
             ))}
             <AddChannel kinds={data.kinds} onAdded={load} />
         </div>

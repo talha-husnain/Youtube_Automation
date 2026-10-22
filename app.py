@@ -2956,6 +2956,56 @@ def _refuse_same_channel(me, account):
     return None
 
 
+@app.get("/api/meta/status")
+async def meta_status():
+    """Facebook / Instagram cross-posting: connected?, the Pages (and their Instagram), the queue."""
+    _local_only()
+    import meta_publish
+    st = meta_publish.status()
+    st["redirect"] = meta_publish.redirect_uri()
+    st["queue"] = [{k: q.get(k) for k in ("id", "channel", "page", "caption", "at", "seconds", "fb", "ig")}
+                   for q in meta_publish.queue()][-50:]
+    return st
+
+
+@app.get("/api/meta/connect")
+async def meta_connect(back: str = ""):
+    _local_only()
+    import meta_publish
+    from fastapi.responses import RedirectResponse
+    try:
+        return RedirectResponse(meta_publish.auth_url(back))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/meta/callback")
+async def meta_callback(code: str = "", state: str = "", error: str = "", error_description: str = ""):
+    _local_only()
+    import urllib.parse
+    import meta_publish
+    import youtube_account
+    from fastapi.responses import RedirectResponse
+    origin = meta_publish.back_for(state)
+    if error or not code:
+        return RedirectResponse(youtube_account.back_url(
+            origin, "meta_error=" + urllib.parse.quote((error_description or error or "cancelled")[:200]), "channels"))
+    try:
+        await _in_thread(meta_publish.finish_connect, code, state)
+    except Exception as e:  # noqa: BLE001
+        return RedirectResponse(youtube_account.back_url(origin, "meta_error=" + urllib.parse.quote(str(e)[:200]),
+                                                         "channels"))
+    return RedirectResponse(youtube_account.back_url(origin, "meta_connected=1", "channels"))
+
+
+@app.post("/api/meta/disconnect")
+async def meta_disconnect():
+    _local_only()
+    import meta_publish
+    meta_publish.disconnect()
+    return meta_publish.status()
+
+
 @app.get("/api/youtube/callback")
 async def youtube_callback(code: str = "", state: str = "", error: str = ""):
     _local_only()

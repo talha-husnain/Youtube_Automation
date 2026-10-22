@@ -315,6 +315,12 @@ def update(cid, patch):
             ch["notes"] = " ".join(str(patch["notes"] or "").split())[:300]
         if "daily_short" in patch:
             ch["daily_short"] = bool(patch["daily_short"])
+        # Facebook / Instagram cross-posting (meta_publish.py): which Page, and which of the two.
+        if "meta_page" in patch:
+            ch["meta_page"] = re.sub(r"[^0-9]", "", str(patch["meta_page"] or ""))[:30]
+        for key in ("meta_fb", "meta_ig"):
+            if key in patch:
+                ch[key] = bool(patch[key])
         if "review_hours" in patch:
             try:
                 ch["review_hours"] = max(0, min(REVIEW_MAX_HOURS, int(patch["review_hours"])))
@@ -634,6 +640,8 @@ def summary(ch):
     out.update({
         "max_per_day": cap(ch), "long": long,
         **engage_settings(ch), "match_watch": bool(ch.get("match_watch", True)),
+        "meta_page": ch.get("meta_page") or "", "meta_fb": bool(ch.get("meta_fb", True)),
+        "meta_ig": bool(ch.get("meta_ig", True)),
         "kind_label": KINDS.get(ch["kind"], {}).get("label", ch["kind"]),
         "youtube": yt, "made_today": len(_jobs_on(ch, day)),
         "uploaded_today": sum(1 for r in rows if r.get("status") == "done"
@@ -1464,6 +1472,13 @@ def upload_waiting(ch, job_clips, log=print):
                 _set_job(ch["id"], j["job_id"], status="uploaded", video_id=row.get("video_id"),
                          slot=slot.isoformat())
                 log(f"⬆️ {ch['name']}: uploaded '{row['title'][:60]}' for {slot:%d %b %H:%M}.")
+                try:
+                    import meta_publish
+                    # The same Short on the channel's Facebook Page and Instagram at its YouTube time.
+                    if meta_publish.enqueue(ch, {**row, "description": desc}, clip["path"], slot):
+                        log(f"   📋 {ch['name']}: queued for Facebook / Instagram.")
+                except Exception as e:  # noqa: BLE001 — YouTube is what matters
+                    log(f"   ⚠️ {ch['name']}: not queued for Facebook / Instagram ({type(e).__name__}).")
                 continue
             if youtube_account.upload_limit_hit(row.get("error")):
                 limit = True
@@ -1785,6 +1800,29 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
     # Engagement on every connected channel, the main one included.
     for cid in ["main"] + [c["id"] for c in live]:
         await loop.run_in_executor(None, engage_pass, cid, client_fn, log)
+    await loop.run_in_executor(None, meta_pass, log, t)
+
+
+META_EVERY = 10 * 60
+_last_meta = [0.0]
+
+
+def meta_pass(log=print, now=None):
+    """Post the Shorts queued for Facebook / Instagram whose time has come (meta_publish.post_pass)."""
+    now = now or time.time()
+    if now - _last_meta[0] < META_EVERY:
+        return 0
+    _last_meta[0] = now
+    try:
+        import meta_publish
+        if not meta_publish.status()["connected"] or not meta_publish.queue():
+            return 0
+        import keep_awake
+        with keep_awake.task():
+            return meta_publish.post_pass(log, now)
+    except Exception as e:  # noqa: BLE001 — next pass
+        log(f"⚠️ Facebook / Instagram pass failed ({type(e).__name__}).")
+        return 0
 
 
 async def loop_forever(submit, job_clips, output_dir, client_fn, is_active=lambda: True, today_fn=None):
