@@ -1501,6 +1501,50 @@ def _keep_for_retry(ch, row, key, path, lang=None):
     youtube_account._save_upload(row)
 
 
+# OmniVoice's audio tokenizer (local_voice.py) is under Boson AI's Higgs Audio 2 community licence, which
+# asks for this line on a related about page; the owner said to add it (22-oct-2026). Kinds with narration only.
+VOICE_CREDIT = ("Some narration is made with OmniVoice. Built with Higgs Materials licensed from Boson AI USA, Inc., "
+                "Copyright Boson AI USA, Inc., All Rights Reserved and Meta Llama 3 licensed under the Meta Llama 3 "
+                "Community License, Copyright Meta Platforms, Inc., All Rights Reserved.")
+VOICE_KINDS = ("cricket", "quiz", "controversy", "history", "quran")
+# Every channel's About text was empty on 22-oct-2026, which also wastes YouTube's channel search: an
+# empty one gets this before the credit. Plain facts only; the owner can rewrite it in Studio any time.
+ABOUT = {
+    "cricket": "Cricket facts, records and match stories in Urdu and Hindi, made fresh every day. Pakistan, "
+               "India and world cricket: player records, results, head-to-head numbers and the moments fans "
+               "talk about. New Shorts every afternoon and evening.",
+    "quiz": "Daily quiz Shorts in Urdu: general knowledge, Islamic quiz, flags, true or false and paheliyan. "
+            "Answer in the comments and challenge your friends. A new quiz every day.",
+    "controversy": "Viral stories and controversies explained simply in Urdu and Hindi: what was reported, what "
+                   "is alleged and what each side says, with the sources in every description. New explainers "
+                   "every day.",
+    "history": "Urdu documentaries on history and the big stories of today: empires, battles, scholars, "
+               "turning points and the news everyone is talking about, explained with sources. New videos "
+               "every day, plus short clips from each one.",
+    "quran": "Tilawat of the Holy Quran by Qari Mishary Rashid Alafasy, ayah by ayah, with the Arabic text "
+             "and the Urdu translation of Maulana Muhammad Junagarhi on screen. Recitation and texts from the "
+             "Quran Foundation (quran.com). A new surah or part every day.",
+}
+
+
+def about_credit(ch, log=print):
+    """Add VOICE_CREDIT to the channel's About text once (``about_credit`` on the card)."""
+    import youtube_account
+    if ch.get("kind") not in VOICE_KINDS or ch.get("about_credit"):
+        return False
+    with youtube_account.use(account(ch["id"])):
+        if not youtube_account.status()["connected"]:
+            return False
+        try:
+            added = youtube_account.add_to_channel_about(VOICE_CREDIT, if_empty=ABOUT.get(ch["kind"]))
+        except Exception as e:  # noqa: BLE001 — tried again on the next learn pass
+            log(f"⚠️ {ch.get('name')}: voice credit not added ({str(e)[:80]}).")
+            return False
+    _change(ch["id"], lambda c: c.update(about_credit=int(time.time())))
+    log(f"📝 {ch.get('name')}: voice credit {'added to' if added else 'already in'} the channel's About text.")
+    return added
+
+
 def retry_extras(ch, log=print, now=None):
     """Try failed thumbnails and caption tracks of the last week again.
     Returns how many went up this time."""
@@ -1731,6 +1775,7 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
         if t - ch.get("last_learn", 0) >= LEARN_EVERY:
             await loop.run_in_executor(None, learn, ch, log)
             await loop.run_in_executor(None, retry_extras, ch, log)
+            await loop.run_in_executor(None, about_credit, get(ch["id"]) or ch, log)
             try:
                 await loop.run_in_executor(None, check_placement, ch["id"], log)
             except Exception as e:  # noqa: BLE001 — next learn pass

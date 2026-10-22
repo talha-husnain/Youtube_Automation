@@ -594,6 +594,37 @@ def add_to_description(video_id, line):
     return True
 
 
+CHANNEL_DESCRIPTION_MAX = 1000   # YouTube's limit for a channel's About text (characters)
+
+
+def add_to_channel_about(line, if_empty=None):
+    """Append ``line`` to the connected channel's About text (owner, 22-oct-2026: the OmniVoice credit);
+    an empty About gets ``if_empty`` before it.
+    channels.update with part=brandingSettings deletes every branding field it is not sent, so the whole
+    brandingSettings object goes back with only the description changed. True when it was added."""
+    if quota_used() + UPDATE_UNITS > 9000:
+        raise RuntimeError("the day's API quota is nearly used")
+    items = _get(f"{API}/channels", {"part": "brandingSettings", "mine": "true"}).get("items") or []
+    if not items:
+        raise RuntimeError("This Google account has no YouTube channel.")
+    cid, branding = items[0]["id"], items[0].get("brandingSettings") or {}
+    chan = dict(branding.get("channel") or {})
+    old = chan.get("description") or ""
+    if line in old:
+        return False
+    new = f"{old.rstrip()}\n\n{line}" if old.strip() else (f"{if_empty.strip()}\n\n{line}" if if_empty else line)
+    if len(new) > CHANNEL_DESCRIPTION_MAX:
+        raise RuntimeError("the channel's About text has no room left")
+    chan["description"] = new
+    spend(UPDATE_UNITS)
+    r = httpx.put(f"{API}/channels", params={"part": "brandingSettings"},
+                  json={"id": cid, "brandingSettings": {**branding, "channel": chan}},
+                  headers={"Authorization": f"Bearer {_token()}"}, timeout=60)
+    if r.status_code != 200:
+        raise RuntimeError(_google_error(r))
+    return True
+
+
 def unschedule(video_id):
     """Keep a scheduled video private for good: it never goes public at its
     time (51 units). videos.update replaces the whole status, so every other
