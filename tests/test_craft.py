@@ -71,6 +71,35 @@ def test_a_stale_phrase_left_after_the_polish_gets_one_targeted_fix(monkeypatch)
     assert all("MYSTERY" not in craft.short_rules(exclude=("MYSTERY",)) for _ in range(20))
 
 
+def test_a_long_videos_opening_is_rewritten_only_on_a_clear_gain(monkeypatch):
+    monkeypatch.setenv("POLISH", "1")
+    facts = "In 1453 Sultan Mehmed II took Constantinople after 53 days. The walls were 1,000 years old."
+    old = ["Aaj hum Constantinople ki kahani sunenge. Yeh ek purana shehar tha.",
+           "Sultan Mehmed ne 1453 mein shehar ko gher liya. Lekin deewarein mazboot thi."]
+    script = SimpleNamespace(hook=[SimpleNamespace(line=p) for p in old])
+    new = ["53 din, 1,000 saal purani deewarein, aur ek jawan Sultan. Constantinople gir sakta tha?",
+           "Sultan Mehmed ne 1453 mein shehar gher liya. Lekin deewarein toot nahi rahi thi. Kya Rome bacha?"]
+    monkeypatch.setattr(craft.kit, "ask_json", lambda *a, **k: craft.Opening(score_before=3, score_after=8,
+                                                                             paragraphs=new))
+    craft.polish_opening(object(), script, facts, log=lambda m: None)
+    assert script.hook[0].line == new[0]          # "Lekin" and "Constantinople" start sentences: fine
+    assert script.hook[1].line == old[1]          # "Rome" is a name the facts do not have
+    monkeypatch.setattr(craft.kit, "ask_json", lambda *a, **k: craft.Opening(score_before=7, score_after=8,
+                                                                             paragraphs=new))
+    script = SimpleNamespace(hook=[SimpleNamespace(line=p) for p in old])
+    craft.polish_opening(object(), script, facts, log=lambda m: None)
+    assert [s.line for s in script.hook] == old   # a one-point gain is noise
+    monkeypatch.setattr(craft.kit, "ask_json", lambda *a, **k: craft.Opening(score_before=3, score_after=9,
+                                                                             paragraphs=new))
+    faith = ["Hazrat Muhammad (SAW) ki peshgoi thi. 53 din, 1,000 saal purani deewarein.", old[1]]
+    script = SimpleNamespace(hook=[SimpleNamespace(line=p) for p in faith], sacred=False)
+    craft.polish_opening(object(), script, facts, log=lambda m: None)
+    assert script.hook[0].line == faith[0]        # a paragraph about faith keeps its wording
+    script = SimpleNamespace(hook=[SimpleNamespace(line=p) for p in old], sacred=True)
+    craft.polish_opening(object(), script, facts, log=lambda m: None)
+    assert [s.line for s in script.hook] == old   # a sacred story is never polished
+
+
 def test_polish_never_breaks_a_video(monkeypatch):
     monkeypatch.setenv("POLISH", "1")
 

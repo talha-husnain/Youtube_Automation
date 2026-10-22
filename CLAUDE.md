@@ -906,6 +906,13 @@ never finished:
   question (rows say who leads and code checks that). `_scrub` gives lines still holding a banned
   phrase one targeted rewrite. POLISH=0 (conftest). First live run: "Kya aap jante hain Shaheen ne..."
   (old) -> "Sirf 31 runs dekar Rohit, Rahul aur Kohli teeno ko udaya!"; cricket topics now aim 25-30 s.
+  Long videos: `polish_opening` rewrites the hook scenes (the first ~30-45 s) before the fact check,
+  kept only on a 2+ point self-scored gain and per paragraph by `line_ok`. `_names` is per sentence
+  (a capitalised first word counts unless it is an opener; honorifics never count). First live run
+  (Constantinople, 6/10 -> 10/10, passed the fact check) turned rulers who "dreamed" of the city into a
+  "sacred duty": code guards numbers and names, not claim strength. Both polish prompts now forbid
+  making a claim stronger, sacred stories skip the opening polish, and a paragraph with an honorific
+  (Hazrat, sallallahu, Allah, imam, nabi...) keeps the writer's wording.
 - **Viral remix** (`viral_remix.py`): a viral video is studied, never copied (owner's "get the transcript
   and make our own"). Captions -> one call (`Blueprint`: angle, hook pattern, beats, devices, in its own
   words); stored by topic in state/remix/index.json so generators find it through the idea text

@@ -538,6 +538,10 @@ def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_
             raise RuntimeError(f"Not made: {script.reason or 'the topic is not for this channel'}.")
         if len(script.chapters) < 2 or not script.hook:
             raise RuntimeError("The script came back without chapters; try again later.")
+        # The first 30 seconds decide a long video; polished before the fact check reads it.
+        craft.polish_opening(client, script, facts + "\n" + (extra or ""),
+                             what="news explainer" if explainer else "history documentary",
+                             language=LANG_NAME.get(lang, "Roman Urdu") + (" in Latin letters" if lang == "urdu" else ""))
         notes = []
         got = word_count(script)
         if got < words * 0.75:

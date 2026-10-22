@@ -61,6 +61,7 @@ SHORT_CRAFT = """WRITING RULES (most viewers decide in the first 3 seconds wheth
   that repeats an earlier one. Specific beats vague: a number, a name, a place, a date.
 - Link the beats with turns ("lekin", "isliye", "phir", "asal twist yeh hai") so each line pulls into the next.
 - Talk like a real Pakistani/Indian fan explaining it to a friend: everyday words, energy, no bookish words.
+- The on-screen title carries the hook's promise in 3-7 words, so the Short works with the sound off.
 - End on the payoff, no outro. The question for the comments takes a one-word answer people will argue about
   ("Babar ya Kohli? Ek naam likho"), never "like aur subscribe". The last line should make a replay feel natural.
 - Shape for this video: {structure}
@@ -154,15 +155,22 @@ OPENERS = {"suno", "socho", "kaun", "kisne", "kitne", "kitna", "kitni", "sabse",
            "aakhir", "akhir", "achanak", "sochiye", "batao", "bataiye", "na", "nahi", "haan", "wah", "uff"}
 
 
+# Honorifics the history prompts require ("Hazrat", "sallallahu alaihi wasallam"): never a new name.
+HONORIFICS = {"hazrat", "imam", "sallallahu", "alaihi", "wasallam", "saw", "rahmatullah", "radiallahu", "anhu"}
+
+
 def _names(text):
-    """Capitalised words: names, places, teams. The first word counts too ("Kohli bhi hairan"
-    slipped through a check that skipped it) unless it is a common opener."""
+    """Capitalised words: names, places, teams. Each sentence's first word counts too ("Kohli bhi
+    hairan" slipped through a check that skipped it) unless it is a common opener."""
     import subtitles
-    words = re.findall(r"[A-Za-z][A-Za-z'.-]*", text or "")
-    out = {w.lower().strip(".'") for w in words[1:] if w[0].isupper() and len(w) > 2}
-    if words and len(words[0]) > 2 and words[0].lower() not in subtitles.SENTENCE_STARTS | OPENERS:
-        out.add(words[0].lower().strip(".'"))
-    return out
+    out = set()
+    for sentence in re.split(r"[.!?]+\s+", text or ""):
+        words = re.findall(r"[A-Za-z][A-Za-z'-]*", sentence)
+        out |= {w.lower().strip("'") for w in words[1:] if w[0].isupper() and len(w) > 2}
+        if (words and len(words[0]) > 2 and words[0][0].isupper()
+                and words[0].lower() not in subtitles.SENTENCE_STARTS | OPENERS):
+            out.add(words[0].lower().strip("'"))
+    return out - HONORIFICS
 
 
 def _latin(text):
@@ -214,7 +222,8 @@ THE SCRIPT, one spoken line per number (line 0 is the hook):
    Each 6-12 words, true to the facts, same language as the script. Score each honestly with the same rubric.
 3. Rewrite every line (0 to {last}) to be punchier and sound like a real desi creator talking to a friend:
    cut warm-up and filler words, keep each line's meaning, keep EVERY number and name it has, never add a fact,
-   about the same length or shorter. Return exactly {n} lines in the same order. The last line keeps its ending
+   never make a claim stronger than the line says it (an allegation stays an allegation), about the same
+   length or shorter. Return exactly {n} lines in the same order. The last line keeps its ending
    (a question for the comments) if it has one.
 {language}
 Never use: {banned}."""
@@ -257,6 +266,65 @@ def polish(client, story, facts, what="cricket facts YouTube Short", fields=None
     log(f"   ✍️ Script polish: {kept} of {len(lines)} lines tightened.")
     _scrub(client, story, facts, fields, hook_path, language, log)
     return story
+
+
+class Opening(BaseModel):
+    score_before: int
+    score_after: int
+    paragraphs: List[str]
+
+
+OPENING_PROMPT = """You edit the opening of a YouTube {what} for Pakistani and Indian viewers. YouTube measures
+the first 30 seconds as the intro, and most viewers leave there: this opening decides the video.
+
+THE FACTS (the only source of truth; add nothing that is not here):
+{facts}
+
+THE OPENING, one spoken paragraph per number (about the first {seconds} seconds):
+{paragraphs}
+
+Score the opening 1 to 10: 10 = opens cold on the most dramatic true moment, says within 30 s what is at stake
+and the one question the video answers, promises the payoff, every sentence specific; 1 = a greeting, a slow
+background lecture, or "is video mein hum dekhenge".
+Then rewrite it to score higher: same number of paragraphs, each about the same length, keeping EVERY number and
+name each paragraph has, adding no fact that is not in the facts. Never make a claim stronger than the original
+says it: a hope stays a hope, a dream never becomes a duty, "reports say" stays "reports say". Sharpen by
+reordering, cutting and choosing concrete words. Plain spoken {language}. Score your version honestly with the
+same rubric. Never use: {banned}."""
+
+
+def polish_opening(client, script, facts, what="history documentary", language="Roman Urdu in Latin letters",
+                   log=print):
+    """Rewrite a long video's hook scenes for the first 30 seconds, in place; code keeps a paragraph
+    only if it passes ``line_ok`` and the whole rewrite scores 2+ higher. Never raises."""
+    if os.environ.get("POLISH", "1") == "0" or getattr(script, "sacred", False):
+        # A sacred story keeps the writer's careful wording: on the first live run (Constantinople,
+        # 22-oct-2026) the polish turned rulers who "dreamed" of the city into a "sacred duty".
+        return script
+    scenes = list(getattr(script, "hook", None) or [])
+    if not scenes:
+        return script
+    old = [s.line for s in scenes]
+    seconds = round(sum(len(p.split()) for p in old) / 2.5)
+    try:
+        got = kit.ask_json(client, Opening, OPENING_PROMPT.format(
+            what=what, facts=facts[:16000], seconds=seconds, language=language, banned=", ".join(BANNED),
+            paragraphs="\n".join(f"{i}. {p}" for i, p in enumerate(old))), model=writer_model())
+    except Exception as e:  # noqa: BLE001
+        log(f"   ℹ️ Opening polish skipped ({type(e).__name__}).")
+        return script
+    if len(got.paragraphs) != len(old) or got.score_after < got.score_before + 2:
+        log(f"   🎬 Opening kept ({got.score_before}/10).")
+        return script
+    kept = 0
+    for scene, new, before in zip(scenes, got.paragraphs, old):
+        if re.search(r"\b(hazrat|sallallahu|allah|imam|prophet|nabi|rasool)\b", before, re.I):
+            continue      # a paragraph about faith keeps the writer's checked wording
+        if line_ok(new, before, facts):
+            scene.line = new.strip()
+            kept += 1
+    log(f"   🎬 Opening {got.score_before}/10 -> {got.score_after}/10: {kept} of {len(old)} paragraph(s) rewritten.")
+    return script
 
 
 class Lines(BaseModel):
