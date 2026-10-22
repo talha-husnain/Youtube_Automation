@@ -136,6 +136,67 @@ def searches_hint(limit=24):
             + "\n".join(lines) + "\n")
 
 
+WIKI = "https://wikimedia.org/api/rest_v1/metrics/pageviews/top/{project}/all-access/{y}/{m:02d}/{d:02d}"
+WIKI_FILE = os.path.join(ROOT, "output", ".trends_wiki.json")
+WIKI_SECONDS = 6 * 3600
+WIKI_SKIP = ("Main_Page", "Special:", "Wikipedia:", "Portal:", "File:", "Help:", "Talk:", "User:", "Category:",
+             "Template:", "-", "XXX")
+
+
+def wiki_top(projects=(("en.wikipedia.org", 120), ("hi.wikipedia.org", 30)), get=None, now=None):
+    """Yesterday's most read Wikipedia articles (English and Hindi; Urdu's top list was adult-content
+    noise, research 22-oct-2026). A name that jumps up here is a story people are looking up: on
+    21-oct-2026 the Indian film "Jailer 2" was 4th on English Wikipedia. Pageviews API, CC0, no key;
+    the day's list appears a few hours after UTC midnight, so the day before is the fallback."""
+    if os.environ.get("TRENDS", "1") == "0":
+        return []
+    import datetime
+    now = now or time.time()
+    try:
+        with open(WIKI_FILE, encoding="utf-8") as f:
+            hit = json.load(f)
+        if now - hit.get("at", 0) < WIKI_SECONDS:
+            return hit["rows"]
+    except (OSError, ValueError, KeyError):
+        pass
+    if get is None:
+        import httpx
+
+        def get(url):
+            r = httpx.get(url, headers={"User-Agent": "Shortkaar/1.0 (owner's own channel tool)"}, timeout=15)
+            return r.json() if r.status_code == 200 else None
+    rows = []
+    for project, n in projects:
+        for back in (1, 2):
+            day = datetime.datetime.fromtimestamp(now, datetime.timezone.utc) - datetime.timedelta(days=back)
+            try:
+                data = get(WIKI.format(project=project, y=day.year, m=day.month, d=day.day))
+            except Exception:  # noqa: BLE001 — a hint, never needed
+                data = None
+            items = ((data or {}).get("items") or [{}])[0].get("articles") or []
+            if items:
+                rows += [{"title": a["article"].replace("_", " "), "views": a["views"], "wiki": project[:2]}
+                         for a in items if not a["article"].startswith(WIKI_SKIP)][:n]
+                break
+    if rows:
+        os.makedirs(os.path.dirname(WIKI_FILE), exist_ok=True)
+        tmp = WIKI_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"at": int(now), "rows": rows}, f, ensure_ascii=False)
+        os.replace(tmp, WIKI_FILE)
+    return rows
+
+
+def wiki_hint():
+    rows = wiki_top()
+    if not rows:
+        return ""
+    return ("MOST READ ON WIKIPEDIA YESTERDAY (English 'en', Hindi 'hi'; views): a player, star, film or event "
+            "high on this list is something people are looking up right now. Prefer an idea on one of these when "
+            "it fits the channel and its rules.\n"
+            + "; ".join(f"{r['title']} ({r['wiki']} {r['views']:,})" for r in rows) + "\n")
+
+
 def hint(kind, limit=15):
     """The prompt lines for a planner, or ""."""
     rows = top(kind, limit)

@@ -11,6 +11,7 @@ background is an ffmpeg gradient, the sounds are synthesised (aevalsrc) and
 the voices are Gemini's. Only song_shorts' "I own this music" mode and the
 movie scene's picture come from the source link.
 """
+import glob
 import json
 import os
 import random
@@ -32,6 +33,19 @@ CAPTION_TOP_PX = 1430
 MALE_VOICES = ["Puck", "Charon", "Fenrir", "Orus", "Iapetus"]
 FEMALE_VOICES = ["Kore", "Aoede", "Leda", "Zephyr", "Despina"]
 WHOOSH = "if(lt(t,0.3),0.35*sin(2*PI*(300*t+1800*t*t))*(t/0.3)*(1-t/0.3)*4,0)"
+# Real swooshes replace the synthesised chirp above wherever a card says WHOOSH: six Kenney
+# interface sounds (CC0) that a Gemini listening pass scored 8-9/10 as a card's slide-in, out of
+# 26 tried (22-oct-2026). All peak at -1 dBFS. At -11 dB a listening pass of a finished Short heard
+# them "barely audible, swallowed by the music"; at -5 dB "a bit too loud, fighting the voice": -8 dB.
+# Both passes heard the music too close to the voice: the ducked bed went from -24 to -28 LUFS.
+SFX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sfx")
+SFX_DB = float(os.environ.get("SFX_DB") or -8)
+
+
+def whoosh_files():
+    if os.environ.get("REAL_SFX", "1") == "0":
+        return []
+    return sorted(glob.glob(os.path.join(SFX_DIR, "*.ogg")))
 # Background music the user adds (royalty-free tracks, e.g. YouTube Audio
 # Library or Pixabay): nothing is downloaded or shipped with the app.
 MUSIC_DIR = os.environ.get("MUSIC_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "music")
@@ -706,7 +720,7 @@ def ducking():
     return os.environ.get("MUSIC_DUCK", "1").strip() != "0"
 
 
-BED_DUCKED_LOUDNORM = "loudnorm=I=-24:TP=-6:LRA=11"
+BED_DUCKED_LOUDNORM = "loudnorm=I=-28:TP=-6:LRA=11"
 DUCK = "sidechaincompress=threshold=0.02:ratio=8:attack=15:release=400:makeup=1"
 LIMIT = "alimiter=limit=0.95:level=0"
 
@@ -745,10 +759,18 @@ def _voice_sfx_inputs(cmd, graph, mix, idx, voices, sfx):
                      f"adelay={ms}|{ms}[vo{k}]")
         mix.append(f"[vo{k}]")
         idx += 1
+    files = whoosh_files() if any(s[0] == WHOOSH for s in sfx) else []
     for k, (expr, secs, at) in enumerate(sfx):
         ms = int(at * 1000)
-        graph.append(f"aevalsrc='{expr}':s=48000:d={secs:g},aformat=channel_layouts=stereo,"
-                     f"adelay={ms}|{ms}[sx{k}]")
+        if expr == WHOOSH and files:
+            # A real swoosh, a different one per card (sfx/: Kenney, CC0).
+            cmd += ["-i", files[k % len(files)]]
+            graph.append(f"[{idx}:a]volume={SFX_DB}dB,aresample=48000,aformat=channel_layouts=stereo,"
+                         f"adelay={ms}|{ms}[sx{k}]")
+            idx += 1
+        else:
+            graph.append(f"aevalsrc='{expr}':s=48000:d={secs:g},aformat=channel_layouts=stereo,"
+                         f"adelay={ms}|{ms}[sx{k}]")
         mix.append(f"[sx{k}]")
     return idx
 

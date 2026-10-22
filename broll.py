@@ -20,6 +20,7 @@ from typing import List
 
 from pydantic import BaseModel
 
+import faces
 import short_kit as kit
 import stock_media
 
@@ -112,14 +113,17 @@ def _shot(job_dir, k, frames, item, offset, close, w, h):
     d = frames / FPS
     if item["kind"] == "video":
         src = ["-ss", f"{offset:.2f}", "-stream_loop", "-1", "-i", item["path"]]
+        # The first crop follows the biggest face (faces.py); centred when there is none.
+        fx = faces.center_x(os.path.join(job_dir, item["path"]), offset + d / 2)
+        fill = f"crop={w}:{h}" + (f":x='min(max(iw*{fx:.4f}-ow/2,0),iw-ow)'" if fx is not None else "")
         if motion():
             a, b = PULL if close else PUSH
             z = f"({a:.4f}+{b - a:.4f}*{_ease(d)})"
-            vf = (f"fps={FPS},setpts=PTS-STARTPTS,scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+            vf = (f"fps={FPS},setpts=PTS-STARTPTS,scale={w}:{h}:force_original_aspect_ratio=increase,{fill},"
                   f"scale=w='trunc({w}*{z}/2)*2':h=-2:eval=frame:flags=bicubic,crop={w}:{h},"
                   f"{SHARPEN},setsar=1,{DIM},format=yuv420p")
         else:
-            vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+            vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,{fill},"
                   f"crop={cw}:{ch},scale={w}:{h},fps={FPS},setsar=1,{DIM},format=yuv420p")
     else:
         # A photo: decoded once, then a slow pan on a 2x canvas (half-pixel steps).

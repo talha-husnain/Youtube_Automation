@@ -408,6 +408,9 @@ never finished:
   newline even with a quoted delimiter: write patch scripts with the Write tool.
   They also eat one backslash of `\\` (an ASS `\\kf` regex in a test became `\kf`, 22-oct-2026):
   anything with a backslash goes in through Write/Edit, never `cat >> file <<'EOF'`.
+  Hit twice more the same night: `"\\n\\n"` in a heredoc'd patch became a real newline (a syntax
+  error), and `\\b` became `\b`, which a normal Python string turns into an INVISIBLE backspace
+  (U+0008) in the patched file: the regex silently matched nothing. No heredoc patch scripts at all.
 - **Engagement** (`engage.py`, 15-oct-2026), per channel switches run from
   `my_channels.engage_pass` every 15 min: first comment once a Short is
   public (its own `comment_question`, else a template; the API cannot pin),
@@ -890,6 +893,40 @@ never finished:
   state/meta/outbox and posted at its YouTube time (`my_channels.meta_pass`, every 10 min), FB Reels
   only up to 90 s, is_ai_generated on both, DAILY_MAX 8 per account per platform. Card keys meta_page,
   meta_fb, meta_ig. Nothing queues until META_APP_ID/SECRET are in .env and the owner connects.
+- **Writing craft** (`script_craft.py`, `tests/test_craft.py`, 22-oct-2026; research notes: hooks decide
+  in 3 s, 2.5-3 words/s, payoff last, one-word comment questions, templated narration = YouTube's
+  "inauthentic content"). `short_rules()`/`long_rules()` go after `.format` on every Short and long
+  script prompt, with a banned stale-phrase list and a shape per video (`STRUCTURES`, random; a match,
+  versus and controversy pass their own fixed order). Cricket stories moved from flash-lite to
+  `writer_model()` (3.7-flash). `polish()` = script doctor: scores the hook, writes 5, tightens lines;
+  CODE keeps a rewrite only if it keeps every number of the line, adds no number or name absent from
+  the research, stays Latin and about the same length (`line_ok`; a first word counts as a name unless
+  it is a common opener: "Kohli bhi hairan" slipped through before). Polish runs BEFORE controversy's
+  fairness check and history_today's fact check; quizzes polish only hook/outro, versus only hook and
+  question (rows say who leads and code checks that). `_scrub` gives lines still holding a banned
+  phrase one targeted rewrite. POLISH=0 (conftest). First live run: "Kya aap jante hain Shaheen ne..."
+  (old) -> "Sirf 31 runs dekar Rohit, Rahul aur Kohli teeno ko udaya!"; cricket topics now aim 25-30 s.
+- **Viral remix** (`viral_remix.py`): a viral video is studied, never copied (owner's "get the transcript
+  and make our own"). Captions -> one call (`Blueprint`: angle, hook pattern, beats, devices, in its own
+  words); stored by topic in state/remix/index.json so generators find it through the idea text
+  (`note_for`, `guard` = 8-word copy check vs the source text, also in history's copied_runs). The topic
+  goes through our own grounded research; the note says to reorder facts and add one of ours (thin
+  protection of "selection and arrangement"). Up next takes a YouTube link (`add_idea`, ~16 s, in a
+  thread); cricket/controversy channels study one hit a day (`my_channels._remix_first`, `remix_days`
+  counts tries, never ahead of urgent/owner ideas, one rival channel once a week). YouTube search's
+  "views" sort is "popularity" since Jan 2026: the week's top cricket Shorts had 1,548 views and were
+  song edits, so `candidates` searches a YEAR window, drops edits/songs by title, floor 20k views.
+  VIRAL_REMIX=0 (conftest). Trending page is gone (Jul 2025); Playboard charts exist but were not used.
+- **Real swooshes** (`sfx/`, Kenney interface pack, CC0): `kit.WHOOSH` in any Short's sfx list becomes
+  a real file, rotating per card (`_voice_sfx_inputs`), at SFX_DB (-8). Picked by a Gemini listening
+  pass (26 tried, kept the six 8-9/10). At -11 dB a listening pass of a finished Short called them
+  "barely audible", at -5 "too loud"; -8. Both heard the music too close: ducked bed -24 -> -28 LUFS. REAL_SFX=0 = old chirp. Long
+  history videos keep their own chirp.
+- **Face-aware footage crops** (`faces.py`, YuNet 2023mar ONNX, MIT, D:\youtube\oss\models\yunet): the
+  9:16 crop of a footage shot centres on the biggest face (~0.7 s a shot). MediaPipe's face API is
+  absent from the installed version, so main.py's face_detection is None on this laptop. FACE_CROP=0.
+- **Wikipedia most-read** (`trends.wiki_top`, pageviews API, CC0, no key): yesterday's top English (120)
+  and Hindi (30) articles go to the cricket, controversy and explainer planners (`wiki_hint`).
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
   player born today; `cricket_shorts.birthday_ok` keeps it only when the
   Wikipedia intro's "(born 15 October 1994)" matches (`player_photo.born`).

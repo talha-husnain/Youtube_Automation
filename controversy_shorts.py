@@ -149,7 +149,7 @@ One per line, each starting with "topic: ". Nothing else."""
 def channel_ideas(client, count=8, avoid=(), best=(), worst=(), requests=()):
     import engage
     import trends
-    learn = trends.searches_hint() + trends.hint("controversy") + engage.request_hint(requests)
+    learn = trends.searches_hint() + trends.wiki_hint() + trends.hint("controversy") + engage.request_hint(requests)
     if best:
         learn += "These did BEST on the channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:
@@ -197,6 +197,9 @@ def _script(story):
                       story.status_line, story.question])
 
 
+TIMELINE = "TIMELINE: the order given above, each beat a turn, the person's own side before the end."
+
+
 def write(client, topic, handle):
     """(Story, facts, sources) that passed every gate, or raises."""
     from quiz_shorts import quiz_model
@@ -210,7 +213,7 @@ def write(client, topic, handle):
     for attempt in range(2):
         story = kit.ask_json(client, Story, STORY_PROMPT.format(handle=handle, topic=topic, facts=facts,
                                                                 rules=RULES, fixes=fixes)
-                             + viral_remix.note_for(topic) + "\n\n" + craft.short_rules(), model=quiz_model())
+                             + viral_remix.note_for(topic) + "\n\n" + craft.short_rules(TIMELINE), model=quiz_model())
         if not story.found or not story.allowed or len(story.beats) < 3:
             raise RuntimeError(f"Not made: {story.reason or 'the facts were too thin'}.")
         story.beats = story.beats[:6]

@@ -20,43 +20,76 @@ import short_kit as kit
 
 # Openers viewers swipe on, and phrases that make a script sound machine-written.
 # Matched case-insensitively anywhere in a spoken line.
+# English: Wikipedia's "signs of AI writing" plus YouTube clichés. Roman Urdu / Hinglish: greetings
+# and calques of the same (research notes 22-oct-2026; no study names these as stale, it is judgement
+# from the anti-greeting evidence: most viewers leave in the first 3 s).
 BANNED = [
     "dosto", "doston", "swagat", "welcome back", "hello friends", "hello guys", "namaste", "assalam o alaikum",
-    "aaj hum baat karenge", "aaj ki video", "is video mein", "in this video", "kya aap jaante hain",
-    "kya aap jante hain", "did you know", "let's dive", "lets dive", "dive into", "buckle up",
-    "without further ado", "game changer", "game-changer", "in today's world", "it's important to note",
-    "unleash", "unlock the secrets", "tapestry", "testament to", "delve", "a journey", "ever wondered",
-    "stay tuned", "like aur subscribe", "like and subscribe", "smash that", "mind-blowing", "you won't believe",
-    "aap yakeen nahi karenge",
+    "assalam-o-alaikum", "aaj hum baat karenge", "aaj ki video", "is video mein", "in this video",
+    "kya aap jaante hain", "kya aap jante hain", "did you know", "let's dive", "lets dive", "dive into",
+    "buckle up", "without further ado", "game changer", "game-changer", "in today's world", "it's important to note",
+    "unleash", "unlock the secrets", "tapestry", "testament", "delve", "a journey", "ever wondered",
+    "stay tuned", "like aur subscribe", "like and subscribe", "like share subscribe", "smash that", "smash the like",
+    "mind-blowing", "you won't believe", "aap yakeen nahi karenge", "pivotal", "vibrant", "nestled",
+    "groundbreaking", "meticulously", "multifaceted", "evolving landscape", "indelible mark", "imagine a world",
+    "little did they know", "the rest is history", "let that sink in", "toh chaliye shuru karte hain",
+    "chaliye shuru karte hain", "bina waqt zaya kiye", "video end tak dekhein", "video end tak dekhna",
+    "milte hain agli video mein", "aaiye jaante hain", "aaiye jante hain", "hairan reh jayenge",
+    "rongte khade ho jayenge", "hosh uda dene wala", "ek aisa raaz", "itihaas ke panno mein",
+    "aaj ke is daur mein", "aham kirdar ada kiya", "gehri chhaap", "behad dilchasp", "muaziz nazreen",
 ]
 
-SHORT_CRAFT = """WRITING RULES (these decide whether people keep watching):
-- Line 1 is the hook, spoken in under 3 seconds (6-12 words). Open on the most surprising number, contradiction
-  or stake of the story, or a question the viewer needs answered. Never a greeting, the channel's name, "aaj hum",
-  "is video mein", "kya aap jaante hain" or "dosto".
-- The hook opens a loop: promise something (a number, a reveal, a twist) and pay it off near the END, not in line 2.
-- Every line adds one new fact. Cut warm-up words ("to", "basically", "dekhiye"), adjectives that carry no fact and
-  any line that repeats an earlier one. Specific beats vague: a number, a name, a place, a date.
-- Re-hook every 2-3 lines with a turn: "lekin", "phir hua kuch aisa", "asal twist yeh hai", a sharper number.
-- Talk like a real Pakistani/Indian fan explaining it to a friend: short sentences, everyday words, energy.
-- The last spoken lines land the payoff, then the question asks for a real opinion or a guess people can argue
-  about (a choice between two names, "sahi tha ya ghalat?"), never "like aur subscribe".
-- Avoid these stale phrases anywhere: {banned}."""
+# A different shape per video: one template read out again and again is what YouTube's
+# "inauthentic content" rule (July 2025) calls mass production.
+STRUCTURES = [
+    "COUNTDOWN: build to the biggest fact last, say early that the last one is the craziest.",
+    "RESULT FIRST: open on the ending or the final number, then show how it happened.",
+    "MYTH THEN TRUTH: open on what most fans believe, then prove what really happened.",
+    "MYSTERY: describe the record or the moment but hold back the name until the last line.",
+    "CONTRAST: put two numbers or two people side by side and let the gap shock.",
+]
 
-LONG_CRAFT = """WRITING RULES (these decide whether people keep watching):
-- The first 30 seconds decide the video: open cold on the most dramatic moment or the sharpest question, say what is
-  at stake, and promise the payoff ("aakhir mein jo hua, woh kisi ne socha nahi tha"). No greeting, no channel intro,
-  no "is video mein hum dekhenge".
+SHORT_CRAFT = """WRITING RULES (most viewers decide in the first 3 seconds whether to stay):
+- Line 1 is the hook, spoken in under 3 seconds (6-12 words), carrying a number, a name or a conflict: the most
+  surprising number, a contradiction, the result first, or a precise question. Name exactly what is unknown
+  ("kis bowler ne sirf 12 gend mein..."), never a vague "ek raaz". Never a greeting, the channel's name, "aaj hum",
+  "is video mein", "kya aap jaante hain" or "dosto".
+- The hook opens a loop: it promises something specific and the script pays it off in its last lines, not in
+  line 2. Restate the promise once in the middle ("lekin asli record abhi baaki hai").
+- Every line adds one new fact, a new one every 5-7 seconds. Sentences of 10 words or fewer, about 2.5-3 words a
+  second when spoken. Cut warm-up words ("to", "basically", "dekhiye"), adjectives that carry no fact and any line
+  that repeats an earlier one. Specific beats vague: a number, a name, a place, a date.
+- Link the beats with turns ("lekin", "isliye", "phir", "asal twist yeh hai") so each line pulls into the next.
+- Talk like a real Pakistani/Indian fan explaining it to a friend: everyday words, energy, no bookish words.
+- End on the payoff, no outro. The question for the comments takes a one-word answer people will argue about
+  ("Babar ya Kohli? Ek naam likho"), never "like aur subscribe". The last line should make a replay feel natural.
+- Shape for this video: {structure}
+- Never use these stale phrases: {banned}."""
+
+LONG_CRAFT = """WRITING RULES (YouTube measures the first 30 seconds as the intro; most viewers leave there):
+- 0-15 s: open cold on the most dramatic TRUE moment of the story. By 30 s: what is at stake and the one question
+  the video answers, with a promise of the payoff. No greeting, no channel intro, no "is video mein hum dekhenge".
+- By about 60 s give a small payoff (one surprising answer), so the promise feels real.
 - Plant two or three open questions early and answer them late; never answer the main one before the last chapter.
-- Start each chapter with a re-hook (a new question, a turn, a number) and end most chapters on a small cliffhanger.
+- Start each chapter with a re-hook (a new question, a turn, a number), about every 3 minutes something new
+  happens, and end most chapters on an open turn. Put strong material in minutes 3-6, not only at the end.
 - Every paragraph carries a specific: a date, a number, a name, a place, a detail you can see. No filler sentences,
   no "it is important to note", no repeating what was just said.
 - Tell it as a story with people who want something and obstacles in their way, in plain spoken language.
-- Avoid these stale phrases anywhere: {banned}."""
+- End on the payoff; the subscribe ask is one short sentence at the very end.
+- Never use these stale phrases: {banned}."""
 
 
-def short_rules():
-    return SHORT_CRAFT.format(banned=", ".join(f'"{b}"' for b in BANNED))
+FIXED_ORDER = "the order given above (the first line is the hook)."
+
+
+def short_rules(structure=None, exclude=()):
+    """``structure``: a fixed shape (a match or a controversy has its own order); else one of
+    STRUCTURES at random, minus the ones whose name starts with a word in ``exclude``."""
+    import random
+    pool = [s for s in STRUCTURES if s.split(":")[0] not in exclude] or STRUCTURES
+    return SHORT_CRAFT.format(banned=", ".join(f'"{b}"' for b in BANNED),
+                              structure=structure or random.choice(pool))
 
 
 def long_rules():
@@ -222,4 +255,38 @@ def polish(client, story, facts, what="cricket facts YouTube Short", fields=None
     else:
         log(f"   🪝 Hook kept ({got.hook_score}/10).")
     log(f"   ✍️ Script polish: {kept} of {len(lines)} lines tightened.")
+    _scrub(client, story, facts, fields, hook_path, language, log)
     return story
+
+
+class Lines(BaseModel):
+    lines: List[str]
+
+
+SCRUB_PROMPT = """Rewrite each numbered line of a YouTube Short's voice-over without the phrases named after it.
+Keep its meaning, every number and name in it, about the same length, the same language ({language}).
+Use only these facts: {facts}
+
+{rows}
+
+Return exactly {n} lines in the same order."""
+
+
+def _scrub(client, story, facts, fields, hook_path, language, log=print):
+    """Lines still carrying a banned phrase get one rewrite that names only their hits (a regex
+    check plus a targeted fix beats asking the writer to avoid a long list)."""
+    left = [(p, t, banned_hits(t)) for p, t in spoken(story, fields) if banned_hits(t)]
+    if not left:
+        return
+    rows = "\n".join(f"{i}. {t}   (remove: {', '.join(h)})" for i, (_p, t, h) in enumerate(left))
+    try:
+        got = kit.ask_json(client, Lines, SCRUB_PROMPT.format(language=language, facts=facts[:6000], rows=rows,
+                                                              n=len(left)), model=writer_model())
+    except Exception:  # noqa: BLE001
+        return
+    fixed = 0
+    for (path, old, _h), new in zip(left, got.lines if len(got.lines) == len(left) else []):
+        if line_ok(new, old, facts, hook=path == hook_path):
+            _set(story, path, new.strip())
+            fixed += 1
+    log(f"   🧹 Stale phrases: {fixed} of {len(left)} line(s) fixed.")

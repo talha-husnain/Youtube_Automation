@@ -186,7 +186,7 @@ def channel_ideas(client, count=2, avoid=(), best=(), worst=(), notes="", lang="
     import cricket_shorts as cs
     import engage
     import trends
-    learn = trends.searches_hint() + engage.request_hint(requests)
+    learn = trends.searches_hint() + trends.wiki_hint() + engage.request_hint(requests)
     if best:
         learn += "These did BEST on our channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:

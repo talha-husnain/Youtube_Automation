@@ -207,7 +207,7 @@ def find_story(client, match, handle, notes=""):
         raise RuntimeError(f"Could not find this match ({facts[:160] or 'no answer'}). "
                            "Write the teams, tournament and date, e.g. 'Pakistan vs India, Asia Cup 2025 final'.")
     story = kit.ask_json(client, Story, STORY_PROMPT.format(handle=handle, facts=facts,
-                                                            max_beats=MAX_BEATS) + "\n\n" + craft.short_rules(),
+                                                            max_beats=MAX_BEATS) + "\n\n" + craft.short_rules(craft.FIXED_ORDER),
                          model=craft.writer_model())
     if not story.found or len(story.teams) != 2 or not story.beats:
         raise RuntimeError("The search did not return a finished match with both scores. "
@@ -244,7 +244,7 @@ format and the records that stand out. Say NOT FOUND if nothing reliable comes u
 
 # The rule-steps line is there because "LBW rule explained simply" first came
 # back as LBW trivia (Sachin's 63, Kumble's 156) with no rule in it (8-oct-2026).
-TOPIC_STORY_PROMPT = """You make a 30-35 second YouTube Short for Pakistani and Indian cricket
+TOPIC_STORY_PROMPT = """You make a 25-30 second YouTube Short for Pakistani and Indian cricket
 fans, voiced by the channel {handle}, about: {topic}
 Use ONLY the facts below; never invent a number, date or name. If they say NOT FOUND,
 return found=false and empty lists.
@@ -280,7 +280,8 @@ TOPIC_SEO_CONTEXT = ("IMPORTANT: this short is NOT comedy. It is a cricket facts
                      "about: {topic}, with animated fact cards and the channel's voice. Ignore "
                      "the comedy phrases and hashtags above and use cricket searches instead (the "
                      "players, teams, the rule or record, 'cricket facts', 'cricket stats'). Player "
-                     "and team names are welcome everywhere; creator is \"\".")
+                     "and team names are welcome everywhere, and the title opens on the main player's or team's "
+                     "name when there is one (people search names); creator is \"\".")
 
 
 def remix_note(topic):
@@ -362,7 +363,7 @@ def channel_ideas(client, count=8, avoid=(), best=(), worst=(), requests=()):
     import time
     import engage
     import trends
-    learn = trends.searches_hint() + trends.hint("cricket") + engage.request_hint(requests)
+    learn = trends.searches_hint() + trends.wiki_hint() + trends.hint("cricket") + engage.request_hint(requests)
     if best:
         learn += "These did BEST on the channel, make more like them:\n" + "\n".join(best) + "\n"
     if worst:
@@ -911,7 +912,7 @@ def find_versus(client, topic, handle):
     if not facts or "NOT FOUND" in facts[:200].upper():
         raise RuntimeError(f"Could not find both players' numbers ({facts[:160] or 'no answer'}).")
     story = kit.ask_json(client, Versus, VERSUS_PROMPT.format(handle=handle, topic=topic, facts=facts)
-                         + remix_note(topic) + "\n\n" + craft.short_rules(), model=craft.writer_model())
+                         + remix_note(topic) + "\n\n" + craft.short_rules(craft.FIXED_ORDER), model=craft.writer_model())
     # Rows say who is ahead and code checks that against the numbers below: only the hook
     # and the question are polished.
     craft.polish(client, story, facts, what="cricket player comparison YouTube Short",

@@ -51,6 +51,26 @@ def test_polish_takes_a_clearly_better_hook_and_keeps_bad_lines(monkeypatch):
     assert s.question == "Kaun behtar hai, comment mein batao"                  # Kohli again: kept
 
 
+def test_a_stale_phrase_left_after_the_polish_gets_one_targeted_fix(monkeypatch):
+    monkeypatch.setenv("POLISH", "1")
+    s = _story()
+    s.hook_line = "Sirf 97 innings mein 5000 runs"
+    s.question = "Like aur subscribe karo, Babar best hai? Comment mein batao"
+    calls = []
+
+    def ask(client, schema, prompt, model=None):
+        calls.append(prompt)
+        if schema is craft.Doctored:
+            return craft.Doctored(hook_score=8, hooks=[], lines=[t for _p, t in craft.spoken(s)])
+        assert "remove: like aur subscribe" in prompt
+        return craft.Lines(lines=["Babar best hai ya nahi? Ek lafz mein comment mein batao"])
+    monkeypatch.setattr(craft.kit, "ask_json", ask)
+    craft.polish(object(), s, FACTS, log=lambda m: None)
+    assert len(calls) == 2 and s.question.startswith("Babar best hai ya nahi")
+    assert "Shape for this video: the order" in craft.short_rules(craft.FIXED_ORDER)
+    assert all("MYSTERY" not in craft.short_rules(exclude=("MYSTERY",)) for _ in range(20))
+
+
 def test_polish_never_breaks_a_video(monkeypatch):
     monkeypatch.setenv("POLISH", "1")
 
@@ -61,6 +81,54 @@ def test_polish_never_breaks_a_video(monkeypatch):
     assert s.hook_line.startswith("Aaj hum")
     monkeypatch.setenv("POLISH", "0")
     assert craft.polish(object(), _story(), FACTS) .hook_line.startswith("Aaj hum")
+
+
+def test_footage_is_cropped_around_the_biggest_face(monkeypatch, tmp_path):
+    import broll
+    import faces
+    seen = []
+
+    def run(cmd, **k):
+        seen.append(cmd[cmd.index("-vf") + 1])
+        return SimpleNamespace(returncode=0, stderr="")
+    monkeypatch.setattr(broll.subprocess, "run", run)
+    monkeypatch.setattr(faces, "center_x", lambda path, at: 0.8)
+    broll._shot(str(tmp_path), 0, 30, {"kind": "video", "path": "a.mp4"}, 0.0, False, 1080, 1920)
+    monkeypatch.setattr(faces, "center_x", lambda path, at: None)
+    broll._shot(str(tmp_path), 1, 30, {"kind": "video", "path": "a.mp4"}, 0.0, True, 1080, 1920)
+    assert "crop=1080:1920:x='min(max(iw*0.8000-ow/2,0),iw-ow)'" in seen[0]
+    assert "iw*0." not in seen[1] and "crop=1080:1920," in seen[1]
+
+
+def test_real_swooshes_replace_the_chirp(monkeypatch):
+    import short_kit as kit
+    cmd, graph, mix = [], [], []
+    kit._voice_sfx_inputs(cmd, graph, mix, 1, [], [(kit.WHOOSH, 0.3, 1.0), (kit.WHOOSH, 0.3, 2.0)])
+    files = kit.whoosh_files()
+    assert len(files) >= 2 and cmd.count("-i") == 2 and cmd[1] != cmd[3]     # a different one per card
+    assert graph[0].startswith("[1:a]volume=") and "adelay=1000|1000" in graph[0]
+    monkeypatch.setenv("REAL_SFX", "0")
+    cmd, graph = [], []
+    kit._voice_sfx_inputs(cmd, graph, [], 1, [], [(kit.WHOOSH, 0.3, 1.0)])
+    assert not cmd and graph[0].startswith("aevalsrc=")
+
+
+def test_wikipedia_most_read_skips_its_own_pages_and_falls_back_a_day(monkeypatch, tmp_path):
+    import trends
+    monkeypatch.setenv("TRENDS", "1")
+    monkeypatch.setattr(trends, "WIKI_FILE", str(tmp_path / "wiki.json"))
+    asked = []
+
+    def get(url):
+        asked.append(url)
+        if "en.wikipedia" in url and "/10/21" in url:
+            return {"items": [{"articles": [{"article": "Main_Page", "views": 9}, {"article": "Special:Search", "views": 8},
+                                            {"article": "Babar_Azam", "views": 7}]}]}
+        return None
+    rows = trends.wiki_top(get=get, now=1792713600)          # 22-oct-2026 00:00 UTC
+    assert rows == [{"title": "Babar Azam", "views": 7, "wiki": "en"}]
+    assert sum("hi.wikipedia" in u for u in asked) == 2      # yesterday, then the day before
+    assert trends.wiki_top(get=lambda u: 1 / 0, now=1792713600 + 60) == rows   # cached
 
 
 CAPTIONS = ("pakistan ke sabse tez bowler ne ek over mein chhe wicket nahi liye lekin jo kiya woh kisi ne socha "

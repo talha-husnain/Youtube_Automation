@@ -1418,7 +1418,7 @@ def mix(job_dir, video, narration_wav, out, total, whooshes, sections, tracks):
     card and a music bed per chapter (looped, faded)."""
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", video, "-i", narration_wav]
     duck = bool(tracks) and kit.ducking()
-    # Ducked (short_kit.ducking): the beds sit at -24 LUFS and dip under the narration, as on the Shorts.
+    # Ducked (short_kit.ducking): the beds sit at -28 LUFS and dip under the narration, as on the Shorts.
     graph = [f"[1:a]{LOUDNORM_FILTER},aresample=48000,aformat=channel_layouts=stereo"
              + (",asplit=2[vo][vkey]" if duck else "[vo]")]
     mixin = ["[vo]"]

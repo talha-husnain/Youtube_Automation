@@ -28,6 +28,7 @@ os.environ["CUTOUT"] = "0"              # and the photo cut-out model
 # Generator tests fake kit.ask_json with their own story; a second (polish) call would get
 # that story back instead of a Doctored. test_craft turns both on with its own fakes.
 os.environ["POLISH"] = "0"
+os.environ["FACE_CROP"] = "0"           # faces.py runs ffmpeg + YuNet per footage shot
 os.environ["VIRAL_REMIX"] = "0"         # studies a real viral Short with yt-dlp + Gemini
 
 import pytest
