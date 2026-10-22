@@ -24,6 +24,7 @@ os.environ["EXACT_CAPTIONS"] = "pauses"
 os.environ["VOICE_ENGINE"] = "gemini"   # the free voice is a network service: tests fake ai_take.speak
 os.environ["LOCAL_VOICE"] = "0"         # OmniVoice is installed on this laptop: a test would load the real model
 os.environ["PARALLAX"] = "0"            # so is the depth model: history render tests would run it for real
+os.environ["CUTOUT"] = "0"              # and the photo cut-out model
 
 import pytest
 

@@ -860,6 +860,34 @@ never finished:
     PyTorch's Intel Arc build (D:\youtube\oss\OmniVoice\.venv-xpu, torch 2.14.1+xpu) saw no device:
     the Arc driver here is 31.0.101.4502 (2023). Point OMNIVOICE_PYTHON at it after a driver update.
   - GitHub's anonymous API (60 calls/h) runs out fast when research agents use it in parallel.
+  - Real-ESRGAN on history STILLS was tried and dropped: realesrgan-x4plus took 164 s for one 800 px
+    picture, and animevideov3 makes photos look painted.
+  - `parallax.py`: Depth Anything V2 SMALL (Apache; Base/Large are CC-BY-NC) ONNX in
+    D:\youtube\oss\models, one depth map per picture (~2 s CPU, cached .depth.npy), two cv2.remap per
+    frame (~45 ms at 1080p), piped to ffmpeg with the shot's .ass. ~27 s per 7 s shot (a plain pan ~2.5 s).
+    history_videos.segment uses it for every panned picture; any failure keeps the plain pan. PARALLAX=0.
+  - `player_photo.cutout_card`: IS-Net (rembg's isnet-general-use.onnx, Apache) via onnxruntime, cricket
+    only (owner: no AI edits of real women, so not the stars quiz or controversy photos); kept only when
+    the mask covers 8-75% and reaches the bottom edge, else the framed card. rembg's DEFAULT model is
+    BRIA RMBG (non-commercial): never use it. CUTOUT=0.
+- **Quality pass 2** (22-oct-2026, `tests/test_quality2.py`): an audit agent claimed most Shorts ship
+  without music; wrong: channel jobs send bg_music True (my_channels payloads). Real gaps fixed:
+  - Music ducks under the voice (`short_kit._final_mix`: voices -> asplit -> sidechaincompress the bed,
+    bed at -24 LUFS instead of -30, alimiter on the sum; history_videos.mix too). MUSIC_DUCK=0: old mix.
+  - Footage shots push in (1.00->1.08) or pull out (1/0.86->1.08) with a cosine ease via
+    `scale=w='...t...':eval=frame` then a fixed crop; photos pan eased; unsharp on upscaled stock; shot
+    crf 17. BROLL_MOTION=0. History: 7 s shots (was 11), eased pans, moving footage, crf 20. HISTORY_MOTION=0.
+  - Generated Shorts' captions colour numbers and names (`subtitles._emphasised`, CAPTION_EMPHASIS set
+    by short_kit.finish only, so comedy captions stay). Lead silence 0.15 s (was 0.5); end card capped
+    at 1.5 s (`short_kit.outro_seconds`, SHORT_OUTRO_SECONDS) so Shorts loop; comedy keeps its 3 s.
+  - Narrated channels' empty About texts got a description + the OmniVoice credit (`about_credit`,
+    once, after a learn pass; backups in state/channels/<id>/about_backup_2026-10-22.txt).
+- **Facebook / Instagram** (`meta_publish.py`, Channels tab panel, `tests/test_meta_publish.py`):
+  Facebook Login for Business (resumable local upload needs it; Instagram Login needs a public URL),
+  Page tokens that do not expire also drive Instagram; a Short uploaded to YouTube is copied to
+  state/meta/outbox and posted at its YouTube time (`my_channels.meta_pass`, every 10 min), FB Reels
+  only up to 90 s, is_ai_generated on both, DAILY_MAX 8 per account per platform. Card keys meta_page,
+  meta_fb, meta_ig. Nothing queues until META_APP_ID/SECRET are in .env and the owner connects.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
   player born today; `cricket_shorts.birthday_ok` keeps it only when the
   Wikipedia intro's "(born 15 October 1994)" matches (`player_photo.born`).

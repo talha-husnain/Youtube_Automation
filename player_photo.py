@@ -199,7 +199,10 @@ def fetch(name, out_dir, size=(700, 760), kind="cricket"):
         with open(raw, "wb") as f:
             f.write(r.content)
         out = {"info": photo}
-        out["card"] = card(raw, os.path.join(out_dir, f".photo_{slug}_card.png"), size)
+        card_path = os.path.join(out_dir, f".photo_{slug}_card.png")
+        # Cricket only: the stars quiz and the controversy photos are of real women and other public
+        # figures, whose photos the owner wants left as they are (no AI edits of real women).
+        out["card"] = (kind == "cricket" and cutout_card(raw, card_path, size)) or card(raw, card_path, size)
         out["avatar"] = round_photo(raw, os.path.join(out_dir, f".photo_{slug}_avatar.png"), 300)
         out["badge"] = round_photo(raw, os.path.join(out_dir, f".photo_{slug}_badge.png"), 150, ring=6)
         return out
@@ -232,6 +235,82 @@ def round_photo(src, out_path, size, ring=10, gold=(255, 210, 63)):
     ImageDraw.Draw(out).ellipse((pad, pad, pad + size - 1, pad + size - 1), outline=gold + (255,), width=ring)
     out.save(out_path)
     return out_path
+
+
+# Quality pass 2 (22-oct-2026): the person cut out of the photo's background, with a white outline and a
+# soft shadow, reads like a sports-channel graphic instead of a framed photo. IS-Net (DIS, Apache-2.0;
+# rembg's isnet-general-use.onnx) through onnxruntime on the CPU; never rembg's default model, BRIA
+# RMBG, which is non-commercial. Kept only when the mask looks like a person: a sensible share of the
+# picture and reaching the bottom edge (a bust); otherwise the framed card as before. CUTOUT=0: never.
+CUTOUT_MODEL = os.environ.get("CUTOUT_MODEL") or r"D:\youtube\oss\models\isnet\isnet-general-use.onnx"
+_cut_session = []
+
+
+def cutout_available():
+    return os.environ.get("CUTOUT", "1").strip() != "0" and os.path.isfile(CUTOUT_MODEL)
+
+
+def person_mask(src):
+    """0..255 mask (PIL "L", the photo's size) of the main subject."""
+    import numpy as np
+    from PIL import Image
+    if not _cut_session:
+        import onnxruntime as ort
+        _cut_session.append(ort.InferenceSession(CUTOUT_MODEL, providers=["CPUExecutionProvider"]))
+    sess = _cut_session[0]
+    im = Image.open(src).convert("RGB")
+    x = np.asarray(im.resize((1024, 1024), Image.LANCZOS), dtype=np.float32)
+    x = x / max(float(x.max()), 1e-6) - np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    pred = sess.run(None, {sess.get_inputs()[0].name: x.transpose(2, 0, 1)[None].astype(np.float32)})[0][0, 0]
+    pred = (pred - pred.min()) / max(float(pred.max() - pred.min()), 1e-6)
+    return Image.fromarray((pred * 255).astype(np.uint8)).resize(im.size, Image.LANCZOS)
+
+
+def cutout_card(src, out_path, size=(700, 760), outline=10):
+    """The person on transparency at the card's size and padding, or None when the cut looks wrong."""
+    import numpy as np
+    from PIL import Image, ImageFilter
+    if not cutout_available():
+        return None
+    try:
+        w, h = size
+        mask = person_mask(src)
+        m = np.asarray(mask, dtype=np.float32) / 255
+        share = float((m > 0.5).mean())
+        bottom = float((m[-max(2, m.shape[0] // 40):] > 0.5).mean())
+        if not (0.08 <= share <= 0.75 and bottom >= 0.12):
+            return None
+        photo = Image.open(src).convert("RGB")
+        rgba = photo.copy()
+        rgba.putalpha(mask)
+        im = _cover_rgba(rgba, w, h)
+        pad = 40
+        out = Image.new("RGBA", (w + 2 * pad, h + 2 * pad), (0, 0, 0, 0))
+        alpha = im.getchannel("A")
+        # Outline: the alpha grown by ``outline`` px, white; shadow: the grown alpha blurred, offset down.
+        grown = alpha.filter(ImageFilter.MaxFilter(outline * 2 + 1))
+        shadow = Image.new("RGBA", out.size, (0, 0, 0, 0))
+        shadow.paste((0, 0, 0, 170), (pad, pad + 16), grown)
+        out = Image.alpha_composite(out, shadow.filter(ImageFilter.GaussianBlur(14)))
+        ring = Image.new("RGBA", out.size, (0, 0, 0, 0))
+        ring.paste((255, 255, 255, 255), (pad, pad), grown)
+        out = Image.alpha_composite(out, ring)
+        layer = Image.new("RGBA", out.size, (0, 0, 0, 0))
+        layer.paste(im, (pad, pad), im)
+        out = Image.alpha_composite(out, layer)
+        out.save(out_path)
+        return out_path
+    except Exception as e:  # noqa: BLE001 — the framed card is the fallback
+        print(f"   ℹ️ No cut-out ({type(e).__name__}); framed card instead.")
+        return None
+
+
+def _cover_rgba(img, w, h, lean=0.18):
+    from PIL import Image
+    s = max(w / img.width, h / img.height)
+    img = img.resize((max(w, round(img.width * s)), max(h, round(img.height * s))), Image.LANCZOS)
+    x, y = (img.width - w) // 2, round((img.height - h) * lean)
+    return img.crop((x, y, x + w, y + h))
 
 
 def card(src, out_path, size=(700, 760), radius=44, border=10, gold=(255, 210, 63)):
