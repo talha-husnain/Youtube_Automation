@@ -915,7 +915,9 @@ never finished:
   thread); cricket/controversy channels study one hit a day (`my_channels._remix_first`, `remix_days`
   counts tries, never ahead of urgent/owner ideas, one rival channel once a week). YouTube search's
   "views" sort is "popularity" since Jan 2026: the week's top cricket Shorts had 1,548 views and were
-  song edits, so `candidates` searches a YEAR window, drops edits/songs by title, floor 20k views.
+  song edits, so `candidates` searches a YEAR window, drops edits/songs by title, floor 20k views, and
+  reads the Shorts tabs of the 3 channels behind the results for their outliers (>= 3x the channel's
+  median): first live run, best candidate 35k -> 141k views, in 10 s.
   VIRAL_REMIX=0 (conftest). Trending page is gone (Jul 2025); Playboard charts exist but were not used.
 - **Real swooshes** (`sfx/`, Kenney interface pack, CC0): `kit.WHOOSH` in any Short's sfx list becomes
   a real file, rotating per card (`_voice_sfx_inputs`), at SFX_DB (-8). Picked by a Gemini listening

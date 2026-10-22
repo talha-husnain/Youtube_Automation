@@ -190,6 +190,22 @@ def test_auto_idea_takes_the_top_unseen_hit(monkeypatch):
     assert vr.auto_idea(object(), "history", videos=rows, study_fn=study) is None
 
 
+def test_candidates_add_the_breakout_shorts_of_the_channels_search_finds():
+    tab = [{"id": f"t{i:010d}", "title": "Babar ka record", "views": 10_000} for i in range(8)]
+    tab += [{"id": "big00000000", "title": "Babar ne 3 balls mein", "views": 400_000},
+            {"id": "edit0000000", "title": "Babar x song edit", "views": 900_000}]
+    searched = []
+
+    def search(q):
+        searched.append(q)
+        return [{"id": "s0000000000", "title": "Cricket facts", "views": 30_000, "channel_url": "https://yt/@rival"}]
+    rows = vr.candidates("cricket", search=search, shorts=lambda url, n: tab, now=1792713600)
+    assert [r["id"] for r in rows] == ["big00000000", "s0000000000"]      # the edit is dropped
+    assert len(searched) == 2
+    assert vr.candidates("cricket", search=lambda q: 1 / 0, now=1792713600 + 60) == rows   # cached a day
+    assert vr.outliers(tab[:3]) == []                                     # too few to know the median
+
+
 def test_a_pasted_link_becomes_the_next_idea(monkeypatch):
     import my_channels as mc
     monkeypatch.setattr(vr, "study", lambda client, url, kind, **k: {

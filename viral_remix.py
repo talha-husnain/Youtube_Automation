@@ -254,21 +254,38 @@ NOT_A_STORY = re.compile(r"\b(edit|edits|status|song|beat ?sync|lyrics|whatsapp|
 CANDIDATES_SECONDS = 24 * 3600
 
 
-def candidates(kind, search=None, now=None):
-    """[{"id", "title", "views"}] of this month's most viewed Shorts for ``kind``. trends.top looks at
-    one week and found nothing over 1,600 views on 22-oct-2026; a Short worth studying keeps working
-    for weeks. Two searches in a row, never in parallel, cached a day."""
+RIVALS_PER_DAY = 3        # Shorts tabs read per kind a day, one after the other
+OUTLIER_X = 3.0           # a Short that beat its own channel's median this many times
+
+
+def outliers(rows, min_views=MIN_VIEWS, x=OUTLIER_X):
+    """The Shorts of one channel's tab that broke out: views >= x times the channel's median. A
+    channel's own median is the fair bar (research 22-oct-2026: outlier = views / channel median)."""
+    import statistics
+    views = [r["views"] for r in rows if r.get("views")]
+    if len(views) < 5:
+        return []
+    med = statistics.median(views)
+    return [r for r in rows if (r.get("views") or 0) >= max(min_views, x * med)]
+
+
+def candidates(kind, search=None, shorts=None, now=None):
+    """[{"id", "title", "views"}] worth studying for ``kind``, most viewed first: the year's top search
+    results, plus the breakout Shorts of the channels behind them. Search alone was weak: YouTube's
+    "views" sort is "popularity" since Jan 2026 and the year's top cricket result had 35k views, while
+    a rival's Shorts tab gives its real hits. Two searches and up to three tabs, one after the other
+    (never in parallel: a burst got this laptop bot-checked), cached a day."""
     now = now or time.time()
     data = _read()
     hit = (data.get("_candidates") or {}).get(kind)
     if hit and now - hit.get("at", 0) < CANDIDATES_SECONDS:
         return hit["rows"]
+    import channel_tools
     if search is None:
-        import channel_tools
-
         def search(q):
             return channel_tools.search(q, cc=False, duration="short", date="year", sort="views", limit=10)
-    rows, seen = [], set()
+    shorts = shorts or channel_tools.channel_shorts
+    rows, seen, channels = [], set(), {}
     for q in QUERIES.get(kind, []):
         try:
             got = search(q)
@@ -279,6 +296,17 @@ def candidates(kind, search=None, now=None):
                 continue
             seen.add(v["id"])
             rows.append({"id": v["id"], "title": (v.get("title") or "")[:100], "views": int(v.get("views") or 0)})
+            if v.get("channel_url"):
+                channels[v["channel_url"]] = channels.get(v["channel_url"], 0) + int(v.get("views") or 0)
+    for url in sorted(channels, key=channels.get, reverse=True)[:RIVALS_PER_DAY]:
+        try:
+            tab = shorts(url, 30)
+        except Exception:  # noqa: BLE001
+            continue
+        for v in outliers(tab):
+            if v["id"] not in seen and not NOT_A_STORY.search(v.get("title") or ""):
+                seen.add(v["id"])
+                rows.append({"id": v["id"], "title": (v.get("title") or "")[:100], "views": int(v["views"])})
     rows.sort(key=lambda v: v["views"], reverse=True)
     data = _read()
     data.setdefault("_candidates", {"at": int(now)})[kind] = {"at": int(now), "rows": rows[:20]}
