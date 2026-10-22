@@ -406,6 +406,8 @@ never finished:
   background panned by a moving crop (cheaper than zoompan).
 - Bash heredocs in this shell turn `\n` inside a Python string into a real
   newline even with a quoted delimiter: write patch scripts with the Write tool.
+  They also eat one backslash of `\\` (an ASS `\\kf` regex in a test became `\kf`, 22-oct-2026):
+  anything with a backslash goes in through Write/Edit, never `cat >> file <<'EOF'`.
 - **Engagement** (`engage.py`, 15-oct-2026), per channel switches run from
   `my_channels.engage_pass` every 15 min: first comment once a Short is
   public (its own `comment_question`, else a template; the API cannot pin),
