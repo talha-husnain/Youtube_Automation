@@ -985,6 +985,12 @@ never finished:
     backslash path on "/" (fixed in the code), the fcntl ASR slot tests skip on Windows; the billing
     tests need requirements-billing.txt (installed in .venv from cp314 wheels: sqlalchemy 2.1.6 and
     asyncpg 0.32, the pins have no Python 3.14 builds; production pins unchanged).
+- **Title tournament** (`script_craft.pick_title`, POLISH=0 off): every generated Short (via
+  `short_kit.seo_or_fail`, so never the comedy channel) and every non-sacred history/explainer video gets 5
+  other title angles; `title_ok` drops any with a number or name not in the script/research, "#", "|",
+  shouting words or a length outside 25-70; the blind judge must prefer a survivor (2 rounds at most). The
+  tail ("#shorts #cricket", "| Quiz #12") is kept as is. Live: "Wasim Akram ka 1992 final wala spell" ->
+  "Wasim Akram ne 1992 final mein England ke 3 wicket kaise liye?".
 - **Wikipedia most-read** (`trends.wiki_top`, pageviews API, CC0, no key): yesterday's top English (120)
   and Hindi (30) articles go to the cricket, controversy and explainer planners (`wiki_hint`).
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a

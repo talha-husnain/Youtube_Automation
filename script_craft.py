@@ -425,3 +425,73 @@ def _scrub(client, story, facts, fields, hook_path, language, log=print):
             _set(story, path, new.strip())
             fixed += 1
     log(f"   🧹 Stale phrases: {fixed} of {len(left)} line(s) fixed.")
+
+
+# --- titles ---------------------------------------------------------------------------------
+class Titles(BaseModel):
+    titles: List[str]
+
+
+TITLES_PROMPT = """The title of a {what} for Pakistani and Indian viewers is: "{title}"
+Write 5 DIFFERENT titles for the same video, each a different angle: the most surprising number, a
+contradiction, a precise question, the result first, a two-sided "A ya B?". Rules for every title:
+- 35-65 characters, {language}, sentence case, no hashtags, no "|", no emoji.
+- The subject people search for (the player, team, country, person or quiz type) in the first 4 words.
+- Promise something specific the video really delivers; never give the payoff away, never invent.
+- Use only numbers and names from the title or these facts: {facts}"""
+
+TITLE_CAP = 70
+
+
+def _title_tail(title):
+    """Split "Babar ka record #shorts" / "... | Quiz #12" into the part to rewrite and the tail kept."""
+    m = re.search(r"\s*(\|\s*Quiz\s*#\d+)?(\s*#\w+)*\s*$", title or "")
+    return title[:m.start()].strip(), title[m.start():].strip()
+
+
+def title_ok(new, old, facts):
+    new = (new or "").strip()
+    if not new or not _latin(new) or banned_hits(new) or "#" in new or "|" in new:
+        return False
+    if not 25 <= len(new) <= TITLE_CAP or new.lower() == (old or "").lower():
+        return False
+    if any(len(w) > 4 and w.isupper() for w in re.findall(r"[A-Za-z]+", new)):
+        return False                        # shouting words; "ODI", "T20", "IPL" pass
+    if not numbers(new) <= numbers(old) | numbers(facts):
+        return False
+    known = (old + " " + facts).lower()
+    return all(n in known for n in _names(new))
+
+
+ROMAN = "Roman Urdu / Hinglish in Latin letters"
+
+
+def pick_title(client, title, facts, what="YouTube Short", language=ROMAN, rnd=None, log=print):
+    """A title tournament: 5 other angles, code drops those that break the rules or bring a number or
+    name the Short does not have, then the blind judge (shuffled, unlabelled) must prefer a survivor to
+    the first title, twice at most. The title is the one line every viewer reads before the hook."""
+    if os.environ.get("POLISH", "1") == "0" or not title:
+        return title
+    head, tail = _title_tail(title)
+    if not head:
+        return title
+    try:
+        got = kit.ask_json(client, Titles, TITLES_PROMPT.format(what=what, title=head, language=language,
+                                                                facts=(facts or "")[:4000]),
+                           model=writer_model())
+    except Exception:  # noqa: BLE001 — keep the first title
+        return title
+    room = 100 - len(tail) - 1
+    seen, alive = set(), []
+    for t in got.titles:
+        t = re.sub(r"\s+", " ", (t or "").strip().strip('"'))
+        if title_ok(t, head, facts or "") and len(t) <= room and t.lower() not in seen:
+            seen.add(t.lower())
+            alive.append(t)
+    best = head
+    for t in alive[:2]:
+        if judge(client, what, "title", best, t, rnd):
+            best = t
+    log(f"   🏆 Title: {len(alive)} of {len(got.titles)} other angles passed the checks; "
+        + (f'"{head}" -> "{best}"' if best != head else "the first title kept."))
+    return f"{best} {tail}".strip()

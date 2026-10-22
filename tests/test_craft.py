@@ -425,3 +425,35 @@ def test_a_pasted_link_becomes_the_next_idea(monkeypatch):
     mc.add_idea(ch["id"], "https://www.youtube.com/watch?v=abcdefghijk&t=3")
     idea = mc.get(ch["id"])["ideas"][0]
     assert idea["text"] == "Shoaib Akhtar vs PCB fine" and idea["remix"] == "abcdefghijk" and idea["owner"]
+
+
+def test_title_checks_keep_the_tail_and_refuse_invented_numbers_and_shouting():
+    assert craft._title_tail("Babar ka record #shorts #cricket") == ("Babar ka record", "#shorts #cricket")
+    assert craft._title_tail("Asia ke jhande pehchano | Quiz #12") == ("Asia ke jhande pehchano", "| Quiz #12")
+    old = "Babar Azam ke ODI records dekhte hain"
+    assert craft.title_ok("Babar Azam ne sirf 97 innings mein kya kar diya?", old, FACTS)
+    assert not craft.title_ok("Babar Azam ne 120 innings mein kya kar diya?", old, FACTS)    # 120: not in facts
+    assert not craft.title_ok("Babar Azam vs Shaheen Afridi, kaun aage?", old, FACTS)      # a new name
+    assert not craft.title_ok("Babar Azam ka SHOCKING record dekho abhi", old, FACTS)
+    assert not craft.title_ok("Babar #shorts ka record jo koi nahi tod saka", old, FACTS)
+
+
+def test_the_title_changes_only_when_the_blind_judge_prefers_a_checked_one(monkeypatch):
+    monkeypatch.setenv("POLISH", "1")
+    for prefer_new in (True, False):
+        def ask(client, schema, prompt, model=None):
+            if schema is craft.Pick:
+                first = prompt.split("VERSION 2:")[0]
+                return craft.Pick(better=1 if ("97" in first) == prefer_new else 2, why="")
+            return craft.Titles(titles=["Babar Azam ne 300 innings mein record toda",           # invented number
+                                        "Babar Azam ne sirf 97 innings mein kya kar diya?"])
+        monkeypatch.setattr(craft.kit, "ask_json", ask)
+        got = craft.pick_title(object(), "Babar Azam ke ODI records #shorts", FACTS, log=lambda m: None)
+        assert got == ("Babar Azam ne sirf 97 innings mein kya kar diya? #shorts" if prefer_new
+                       else "Babar Azam ke ODI records #shorts")
+
+
+def test_no_title_tournament_when_polish_is_off(monkeypatch):
+    monkeypatch.setenv("POLISH", "0")
+    monkeypatch.setattr(craft.kit, "ask_json", lambda *a, **k: pytest.fail("no call"))
+    assert craft.pick_title(object(), "Babar Azam ke ODI records #shorts", FACTS) == "Babar Azam ke ODI records #shorts"

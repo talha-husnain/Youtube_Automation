@@ -489,6 +489,13 @@ def seo_or_fail(clips, *args, wait=None, **kwargs):
     if not done:
         raise RuntimeError("The title and description could not be written (the network or Gemini is down); "
                            "made again later.")
+    import script_craft as craft
+    client = gemini()
+    for c in clips:
+        if c.get("seo_title"):
+            facts = " ".join(filter(None, [seo_copy._clip_text(args[0] if args else None, c, 3000),
+                                           kwargs.get("source_title", ""), kwargs.get("context", "")]))
+            c["seo_title"] = craft.pick_title(client, c["seo_title"], facts)
     return done
 
 

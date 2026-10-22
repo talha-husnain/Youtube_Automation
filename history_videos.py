@@ -1736,6 +1736,11 @@ def run(output_dir, pipeline):
         print(f"   📚 Part {series['part']} of {series['parts']} of the series \"{series['name']}\".")
     script, facts, sources = write(client, series_topic(topic, series), handle or "this channel", minutes, lang,
                                    series_note=series_note(series, lang), mode=mode)
+    if not script.sacred:
+        # Sacred stories keep the writer's title: a tournament for clicks is the wrong tool there.
+        script.title = craft.pick_title(client, script.title, facts,
+                                        what="YouTube documentary" if mode != "explainer" else "YouTube explainer",
+                                        language="English" if lang == "english" else craft.ROMAN)
     if series:
         script.title = part_title(script.title, series["part"])
     sc = scenes_of(script)
