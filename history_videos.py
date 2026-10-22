@@ -463,6 +463,10 @@ def add_maps(script, pics, log=print):
         except Exception:  # noqa: BLE001
             continue
         pics[k] = {**pics[k], "map": (name, y0, y1)}
+        # The map draws its own name and years top left, where the scene's label box sits: the
+        # first real run (Mughal Empire, 22-oct-2026) showed "MUGHAL EMPIRE AT PEAK" over "MUGHAL EMPIRE".
+        if hasattr(s, "label"):
+            s.label = ""
         used += 1
         log(f"   🗺️ Scene {k + 1}: a map of {name}, {y0}-{y1}.")
     return used

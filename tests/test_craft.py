@@ -189,7 +189,7 @@ def test_a_scene_naming_an_empire_gets_its_own_map_entry(monkeypatch):
     assert hv.add_maps(SimpleNamespace(hook=[SimpleNamespace(map="Pakistan | 1947 | 2020")], chapters=[]),
                        {0: {}}, log=lambda m: None) == 0                     # never modern borders
     S = SimpleNamespace
-    script = S(hook=[S(map="Mughals | 1526 | 1707"), S(map="")],
+    script = S(hook=[S(map="Mughals | 1526 | 1707", label="MUGHALS AT PEAK"), S(map="", label="AGRA")],
                chapters=[S(scenes=[S(map="Atlantis | 1 | 2"), S(map="Mughal Empire | 1707 | 1600"),
                                    S(map="Mughal Empire | 1600 | 1700"), S(map="Mughal Empire | 1700 | 1750")])])
     shared = {"full": "a.jpg"}
@@ -197,6 +197,7 @@ def test_a_scene_naming_an_empire_gets_its_own_map_entry(monkeypatch):
     assert hv.add_maps(script, pics, log=lambda m: None) == 2              # MAX_MAPS
     assert pics[0]["map"] == ("Mughal Empire", 1526, 1707) and pics[4]["map"] == ("Mughal Empire", 1600, 1700)
     assert "map" not in shared and "map" not in pics[1] and "map" not in pics[3]   # backwards years: none
+    assert script.hook[0].label == "" and script.hook[1].label == "AGRA"     # the map names it already
     monkeypatch.setattr(history_maps, "available", lambda: False)
     assert hv.add_maps(script, {k: {} for k in range(6)}) == 0
 
