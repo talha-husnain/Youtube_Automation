@@ -126,6 +126,7 @@ class Scene(BaseModel):
     picture: str
     wiki: str
     label: str
+    map: str = ""
 
 
 class Chapter(BaseModel):
@@ -208,7 +209,10 @@ Return:
   wiki = the exact English Wikipedia article title whose pictures fit this scene best ("Battle of Karbala",
   "Colosseum", "Great Depression"), or "";
   label = an on-screen label of at most 32 characters: a year, place, name or number ("680 AD", "KARBALA, IRAQ"),
-  or "".
+  or "";
+  map = only for one or two scenes where seeing an empire's land grow or shrink tells the story (a conquest, its
+  peak, its fall): "<empire as maps name it> | <from year> | <to year>", years as plain numbers AD (BC negative),
+  e.g. "Mughal Empire | 1526 | 1707"; else "".
 - outro: one paragraph that wraps up the story and its lesson and asks viewers to subscribe for the next story.
 - question: max 90 characters, asks viewers' opinion in the comments, never which religion or sect is right.
 - tags: 8 to 12 YouTube search tags (topic, places, people, "history in urdu"...).
@@ -426,6 +430,34 @@ def rank_sources(sources):
         text = f"{name} {url}"
         return (0 if GOOD_SOURCE.search(text) else 2 if WEAK_SOURCE.search(text) else 1, k)
     return [s for _k, s in sorted(enumerate(sources), key=key)]
+
+
+MAX_MAPS = 2
+
+
+def add_maps(script, pics, log=print):
+    """Scenes whose ``map`` names an empire the Cliopatria data knows (history_maps.find) get an
+    animated map as their first shot. pics[k] is shared between scenes with the same picture, so a
+    scene with a map gets its own copy. Returns how many maps the video uses."""
+    import history_maps
+    if not history_maps.available():
+        return 0
+    used = 0
+    for k, s in enumerate(scenes_of(script)):
+        parts = [p.strip() for p in (getattr(s, "map", "") or "").split("|")]
+        if used >= MAX_MAPS or len(parts) != 3 or k not in pics:
+            continue
+        try:
+            y0, y1 = int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        name = history_maps.find(parts[0])
+        if not name or not -3000 <= y0 < y1 <= 2025:
+            continue
+        pics[k] = {**pics[k], "map": (name, y0, y1)}
+        used += 1
+        log(f"   🗺️ Scene {k + 1}: a map of {name}, {y0}-{y1}.")
+    return used
 
 
 def scenes_of(script):
@@ -1478,6 +1510,16 @@ def render(job_dir, segs, pics, title_pic, out_name, workers=3, log=print):
             picture = title_pic
         else:
             entry = pics[s["pic"]]
+            if entry.get("map") and s["variant"] == "full":
+                # An animated empire map (history_maps.py, Cliopatria) instead of the picture; the shot
+                # still gets its captions, motion and grade through segment_video. Any failure: picture.
+                import history_maps
+                name_, y0, y1 = entry["map"]
+                clip = history_maps.render(name_, y0, y1, os.path.join(job_dir, f".hv_seg/map{k:04d}.mp4"),
+                                           seconds=s["frames"] / FPS + 0.2, size=(W, H), fps=FPS)
+                if clip:
+                    return segment_video(job_dir, os.path.relpath(clip, job_dir), name, s["frames"], 0.0, False,
+                                         s["events"])
             if entry.get("video") and s["variant"] != "card":
                 # Stock footage plays; the second shot of a scene starts later in the clip.
                 secs = entry.get("seconds") or 0
@@ -1690,6 +1732,7 @@ def run(output_dir, pipeline):
         said_later = voicing.submit(voice_all, client, texts, output_dir, lang,
                                     os.environ.get("HISTORY_VOICE") or "Charon")
         pics, title_pic, credits, ai_used, first_pic, stock = pictures(client, script, topic, output_dir, mode=mode)
+        maps_used = add_maps(script, pics) if mode != "explainer" else 0
         said = said_later.result()
     missing = sum(1 for p, _ in said if not p)
     if missing > 2:
@@ -1719,7 +1762,11 @@ def run(output_dir, pipeline):
             print(f"⚠️ English subtitles skipped: {type(e).__name__}: {e}")
     real = [(name, _real_url(url)) for name, url in rank_sources(sources)[:8]]
     import stock_media
-    desc = describe(script, marks, real, credits, handle, lang, ai_used > 0, stock_media.credit_line(stock), mode)
+    stock_line = stock_media.credit_line(stock)
+    if maps_used:
+        import history_maps
+        stock_line = (stock_line + "\n" if stock_line else "") + history_maps.CREDIT
+    desc = describe(script, marks, real, credits, handle, lang, ai_used > 0, stock_line, mode)
     clip = {"start": 0.0, "end": round(total, 3), "seconds": round(total, 3), "file": final,
             "video_title_for_youtube_short": script.title, "seo_title": script.title[:100],
             "seo_description": desc, "seo_tags": [t[:40] for t in script.tags][:15],

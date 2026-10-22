@@ -179,6 +179,24 @@ def test_a_footage_term_that_echoes_the_line_is_replaced(monkeypatch):
     assert got == ["Fastest centuries in ODI", "cricket stadium night", "Fastest centuries in ODI"]
 
 
+def test_a_scene_naming_an_empire_gets_its_own_map_entry(monkeypatch):
+    import history_maps
+    import history_videos as hv
+    monkeypatch.setattr(history_maps, "available", lambda: True)
+    monkeypatch.setattr(history_maps, "find", lambda q: "Mughal Empire" if "mughal" in q.lower() else None)
+    S = SimpleNamespace
+    script = S(hook=[S(map="Mughals | 1526 | 1707"), S(map="")],
+               chapters=[S(scenes=[S(map="Atlantis | 1 | 2"), S(map="Mughal Empire | 1707 | 1600"),
+                                   S(map="Mughal Empire | 1600 | 1700"), S(map="Mughal Empire | 1700 | 1750")])])
+    shared = {"full": "a.jpg"}
+    pics = {k: shared for k in range(6)}
+    assert hv.add_maps(script, pics, log=lambda m: None) == 2              # MAX_MAPS
+    assert pics[0]["map"] == ("Mughal Empire", 1526, 1707) and pics[4]["map"] == ("Mughal Empire", 1600, 1700)
+    assert "map" not in shared and "map" not in pics[1] and "map" not in pics[3]   # backwards years: none
+    monkeypatch.setattr(history_maps, "available", lambda: False)
+    assert hv.add_maps(script, {k: {} for k in range(6)}) == 0
+
+
 def test_a_clip_shorter_than_its_shot_is_stretched_not_looped(monkeypatch, tmp_path):
     import broll
     import slowmo
