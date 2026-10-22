@@ -460,6 +460,13 @@ def option_rows(n, picture=False):
     return [700 + k * 140 for k in range(n)] if n == 4 else [720 + k * 160 for k in range(n)]
 
 
+def timer_add():
+    """Extra countdown seconds for this job: the "long" side of the channel's countdown A/B test
+    (my_channels.EXPERIMENTS "timer") puts back the second cut on 22-oct-2026."""
+    v = os.environ.get("QUIZ_TIMER_ADD", "0")
+    return int(v) if v in ("0", "1") else 0
+
+
 def question_events(k, n, label, q, q0, timer0, reveal0, end, picture=False):
     """One question: card (or the flag above, drawn by render), options
     swiping in, countdown, the reveal."""
@@ -581,8 +588,9 @@ def run(output_dir, pipeline):
             voices.append((said[qi][0], q0 + 0.2))
         caps.append((lines[qi], q0 + 0.2, q0 + 0.2 + lens[qi], said[qi][0]))
         timer0 = q0 + 0.2 + lens[qi] + 0.3
-        reveal0 = timer0 + f["timer"]
-        for s in range(f["timer"]):
+        countdown = f["timer"] + timer_add()
+        reveal0 = timer0 + countdown
+        for s in range(countdown):
             sfx.append((TICK, 0.12, timer0 + s))
         sfx.append((DING, 0.9, reveal0))
         if said[ri][0]:

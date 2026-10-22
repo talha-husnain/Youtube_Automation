@@ -374,14 +374,43 @@ def test_each_shorts_channel_tests_its_end_card_and_keeps_the_winner():
         picks.append(side)
         mc._change(ch["id"], lambda c, side=side: c["jobs"].append({"status": "done", "outro": side}))
     assert picks == [True, False, True, False]                       # alternates while learning
-    win = {"ab": {"outro": {"true": {"shorts": 8, "median": 100}, "false": {"shorts": 8, "median": 300}}}}
+    win = {"ab": {"outro": {"true": {"shorts": 12, "median": 100}, "false": {"shorts": 12, "median": 300},
+                            "p": 0.02}}}
     mc._change(ch["id"], lambda c: c.update(stats=win))
     rnd = _r.Random(1)
-    sides = [mc.ab_choice(mc.get(ch["id"]), rnd) for _ in range(50)]
+    sides = [mc.ab_choice(mc.get(ch["id"]), rnd=rnd) for _ in range(50)]
     assert sides.count(False) >= 35                                   # mostly the winner, sometimes the other
-    close = {"ab": {"outro": {"true": {"shorts": 8, "median": 100}, "false": {"shorts": 8, "median": 110}}}}
-    mc._change(ch["id"], lambda c: c.update(stats=close))
-    assert mc.ab_choice(mc.get(ch["id"]), _r.Random(5)) in (True, False)
+    luck = {"ab": {"outro": {"true": {"shorts": 12, "median": 100}, "false": {"shorts": 12, "median": 300},
+                             "p": 0.4}}}
+    assert mc.ab_winner(luck["ab"]["outro"], "outro") is None        # a big gap that could be luck
+    few = {"true": {"shorts": 8, "median": 100}, "false": {"shorts": 8, "median": 300}, "p": 0.01}
+    assert mc.ab_winner(few, "outro") is None                         # too few Shorts a side
+    watched_less = {"true": {"shorts": 12, "median": 100, "watched": 60},
+                    "false": {"shorts": 12, "median": 300, "watched": 30}, "p": 0.01}
+    assert mc.ab_winner(watched_less, "outro") is None                # more views but watched far less
+
+
+def test_ab_stats_count_only_the_new_treatment_and_test_the_quiz_countdown():
+    since = mc.AB_SINCE
+    rows = ([{"outro": True, "views": v, "created": since + 10, "retention": 50} for v in (10, 12, 14)]
+            + [{"outro": False, "views": v, "created": since + 10} for v in (1, 2, 3)]
+            + [{"outro": False, "views": 999, "created": since - 10}]         # the old 3 s card era
+            + [{"timer": "long", "views": 5, "created": since + 5}, {"outro": True, "views": 1, "format": "teaser",
+                                                                     "created": since + 5}])
+    got = mc.ab_stats(rows)
+    assert got["outro"]["true"] == {"shorts": 3, "median": 12, "watched": 50}
+    assert got["outro"]["false"]["shorts"] == 3 and 0 <= got["outro"]["p"] <= 1
+    assert got["timer"] == {"long": {"shorts": 1, "median": 5}}
+    assert mc.perm_p([1, 2, 3], [1, 2, 3]) == 1.0
+    ch = mc.add("quiz")
+    picks = []
+    for _ in range(4):
+        side = mc.ab_choice(mc.get(ch["id"]), "timer")
+        picks.append(side)
+        mc._change(ch["id"], lambda c, side=side: c["jobs"].append({"status": "done", "timer": side}))
+    assert picks == ["short", "long", "short", "long"]
+    mc._change(ch["id"], lambda c: c.update(stats={"ab": {"timer": {"short": {"shorts": 2, "median": 4}}}}))
+    assert any("quiz countdown" in line for line in mc.ab_line(mc.get(ch["id"])))
 
 
 def test_a_failed_job_keeps_the_reason_from_its_log(monkeypatch):

@@ -4713,6 +4713,7 @@ async def process_endpoint(
     moments: Optional[str] = Form(None),
     take_voice: Optional[str] = Form(None),
     quiz_format: Optional[str] = Form(None),
+    quiz_timer_add: Optional[str] = Form(None),
     quiz_topic: Optional[str] = Form(None),
     quiz_avoid: Optional[str] = Form(None),
     quiz_number: Optional[str] = Form(None),
@@ -4792,6 +4793,7 @@ async def process_endpoint(
         moments = body.get("moments")
         take_voice = body.get("take_voice")
         quiz_format = body.get("quiz_format")
+        quiz_timer_add = body.get("quiz_timer_add")
         quiz_topic = body.get("quiz_topic")
         quiz_avoid = body.get("quiz_avoid")
         quiz_number = body.get("quiz_number")
@@ -5108,6 +5110,9 @@ async def process_endpoint(
     # asking a question or making a song title twice.
     if genre_val == "quiz":
         env["QUIZ_FORMAT"] = str(quiz_format or "mcq")[:20]
+        # The countdown A/B side (my_channels.EXPERIMENTS "timer"): 0 or 1 extra second.
+        if str(quiz_timer_add or "") in ("0", "1"):
+            env["QUIZ_TIMER_ADD"] = str(quiz_timer_add)
         env["QUIZ_TOPIC"] = re.sub(r"\s+", " ", str(quiz_topic or ""))[:80]
         if str(quiz_number or "").isdigit():
             env["QUIZ_NUMBER"] = str(min(int(quiz_number), 99999))

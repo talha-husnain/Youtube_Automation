@@ -187,6 +187,11 @@ def week_text(today, now=None, rows_fn=_channel_rows):
         compare = craft_line(rows, views_of, ts)
         if compare:
             lines.append(compare)
+        try:
+            import my_channels
+            lines += my_channels.ab_line(my_channels.get(ch["id"]) or {})
+        except Exception:  # noqa: BLE001 — the tests' state is a bonus line
+            pass
     if not lines:
         return "No videos went up this week."
     head = f"This week: {total_n} videos, {total_v:,} views on them so far."

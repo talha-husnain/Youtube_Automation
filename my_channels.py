@@ -828,12 +828,8 @@ def learn(ch, log=print):
              "best": [f"{r['title'][:80]} ({r['views']} views)" for r in ranked[:5]],
              "worst": [f"{r['title'][:80]} ({r['views']} views)" for r in ranked[-5:][::-1]]
              if len(ranked) >= 8 else []}
-    # The end card A/B test (ab_choice): median views with and without it.
-    arms = {}
-    for r in mature:
-        if r.get("outro") is not None and r.get("format") != "teaser":
-            arms.setdefault(str(bool(r["outro"])).lower(), []).append(r["views"])
-    stats["ab"] = {"outro": {k: {"shorts": len(v), "median": _median(v)} for k, v in arms.items()}}
+    # The A/B tests (ab_choice): views and % watched per side, Shorts since AB_SINCE only.
+    stats["ab"] = ab_stats(mature)
     stats["hours"] = _by_hour(mature)
 
     def fn(c):
@@ -923,27 +919,116 @@ def length_tip(ch):
     return None
 
 
-AB_MIN = 6            # Shorts counted per side before a side can win
+AB_MIN = 10           # Shorts counted per side before a side can win (was 6)
 AB_LEAD = 1.2         # the winner's median must beat the other's by this much
+AB_P = 0.1            # and a permutation test on log views must say it is not luck
 AB_EXPLORE = 0.2
+# The tests restart when the treatment changes. From 22-oct-2026 22:00 the end card is 1.5 s (was 3 s)
+# and every script is new; the first run of the end card test (8-20 Shorts a side, medians 0-12 views)
+# showed nothing (permutation p 0.55-0.95 on all three channels).
+AB_SINCE = 1792688400
+# Each test: the channel kinds it runs on and its two sides (the first is today's default).
+EXPERIMENTS = {
+    "outro": {"kinds": ("cricket", "controversy", "quiz"), "arms": (True, False),
+              "label": "FOLLOW end card", "names": ("with", "without")},
+    # Quiz countdowns were cut by a second on 22-oct-2026 (the median viewer left at 7 s, about when
+    # the first one starts): "long" puts the second back, so the cut is measured, not assumed.
+    "timer": {"kinds": ("quiz",), "arms": ("short", "long"), "label": "quiz countdown",
+              "names": ("1 s shorter", "as before")},
+}
+AB_KINDS = EXPERIMENTS["outro"]["kinds"]
 
 
-def ab_choice(ch, rnd=random):
-    """With or without the FOLLOW end card for the next Short: the end card
-    asks for a follow but stops a Short from looping, and replays count as
-    views, so each channel tests it on its own Shorts. Alternate until both
-    sides have AB_MIN counted, then the clear winner (AB_LEAD) most of the
-    time; no clear winner keeps alternating."""
-    seen = ((ch.get("stats") or {}).get("ab") or {}).get("outro") or {}
-    on, off = seen.get("true") or {}, seen.get("false") or {}
-    if on.get("shorts", 0) >= AB_MIN and off.get("shorts", 0) >= AB_MIN and rnd.random() >= AB_EXPLORE:
-        if on["median"] >= off["median"] * AB_LEAD:
-            return True
-        if off["median"] >= on["median"] * AB_LEAD:
-            return False
-    made = [j.get("outro") for j in ch.get("jobs") or [] if j.get("outro") is not None
-            and j.get("status") in ("running", "done", "uploaded")]
-    return made.count(True) <= made.count(False)
+def _arm(v):
+    return str(v).lower()
+
+
+def perm_p(a, b, n=2000, seed=7):
+    """Two-sided permutation p-value of the difference in mean log(1+views): how often a random
+    split of the same Shorts differs as much. Views are heavy-tailed, hence the log; no scipy here."""
+    import math
+    la, lb = [math.log1p(x) for x in a], [math.log1p(x) for x in b]
+    if not la or not lb:
+        return 1.0
+    obs = abs(sum(la) / len(la) - sum(lb) / len(lb))
+    pool, k, hits = la + lb, len(la), 0
+    rnd = random.Random(seed)
+    for _ in range(n):
+        rnd.shuffle(pool)
+        if abs(sum(pool[:k]) / k - sum(pool[k:]) / (len(pool) - k)) >= obs - 1e-12:
+            hits += 1
+    return hits / n
+
+
+def ab_stats(rows, since=AB_SINCE):
+    """{test: {side: {"shorts", "median", "watched"?}, "p": p}} over counted Shorts since ``since``."""
+    out = {}
+    for key in EXPERIMENTS:
+        arms = {}
+        for r in rows:
+            if r.get(key) is None or r.get("format") == "teaser" or r.get("created", 0) < since:
+                continue
+            arms.setdefault(_arm(r[key]), []).append(r)
+        if not arms:
+            continue
+        res = {}
+        for a, rs in arms.items():
+            kept = [r["retention"] for r in rs if r.get("retention") is not None]
+            res[a] = {"shorts": len(rs), "median": _median([r["views"] for r in rs]),
+                      **({"watched": _median(kept)} if kept else {})}
+        if len(arms) == 2:
+            (_a, ra), (_b, rb) = arms.items()
+            res["p"] = round(perm_p([r["views"] for r in ra], [r["views"] for r in rb]), 3)
+        out[key] = res
+    return out
+
+
+def ab_winner(seen, key):
+    """The winning side of a test, or None: both sides AB_MIN counted, a clear lead in median views,
+    a permutation p under AB_P, and the winner not watched less."""
+    a, b = EXPERIMENTS[key]["arms"]
+    sa, sb = seen.get(_arm(a)) or {}, seen.get(_arm(b)) or {}
+    if min(sa.get("shorts", 0), sb.get("shorts", 0)) < AB_MIN or seen.get("p", 1.0) > AB_P:
+        return None
+    for win, lose, side in ((sa, sb, a), (sb, sa, b)):
+        if win["median"] > lose["median"] and win["median"] >= lose["median"] * AB_LEAD \
+                and win.get("watched", 0) >= lose.get("watched", 0) - 5:
+            return side
+    return None
+
+
+def ab_choice(ch, key="outro", rnd=random):
+    """The side of test ``key`` for the next Short. The end card asks for a follow but stops a Short
+    from looping (replays count as views), so each channel tests it on its own Shorts. Alternate until
+    a side wins (ab_winner), then the winner most of the time; no winner keeps alternating."""
+    exp = EXPERIMENTS[key]
+    seen = ((ch.get("stats") or {}).get("ab") or {}).get(key) or {}
+    win = ab_winner(seen, key)
+    if win is not None and rnd.random() >= AB_EXPLORE:
+        return win
+    a, b = exp["arms"]
+    made = [j.get(key) for j in ch.get("jobs") or [] if j.get(key) is not None
+            and j.get("status") in ("running", "done", "uploaded") and j.get("at", AB_SINCE) >= AB_SINCE]
+    return a if made.count(a) <= made.count(b) else b
+
+
+def ab_line(ch):
+    """One line per running test for the week report, or []."""
+    out = []
+    for key, res in (((ch.get("stats") or {}).get("ab")) or {}).items():
+        exp = EXPERIMENTS.get(key)
+        if not exp or ch.get("kind") not in exp["kinds"]:
+            continue
+        parts = []
+        for side, name in zip(exp["arms"], exp["names"]):
+            s = res.get(_arm(side)) or {}
+            parts.append(f"{name}: {s.get('shorts', 0)} Shorts, median {s.get('median', 0)} views"
+                         + (f", {s['watched']:.0f}% watched" if s.get("watched") is not None else ""))
+        win = ab_winner(res, key)
+        verdict = (f"winner: {exp['names'][exp['arms'].index(win)]}" if win is not None else
+                   f"no winner yet (needs {AB_MIN} a side and a clear gap)")
+        out.append(f"  Test, {exp['label']}: " + "; ".join(parts) + f". {verdict}.")
+    return out
 
 
 def pick_format(ch, options, rnd=random):
@@ -980,15 +1065,17 @@ def _look(ch):
             "frame_outro": True, "acknowledged": True, "channel": ch["id"]}
 
 
-AB_KINDS = ("cricket", "controversy", "quiz")     # songs and long videos have no end card
-
-
 def next_payload(ch, client_fn, log=print):
     """(payload, meta) for the channel's next Short, or (None, None); the
-    Shorts channels also get the end card A/B side (ab_choice)."""
+    Shorts channels also get their A/B sides (ab_choice): the end card on every
+    Shorts channel (songs and long videos have none), the countdown on quizzes."""
     payload, meta = _next_payload(ch, client_fn, log)
-    if payload and ch["kind"] in AB_KINDS and meta.get("format") != "teaser":
-        payload["frame_outro"] = meta["outro"] = ab_choice(ch)
+    if payload and meta.get("format") != "teaser":
+        if ch["kind"] in EXPERIMENTS["outro"]["kinds"]:
+            payload["frame_outro"] = meta["outro"] = ab_choice(ch, "outro")
+        if ch["kind"] in EXPERIMENTS["timer"]["kinds"]:
+            meta["timer"] = ab_choice(ch, "timer")
+            payload["quiz_timer_add"] = 0 if meta["timer"] == "short" else 1
     return payload, meta
 
 
@@ -1497,7 +1584,8 @@ def upload_waiting(ch, job_clips, log=print):
                       "format": j.get("format"), "topic": j.get("topic"), "seconds": clip.get("seconds"),
                       "question": clip.get("question") or "", "answers": clip.get("answers") or [],
                       **({"series": j["series"], "series_part": j.get("series_part")} if j.get("series") else {}),
-                      **({"outro": j["outro"]} if j.get("outro") is not None else {})})
+                      **({"outro": j["outro"]} if j.get("outro") is not None else {}),
+                      **({"timer": j["timer"]} if j.get("timer") is not None else {})})
             if row.get("status") == "done":
                 done += 1
                 if clip.get("thumbnail"):
