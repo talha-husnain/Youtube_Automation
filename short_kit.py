@@ -672,8 +672,7 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
         outputs = ["-map", "[v]", "-an", "-t", f"{seconds:.3f}", "-r", str(FPS),
                    *(FAST_PASS if fast else video_encode_args(QUALITY)), picture]
     else:
-        graph.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0[a]"
-                     if len(mix) > 1 else "[1:a]anull[a]")
+        _final_mix(graph, mix)
         outputs = ["-map", "[v]", "-map", "[a]", "-t", f"{seconds:.3f}", "-r", str(FPS),
                    *(FAST_PASS if fast else video_encode_args(QUALITY)), "-c:a", "aac", "-b:a", "192k",
                    *METADATA_SCRUB, "-movflags", "+faststart", out_path]
@@ -700,11 +699,38 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     return out_path
 
 
+# Ducking (quality pass 2, 22-oct-2026): the bed sat at a fixed -30 LUFS, 16 dB under the voice, so it was
+# either buried between lines or muddy under them. Ducked, it can sit at -24 and dip ~10 dB while anyone
+# speaks (sidechain keyed by the voices); a limiter stops the summed peaks from clipping. MUSIC_DUCK=0: old mix.
+def ducking():
+    return os.environ.get("MUSIC_DUCK", "1").strip() != "0"
+
+
+BED_DUCKED_LOUDNORM = "loudnorm=I=-24:TP=-6:LRA=11"
+DUCK = "sidechaincompress=threshold=0.02:ratio=8:attack=15:release=400:makeup=1"
+LIMIT = "alimiter=limit=0.95:level=0"
+
+
+def _final_mix(graph, mix):
+    """Every sound in ``mix`` summed into [a]; with a bed and voices, the bed ducked under the voices."""
+    voices = [m for m in mix if m.startswith("[vo")]
+    if len(mix) == 1:
+        graph.append(f"{mix[0]}anull[a]")
+        return
+    parts = mix
+    if ducking() and "[bed]" in mix and voices:
+        graph.append(f"{''.join(voices)}amix=inputs={len(voices)}:normalize=0,asplit=2[vox][vkey]")
+        graph.append(f"[bed][vkey]{DUCK}[bedd]")
+        parts = [m for m in mix if m != "[bed]" and m not in voices] + ["[vox]", "[bedd]"]
+    graph.append(f"{''.join(parts)}amix=inputs={len(parts)}:duration=first:normalize=0,{LIMIT}[a]")
+
+
 def _bed_input(cmd, graph, mix, idx, bed):
     """The background bed: looped, cut to its length, quiet, faded in and out."""
     track, length = bed
     cmd += ["-stream_loop", "-1", "-i", track]
-    graph.append(f"[{idx}:a]atrim=0:{length:.3f},asetpts=PTS-STARTPTS,{BED_LOUDNORM},"
+    graph.append(f"[{idx}:a]atrim=0:{length:.3f},asetpts=PTS-STARTPTS,"
+                 f"{BED_DUCKED_LOUDNORM if ducking() else BED_LOUDNORM},"
                  f"afade=t=in:d=1,afade=t=out:st={max(0.0, length - 1.5):.3f}:d=1.5,"
                  f"aresample=48000,aformat=channel_layouts=stereo[bed]")
     mix.append("[bed]")
@@ -736,8 +762,7 @@ def mix_audio(path, seconds, voices=(), sfx=(), bed=None):
     if bed:
         idx = _bed_input(cmd, graph, mix, idx, bed)
     _voice_sfx_inputs(cmd, graph, mix, idx, voices, sfx)
-    graph.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0[a]"
-                 if len(mix) > 1 else "[0:a]anull[a]")
+    _final_mix(graph, mix)
     r = subprocess.run(cmd + ["-filter_complex", ";".join(graph), "-map", "[a]", "-t", f"{seconds:.3f}",
                               "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", path],
                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
