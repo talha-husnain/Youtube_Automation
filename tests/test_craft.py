@@ -100,6 +100,21 @@ def test_a_long_videos_opening_is_rewritten_only_on_a_clear_gain(monkeypatch):
     assert [s.line for s in script.hook] == old   # a sacred story is never polished
 
 
+def test_the_week_report_compares_new_scripts_with_the_month_before():
+    import reminders
+    since = 1_000_000_000
+    now = since + 10 * 86400
+
+    def row(day, views, ret=None, fmt="topic"):
+        return {"video_id": f"v{day}{views}", "status": "done", "created": since + day * 86400, "views": views,
+                "format": fmt, **({"retention": ret} if ret is not None else {})}
+    rows = [row(-5, 100, 40), row(-4, 200, 50), row(-3, 300, 60), row(-40, 9999),
+            row(1, 400, 70), row(2, 500, 80), row(3, 600, 90), row(9.5, 5000), row(4, 99999, fmt="history")]
+    line = reminders.craft_line(rows, lambda r: r["views"], now, since=since)
+    assert line == "  New scripts: median 500 views, 80% watched (3 Shorts); the month before: median 200 views, 50% watched (3 Shorts)."
+    assert reminders.craft_line(rows[:5], lambda r: r["views"], now, since=since) == ""     # too few after
+
+
 def test_polish_never_breaks_a_video(monkeypatch):
     monkeypatch.setenv("POLISH", "1")
 

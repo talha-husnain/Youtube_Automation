@@ -84,6 +84,11 @@ LONG_CRAFT = """WRITING RULES (YouTube measures the first 30 seconds as the intr
 FIXED_ORDER = "the order given above (the first line is the hook)."
 
 
+# When the new writing went live (22-oct-2026 22:00 local): the week report compares the Shorts
+# uploaded after it with the month before (reminders.craft_line).
+SINCE = 1792688400
+
+
 def short_rules(structure=None, exclude=()):
     """``structure``: a fixed shape (a match or a controversy has its own order); else one of
     STRUCTURES at random, minus the ones whose name starts with a word in ``exclude``."""

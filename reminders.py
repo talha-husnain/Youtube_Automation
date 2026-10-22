@@ -134,6 +134,34 @@ def _channel_rows(cid):
     return rows, lambda r: int(r.get("views") or 0)
 
 
+MATURE = 48 * 3600   # a Short's views count after two days, as in my_channels.learn
+
+
+def craft_line(rows, views_of, now, since=None, least=3):
+    """ "New scripts: median N views, X% watched (k Shorts) vs M, Y% in the month before" once both
+    sides have ``least`` counted Shorts, else "". A before/after split, not an A/B test: the season
+    and the channel's age move too, so it is a hint for the owner, not proof."""
+    import statistics
+    import script_craft
+    since = since or script_craft.SINCE
+
+    def side(rs):
+        rs = [r for r in rs if r.get("video_id") and r.get("status") == "done" and not r.get("blocked")
+              and now - r.get("created", 0) >= MATURE and (r.get("seconds") or 0) <= 180
+              and r.get("format") != "history"]      # long videos: their views are another scale
+        kept = [r["retention"] for r in rs if r.get("retention") is not None]
+        return (len(rs), statistics.median([views_of(r) for r in rs]) if rs else 0,
+                statistics.median(kept) if kept else None)
+    after = side([r for r in rows if r.get("created", 0) >= since])
+    before = side([r for r in rows if since - 30 * 86400 <= r.get("created", 0) < since])
+    if min(after[0], before[0]) < least:
+        return ""
+
+    def say(s):
+        return f"median {s[1]:,.0f} views" + (f", {s[2]:.0f}% watched" if s[2] is not None else "") + f" ({s[0]} Shorts)"
+    return f"  New scripts: {say(after)}; the month before: {say(before)}."
+
+
 def week_text(today, now=None, rows_fn=_channel_rows):
     """The last 7 days per channel: videos up, their views, the best one."""
     ts = now or time.time()
@@ -156,6 +184,9 @@ def week_text(today, now=None, rows_fn=_channel_rows):
         if views_of(best):
             line += f". Best: {(best.get('title') or '').split(' #')[0][:60]} ({views_of(best):,})"
         lines.append(line + ".")
+        compare = craft_line(rows, views_of, ts)
+        if compare:
+            lines.append(compare)
     if not lines:
         return "No videos went up this week."
     head = f"This week: {total_n} videos, {total_v:,} views on them so far."
