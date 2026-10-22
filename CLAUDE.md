@@ -962,6 +962,12 @@ never finished:
     pick per Short in `cricket_shorts._finish` (cricket, controversy, history_today), code spaces them and
     blocks death/tragedy/religion/allegation lines; `render(stickers=)`; credit in the description.
     `-f webp_anim -ignore_loop 0` (stream_loop does not loop them). STICKERS=0.
+  - Animated empire maps (`history_maps.py`, Cliopatria v0.2.1 CC BY 4.0 + Natural Earth 50m, caches
+    in D:\youtube\oss\maps, `python history_maps.py build <zip> <land>` rebuilds them in 29 s): the long
+    script's scene `map` ("Mughal Empire | 1526 | 1707") becomes that scene's first shot through
+    segment_video (captions, motion, grade). `add_maps`: at most 2, history mode only, never a polity
+    whose data runs past 1925 (Kashmir and modern borders; the Ottomans end 1923, the Raj 1947 is out).
+    Names in brackets are composites ("(Delhi Sultanate)"). 7 s at 1080p in 7-22 s. HISTORY_MAPS=0.
   - The mix measured, not judged by ear: a real voice + Lyria bed through `mix_audio` with and without
     the bed, subtracted: music 20 dB under the voice while it speaks, -31 dBFS in the gaps. Gemini's
     "slightly too loud" at every level was a habit, not a measurement.

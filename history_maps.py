@@ -654,7 +654,7 @@ def _ass_title(path, size, title):
         "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, "
         "Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: T,Noto Nastaliq Urdu,{int(H * 0.095)},&H00E2F1F7,&H00E2F1F7,&H00000000,&H90000000,"
+        f"Style: T,Noto Nastaliq Urdu,{int(H * 0.14)},&H00E2F1F7,&H00E2F1F7,&H00000000,&H90000000,"
         "0,0,0,0,100,100,0,0,1,0,3,7,0,0,0,1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
         f"Dialogue: 0,0:00:00.00,9:59:59.00,T,,0,0,0,,{{\\an4\\pos({x},{y})}}"

@@ -183,7 +183,11 @@ def test_a_scene_naming_an_empire_gets_its_own_map_entry(monkeypatch):
     import history_maps
     import history_videos as hv
     monkeypatch.setattr(history_maps, "available", lambda: True)
-    monkeypatch.setattr(history_maps, "find", lambda q: "Mughal Empire" if "mughal" in q.lower() else None)
+    monkeypatch.setattr(history_maps, "find", lambda q: "Mughal Empire" if "mughal" in q.lower() else
+                        "Islamic Republic of Pakistan" if "pakistan" in q.lower() else None)
+    monkeypatch.setattr(history_maps, "span", lambda n: (1947, 2024) if "Pakistan" in n else (1529, 1858))
+    assert hv.add_maps(SimpleNamespace(hook=[SimpleNamespace(map="Pakistan | 1947 | 2020")], chapters=[]),
+                       {0: {}}, log=lambda m: None) == 0                     # never modern borders
     S = SimpleNamespace
     script = S(hook=[S(map="Mughals | 1526 | 1707"), S(map="")],
                chapters=[S(scenes=[S(map="Atlantis | 1 | 2"), S(map="Mughal Empire | 1707 | 1600"),

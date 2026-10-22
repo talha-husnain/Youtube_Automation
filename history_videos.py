@@ -433,6 +433,7 @@ def rank_sources(sources):
 
 
 MAX_MAPS = 2
+MAP_LAST_YEAR = 1925     # empires that ended before modern borders (the Ottomans, 1923, stay; the Raj, 1947, not)
 
 
 def add_maps(script, pics, log=print):
@@ -453,6 +454,13 @@ def add_maps(script, pics, log=print):
             continue
         name = history_maps.find(parts[0])
         if not name or not -3000 <= y0 < y1 <= 2025:
+            continue
+        # Never modern borders: Kashmir and other disputed lines are a legal and political minefield in
+        # both Pakistan and India, and the data has modern states ("Islamic Republic of Pakistan").
+        try:
+            if history_maps.span(name)[1] > MAP_LAST_YEAR:
+                continue
+        except Exception:  # noqa: BLE001
             continue
         pics[k] = {**pics[k], "map": (name, y0, y1)}
         used += 1
