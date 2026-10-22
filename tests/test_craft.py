@@ -179,6 +179,23 @@ def test_a_footage_term_that_echoes_the_line_is_replaced(monkeypatch):
     assert got == ["Fastest centuries in ODI", "cricket stadium night", "Fastest centuries in ODI"]
 
 
+def test_a_clip_shorter_than_its_shot_is_stretched_not_looped(monkeypatch, tmp_path):
+    import broll
+    import slowmo
+    seen, asked = [], []
+
+    def run(cmd, **k):
+        seen.append(cmd)
+        return SimpleNamespace(returncode=0, stderr="")
+    monkeypatch.setattr(broll.subprocess, "run", run)
+    monkeypatch.setattr(slowmo, "available", lambda: True)
+    monkeypatch.setattr(slowmo, "stretch", lambda src, off, have, need, out: asked.append((have, need)) or out)
+    broll._shot(str(tmp_path), 0, 90, {"kind": "video", "path": "a.mp4", "seconds": 2.0}, 0.3, False, 1080, 1920)
+    assert asked == [(1.7, 3.0)] and "-stream_loop" not in seen[0] and ".broll" in " ".join(seen[0])
+    broll._shot(str(tmp_path), 1, 60, {"kind": "video", "path": "a.mp4", "seconds": 9.0}, 0.3, False, 1080, 1920)
+    assert len(asked) == 1 and "-stream_loop" in seen[1]          # long enough: no stretch needed
+
+
 def test_each_channel_grades_its_footage_and_photos_keep_their_colours(monkeypatch, tmp_path):
     import broll
     seen = []

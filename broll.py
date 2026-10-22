@@ -21,6 +21,7 @@ from typing import List
 from pydantic import BaseModel
 
 import faces
+import slowmo
 import short_kit as kit
 import stock_media
 
@@ -156,6 +157,14 @@ def _shot(job_dir, k, frames, item, offset, close, w, h):
     d = frames / FPS
     if item["kind"] == "video":
         src = ["-ss", f"{offset:.2f}", "-stream_loop", "-1", "-i", item["path"]]
+        # A clip that ends before its shot does is stretched with RIFE (slowmo.py, smooth slow motion)
+        # instead of looping back to its first frame mid-shot; 1.15-4x only, else the loop stays.
+        have = (item.get("seconds") or 0) - offset
+        if 0 < have < d and slowmo.available():
+            slow = slowmo.stretch(os.path.join(job_dir, item["path"]), offset, have, d,
+                                  os.path.join(job_dir, f".broll/s{k:03d}_slow.mp4"))
+            if slow:
+                src = ["-i", os.path.relpath(slow, job_dir)]
         # The first crop follows the biggest face (faces.py); centred when there is none.
         fx = faces.center_x(os.path.join(job_dir, item["path"]), offset + d / 2)
         fill = f"crop={w}:{h}" + (f":x='min(max(iw*{fx:.4f}-ow/2,0),iw-ow)'" if fx is not None else "")

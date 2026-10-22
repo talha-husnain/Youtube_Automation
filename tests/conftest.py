@@ -30,6 +30,8 @@ os.environ["CUTOUT"] = "0"              # and the photo cut-out model
 os.environ["POLISH"] = "0"
 os.environ["FACE_CROP"] = "0"           # faces.py runs ffmpeg + YuNet per footage shot
 os.environ["BEAT_CUTS"] = "0"           # beats.py decodes the song with ffmpeg
+os.environ["SLOWMO"] = "0"              # RIFE runs on the GPU for real
+os.environ["STICKERS"] = "0"            # sticker picks are a Gemini call
 os.environ["VIRAL_REMIX"] = "0"         # studies a real viral Short with yt-dlp + Gemini
 
 import pytest
