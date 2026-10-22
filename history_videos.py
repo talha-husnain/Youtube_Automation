@@ -566,6 +566,10 @@ def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_
     if not facts or "NOT FOUND" in facts[:200].upper() or len(sources) < MIN_SOURCES:
         raise RuntimeError(f"Not enough reliable sources for this topic ({len(sources)}).")
     words, chapters, scenes = shape(minutes)
+    # What people type into YouTube about the topic, for the title and tags (explainer mode has its own
+    # keyword list in the prompt already).
+    import cricket_shorts as cs
+    search = "" if explainer else cs._search_hint(topic)
     fixes = ""
     for attempt in range(2):
         script = kit.ask_json(client, Script, prompt.format(
@@ -576,7 +580,8 @@ def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_
             study=studied.get("notes") or "(not available)",
             rival_titles="\n".join(studied.get("titles") or []) or "(not available)",
             keywords="\n".join(phrases) or "(not available)",
-            honour=HONOUR.get(lang, HONOUR["urdu"])) + viral_remix.note_for(topic) + "\n\n" + craft.long_rules(),
+            honour=HONOUR.get(lang, HONOUR["urdu"])) + viral_remix.note_for(topic) + search + "\n\n"
+            + craft.long_rules(),
             model=quiz_model())
         if not script.allowed:
             raise RuntimeError(f"Not made: {script.reason or 'the topic is not for this channel'}.")
