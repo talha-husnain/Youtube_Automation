@@ -33,6 +33,7 @@ from typing import List
 
 from pydantic import BaseModel
 
+import script_craft as craft
 import short_kit as kit
 import framed_layout as fl
 
@@ -206,11 +207,13 @@ def find_story(client, match, handle, notes=""):
         raise RuntimeError(f"Could not find this match ({facts[:160] or 'no answer'}). "
                            "Write the teams, tournament and date, e.g. 'Pakistan vs India, Asia Cup 2025 final'.")
     story = kit.ask_json(client, Story, STORY_PROMPT.format(handle=handle, facts=facts,
-                                                            max_beats=MAX_BEATS))
+                                                            max_beats=MAX_BEATS) + "\n\n" + craft.short_rules(),
+                         model=craft.writer_model())
     if not story.found or len(story.teams) != 2 or not story.beats:
         raise RuntimeError("The search did not return a finished match with both scores. "
                            "Write the teams, tournament and date.")
     story.beats = story.beats[:MAX_BEATS]
+    craft.polish(client, story, facts, what="cricket match result YouTube Short", fields=("beats", "question"))
     return story, facts, sources
 
 
@@ -280,6 +283,16 @@ TOPIC_SEO_CONTEXT = ("IMPORTANT: this short is NOT comedy. It is a cricket facts
                      "and team names are welcome everywhere; creator is \"\".")
 
 
+def remix_note(topic):
+    import viral_remix
+    return viral_remix.note_for(topic)
+
+
+def remix_guard(topic, story):
+    import viral_remix
+    viral_remix.guard(topic, " ".join(t for _p, t in craft.spoken(story)))
+
+
 def find_topic(client, topic, handle):
     import time
     for attempt in range(2):
@@ -291,10 +304,13 @@ def find_topic(client, topic, handle):
         raise RuntimeError(f"Nothing reliable found on this topic ({facts[:160] or 'no answer'}). "
                            "Try it more specific, e.g. 'Babar Azam ODI stats' or 'LBW rule'.")
     story = kit.ask_json(client, TopicStory, TOPIC_STORY_PROMPT.format(handle=handle, topic=topic,
-                                                                       facts=facts))
+                                                                       facts=facts) + remix_note(topic)
+                         + "\n\n" + craft.short_rules(), model=craft.writer_model())
     if not story.found or len(story.facts) < 2:
         raise RuntimeError("The research came back too thin for a video; try a more specific topic.")
     story.facts = story.facts[:6]
+    craft.polish(client, story, facts, what="cricket facts YouTube Short")
+    remix_guard(topic, story)
     return story, facts, sources
 
 
@@ -894,7 +910,13 @@ def find_versus(client, topic, handle):
             break
     if not facts or "NOT FOUND" in facts[:200].upper():
         raise RuntimeError(f"Could not find both players' numbers ({facts[:160] or 'no answer'}).")
-    story = kit.ask_json(client, Versus, VERSUS_PROMPT.format(handle=handle, topic=topic, facts=facts))
+    story = kit.ask_json(client, Versus, VERSUS_PROMPT.format(handle=handle, topic=topic, facts=facts)
+                         + remix_note(topic) + "\n\n" + craft.short_rules(), model=craft.writer_model())
+    # Rows say who is ahead and code checks that against the numbers below: only the hook
+    # and the question are polished.
+    craft.polish(client, story, facts, what="cricket player comparison YouTube Short",
+                 fields=("hook_line", "question"))
+    remix_guard(topic, story)
     if not story.found or len(story.players) != 2 or len(story.rows) < 3:
         raise RuntimeError("The comparison came back too thin for a video; try two better-known players.")
     story.rows = story.rows[:6]

@@ -119,10 +119,13 @@ def json3_to_transcript(data, language, max_seconds=None):
     }
 
 
-def fetch(url, max_seconds=None):
+def fetch(url, max_seconds=None, info_out=None):
     """Blocking. The video's own captions as a transcript, or None.
 
     Never raises: any failure means "transcribe it the normal way".
+    ``info_out`` (a dict) gets the video's title, views, channel and length from the
+    same request (viral_remix needs them, and a second yt-dlp call is one more
+    chance of a bot-check).
     """
     if os.environ.get("YT_CAPTIONS", "1").strip() == "0":
         return None
@@ -143,6 +146,10 @@ def fetch(url, max_seconds=None):
             opts["cookiefile"] = ck_path
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            if info_out is not None:
+                info_out.update({"id": info.get("id"), "title": info.get("title") or "",
+                                 "views": info.get("view_count") or 0, "channel": info.get("channel") or
+                                 info.get("uploader") or "", "seconds": info.get("duration") or 0})
             kind, key = choose_track(info)
             if not kind:
                 print("   ℹ️ No YouTube captions on this video — transcribing the audio instead.")

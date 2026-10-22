@@ -670,8 +670,13 @@ def _owner_idea(kind, text):
     return {"kind": "topic", "text": text, "owner": True}
 
 
+def _remix_link(text):
+    import viral_remix
+    return bool(viral_remix.video_id(text))
+
+
 def add_idea(cid, text):
-    """The owner's own topic, made next."""
+    """The owner's own topic, made next. A YouTube link is studied first (~20 s): blocking."""
     text = re.sub(r"\s+", " ", str(text or "")).strip()[:140]
     ch = get(cid)
     if not ch or (ch["kind"] not in PLANNERS and ch["kind"] != "quran"):
@@ -684,6 +689,12 @@ def add_idea(cid, text):
         if not idea:
             raise ValueError("Write a surah's name or number (Surah Yaseen, 36), or ayat like 2:255 or 2:1-20.")
         text = idea["text"]
+    elif _remix_link(text):
+        # A YouTube link: study that video and make our own on its angle (viral_remix).
+        import short_kit
+        import viral_remix
+        idea = {**viral_remix.as_idea(viral_remix.study(short_kit.gemini(), text, ch["kind"])), "owner": True}
+        text = idea["text"]
     else:
         idea = _owner_idea(ch["kind"], text)
 
@@ -693,6 +704,37 @@ def add_idea(cid, text):
         urgent = [i for i in rest if i.get("urgent")]
         c["ideas"] = urgent + [idea] + [i for i in rest if not i.get("urgent")]
     return _change(cid, fn)
+
+
+def _remix_first(ch, client_fn, log=print):
+    """Once a day a cricket or controversy channel studies this week's most viewed Short in its
+    niche (viral_remix) and makes its own video on that angle next. Urgent match results and
+    the owner's own ideas still go first. ``remix_days`` counts tries, so a day with nothing new
+    to study costs one look at the cached trends, not one per video."""
+    import viral_remix
+    if ch["kind"] not in ("cricket", "controversy") or viral_remix.made_today(ch) >= viral_remix.PER_DAY:
+        return ch
+    head = (ch.get("ideas") or [{}])[0]
+    if head.get("urgent") or head.get("owner") or head.get("remix"):
+        return ch
+    day = time.strftime("%Y-%m-%d")
+    _change(ch["id"], lambda c: c.update(remix_days={day: viral_remix.made_today(c) + 1}))
+    try:
+        idea = viral_remix.auto_idea(client_fn(), ch["kind"], log=log)
+    except Exception as e:  # noqa: BLE001 — a bonus idea
+        log(f"⚠️ {ch['name']}: viral study failed ({type(e).__name__}).")
+        idea = None
+    used = {str(u).lower() for u in ch.get("used") or []}
+    if not idea or idea["text"].lower() in used:
+        return get(ch["id"])
+    log(f"🧪 {ch['name']}: next video rides a viral one: {idea['text']}")
+
+    def fn(c):
+        rest = [i for i in c.get("ideas") or [] if i.get("text", "").lower() != idea["text"].lower()]
+        urgent = [i for i in rest if i.get("urgent")]
+        c["ideas"] = urgent + [idea] + [i for i in rest if not i.get("urgent")]
+    _change(ch["id"], fn)
+    return get(ch["id"])
 
 
 def drop_idea(cid, text):
@@ -1010,6 +1052,7 @@ def _next_payload(ch, client_fn, log=print):
                 return None, None
             _change(ch["id"], lambda c: c.update(ideas=got))
             ch = get(ch["id"])
+        ch = _remix_first(ch, client_fn, log)
         idea = ch["ideas"][0]
         _change(ch["id"], lambda c: c.update(ideas=(c.get("ideas") or [])[1:]))
         if kind == "controversy":

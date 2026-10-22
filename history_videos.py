@@ -60,7 +60,9 @@ import httpx
 from pydantic import BaseModel
 
 import framed_layout as fl
+import script_craft as craft
 import short_kit as kit
+import viral_remix
 from ffmpeg_utils import LOUDNORM_FILTER, METADATA_SCRUB, escape_filter_value
 
 W, H, FPS = 1920, 1080, 30
@@ -504,8 +506,8 @@ def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_
     top videos on the topic studied and YouTube's search phrases."""
     from quiz_shorts import quiz_model
     explainer = mode == "explainer"
+    import trend_explainer as te
     if explainer:
-        import trend_explainer as te
         with ThreadPoolExecutor(max_workers=3) as pool:
             got_research = pool.submit(research_fn or research, client, topic, minutes,
                                        (te.FACTS_PROMPT, te.EXTRA_PROMPT))
@@ -530,7 +532,8 @@ def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_
             study=studied.get("notes") or "(not available)",
             rival_titles="\n".join(studied.get("titles") or []) or "(not available)",
             keywords="\n".join(phrases) or "(not available)",
-            honour=HONOUR.get(lang, HONOUR["urdu"])), model=quiz_model())
+            honour=HONOUR.get(lang, HONOUR["urdu"])) + viral_remix.note_for(topic) + "\n\n" + craft.long_rules(),
+            model=quiz_model())
         if not script.allowed:
             raise RuntimeError(f"Not made: {script.reason or 'the topic is not for this channel'}.")
         if len(script.chapters) < 2 or not script.hook:
@@ -539,7 +542,8 @@ def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_
         got = word_count(script)
         if got < words * 0.75:
             notes.append(f"The script is too short: {got} words. Write about {words} words, with more scenes.")
-        copied = te.copied_runs(_narration_text(script), studied.get("texts")) if explainer else []
+        sources_seen = (studied.get("texts") or []) + [t for t in [viral_remix.source_text(topic)] if t]
+        copied = te.copied_runs(_narration_text(script), sources_seen) if sources_seen else []
         if copied:
             notes.append("These runs of words repeat another creator's video word for word; say them in your "
                          "own words: " + "; ".join(f'"{c}"' for c in copied[:8]))

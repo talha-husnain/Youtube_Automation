@@ -50,21 +50,29 @@ def top(kind, limit=20):
             return []
     with ThreadPoolExecutor(max_workers=3) as ex:
         found = [v for got in ex.map(one, queries) for v in got]
-    seen, rows = set(), []
+    seen, rows, ids = set(), [], []
     for v in sorted(found, key=lambda v: v.get("views") or 0, reverse=True):
         if v["id"] in seen or not v.get("views"):
             continue
         seen.add(v["id"])
         rows.append((v["title"][:100], int(v["views"])))
+        ids.append(v["id"])
     if rows:
         data = _read()
-        data[kind] = {"at": int(time.time()), "rows": rows[:40]}
+        data[kind] = {"at": int(time.time()), "rows": rows[:40], "ids": ids[:40]}
         os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
         tmp = CACHE_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         os.replace(tmp, CACHE_FILE)
     return rows[:limit]
+
+
+def videos(kind, limit=20):
+    """[{"id", "title", "views"}] behind ``top`` (viral_remix studies the best of them)."""
+    rows = top(kind, limit=40)
+    ids = (_read().get(kind) or {}).get("ids") or []
+    return [{"id": i, "title": t, "views": v} for (t, v), i in zip(rows, ids)][:limit]
 
 
 RSS = "https://trends.google.com/trending/rss?geo={geo}"

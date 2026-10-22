@@ -27,6 +27,7 @@ from pydantic import BaseModel
 import cricket_shorts as cs
 import framed_layout as fl
 import history_videos as hv
+import script_craft as craft
 import short_kit as kit
 
 MIN_SOURCES = 3
@@ -151,10 +152,13 @@ def write(client, d, handle, lang="urdu", avoid=(), research_fn=None):
         story = kit.ask_json(client, Story, STORY_PROMPT.format(
             handle=handle, day_month=day_month(d), facts=facts, fixes=fixes, rules=hv.RULES, sacred=hv.SACRED,
             honour=hv.HONOUR.get(lang, hv.HONOUR["urdu"]), lang=hv.LANG_NAME.get(lang, "Roman Urdu"),
-            lang_rule=hv.LANG_RULE.get(lang, hv.LANG_RULE["urdu"])), model=quiz_model())
+            lang_rule=hv.LANG_RULE.get(lang, hv.LANG_RULE["urdu"])) + "\n\n" + craft.short_rules(),
+            model=quiz_model())
         if not story.found or not story.allowed or len(story.beats) < 3:
             raise RuntimeError(f"Not made: {story.reason or 'the facts were too thin'}.")
         story.beats = story.beats[:5]
+        if lang == "urdu":   # the polish speaks Roman Urdu; an English channel keeps the writer's lines
+            craft.polish(client, story, facts, what="\"on this day in history\" YouTube Short")
         check = kit.ask_json(client, Check, CHECK_PROMPT.format(facts=facts, script=_script(story),
                                                                 day_month=day_month(d)), model=quiz_model())
         if check.ok:

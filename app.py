@@ -3690,7 +3690,8 @@ async def my_channels_ideas(cid: str, request: Request):
     body = await request.json()
     try:
         if body.get("add"):
-            my_channels.add_idea(cid, body["add"])
+            # A pasted YouTube link is studied first (captions + one Gemini call).
+            await _in_thread(my_channels.add_idea, cid, body["add"])
         elif body.get("drop"):
             my_channels.drop_idea(cid, body["drop"])
     except ValueError as e:

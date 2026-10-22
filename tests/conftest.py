@@ -25,6 +25,10 @@ os.environ["VOICE_ENGINE"] = "gemini"   # the free voice is a network service: t
 os.environ["LOCAL_VOICE"] = "0"         # OmniVoice is installed on this laptop: a test would load the real model
 os.environ["PARALLAX"] = "0"            # so is the depth model: history render tests would run it for real
 os.environ["CUTOUT"] = "0"              # and the photo cut-out model
+# Generator tests fake kit.ask_json with their own story; a second (polish) call would get
+# that story back instead of a Doctored. test_craft turns both on with its own fakes.
+os.environ["POLISH"] = "0"
+os.environ["VIRAL_REMIX"] = "0"         # studies a real viral Short with yt-dlp + Gemini
 
 import pytest
 
@@ -73,4 +77,6 @@ def _private_channel_files(tmp_path, monkeypatch):
     monkeypatch.setattr(stock_media, "LIMITS_FILE", str(tmp_path / "stock_limits.json"))
     import free_voice
     monkeypatch.setattr(free_voice, "STATE_FILE", str(tmp_path / "free_voice.json"))
+    import viral_remix
+    monkeypatch.setattr(viral_remix, "STATE_DIR", str(tmp_path / "remix"))
     monkeypatch.setattr(free_voice, "PAUSE", 0)

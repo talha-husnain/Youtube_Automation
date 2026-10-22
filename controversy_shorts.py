@@ -31,7 +31,9 @@ from pydantic import BaseModel
 
 import cricket_shorts as cs
 import framed_layout as fl
+import script_craft as craft
 import short_kit as kit
+import viral_remix
 
 VOICE_STYLE = "like a calm, gripping documentary narrator, natural Urdu accent, serious, never mocking"
 MIN_SOURCES = 3
@@ -207,10 +209,15 @@ def write(client, topic, handle):
     fixes = ""
     for attempt in range(2):
         story = kit.ask_json(client, Story, STORY_PROMPT.format(handle=handle, topic=topic, facts=facts,
-                                                                rules=RULES, fixes=fixes), model=quiz_model())
+                                                                rules=RULES, fixes=fixes)
+                             + viral_remix.note_for(topic) + "\n\n" + craft.short_rules(), model=quiz_model())
         if not story.found or not story.allowed or len(story.beats) < 3:
             raise RuntimeError(f"Not made: {story.reason or 'the facts were too thin'}.")
         story.beats = story.beats[:6]
+        # Polished BEFORE the fairness check, so the check reads what will be voiced.
+        craft.polish(client, story, facts, what="YouTube Short that explains a controversy fairly "
+                     "(allegations stay allegations: keep every 'ilzaam' and 'reports ke mutabiq')")
+        viral_remix.guard(topic, " ".join(t for _p, t in craft.spoken(story)))
         check = kit.ask_json(client, Check, CHECK_PROMPT.format(facts=facts, script=_script(story), rules=RULES),
                              model=quiz_model())
         if check.ok:

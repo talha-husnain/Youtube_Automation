@@ -347,6 +347,12 @@ def write(client, fmt, topic, handle):
     if len(good) < f["count"]:
         raise RuntimeError(f"Only {len(good)} of the questions passed the answer check; try again.")
     quiz.questions = good[:f["count"]]
+    import script_craft
+    # Only the hook and the last line: the questions carry the checked answers.
+    script_craft.polish(client, quiz, "\n".join([quiz.title] + [q.question for q in quiz.questions]),
+                        what=f"{f['count']}-question quiz YouTube Short (the hook and the last line never reveal "
+                        "or hint at an answer; the hook dares the viewer to get them all right)",
+                        fields=("hook_line", "outro_line"))
     return quiz
 
 
