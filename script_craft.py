@@ -100,6 +100,7 @@ SHORT_CRAFT = """WRITING RULES (most viewers decide in the first 3 seconds wheth
 - The on-screen title carries the hook's promise in 3-7 words, so the Short works with the sound off.
 - End on the payoff, no outro. The question for the comments takes a one-word answer people will argue about
   ("Babar ya Kohli? Ek naam likho"), never "like aur subscribe". The last line should make a replay feel natural.
+- {persona}
 - Shape for this video: {structure}
 - Never use these stale phrases: {banned}."""
 
@@ -114,7 +115,15 @@ LONG_CRAFT = """WRITING RULES (YouTube measures the first 30 seconds as the intr
   no "it is important to note", no repeating what was just said.
 - Tell it as a story with people who want something and obstacles in their way, in plain spoken language.
 - End on the payoff; the subscribe ask is one short sentence at the very end.
+- {persona}
 - Never use these stale phrases: {banned}."""
+
+# YouTube does not monetize "AI personas" posing as experts on health, legal, finance or politics, and
+# its spam policy names AI scripts read over the same template (support.google.com/youtube/answer/1311392,
+# research of 29-oct-2026): the voice is the channel's, never a made-up person.
+PERSONA = ("The narrator is this channel, never a made-up person: never claim to be an expert, doctor, lawyer, "
+           "scholar, insider or eyewitness (no \"maine khud dekha\", no \"main ek doctor hoon\"), and never give "
+           "medical, legal or money advice; say what the sources say.")
 
 
 FIXED_ORDER = "the order given above (the first line is the hook)."
@@ -130,12 +139,28 @@ def short_rules(structure=None, exclude=()):
     STRUCTURES at random, minus the ones whose name starts with a word in ``exclude``."""
     import random
     pool = [s for s in STRUCTURES if s.split(":")[0] not in exclude] or STRUCTURES
-    return SHORT_CRAFT.format(banned=", ".join(f'"{b}"' for b in BANNED),
-                              structure=structure or random.choice(pool)) + lessons()
+    return SHORT_CRAFT.format(banned=", ".join(f'"{b}"' for b in BANNED), persona=PERSONA,
+                              structure=structure or random.choice(pool)) + lessons() + playbook() + owner_notes()
 
 
 def long_rules():
-    return LONG_CRAFT.format(banned=", ".join(f'"{b}"' for b in BANNED)) + lessons()
+    return (LONG_CRAFT.format(banned=", ".join(f'"{b}"' for b in BANNED), persona=PERSONA) + lessons() + playbook()
+            + owner_notes())
+
+
+def owner_notes():
+    """What the owner asked for when sending a video back to be made again (Studio's AI editor, "make the
+    hook stronger": OWNER_NOTES), as a last block; "" otherwise. The rules above still win."""
+    text = " ".join((os.environ.get("OWNER_NOTES") or "").split())
+    return f"\n\nThe owner watched the last version of this video and asked for this change: {text}" if text else ""
+
+
+def playbook():
+    """What wins in this channel's niche now (niche_research.playbook_text, sent as
+    NICHE_PLAYBOOK), as a block after the rules; "" until the niche has one. The rules above
+    still win: the playbook steers topic, hook shape and ending, never facts or wording."""
+    text = (os.environ.get("NICHE_PLAYBOOK") or "").strip()
+    return ("\n\n" + text) if text else ""
 
 
 def lessons():
@@ -473,21 +498,15 @@ def title_ok(new, old, facts):
 ROMAN = "Roman Urdu / Hinglish in Latin letters"
 
 
-def pick_title(client, title, facts, what="YouTube Short", language=ROMAN, rnd=None, log=print):
-    """A title tournament: 5 other angles, code drops those that break the rules or bring a number or
-    name the Short does not have, then the blind judge (shuffled, unlabelled) must prefer a survivor to
-    the first title, twice at most. The title is the one line every viewer reads before the hook."""
-    if os.environ.get("POLISH", "1") == "0" or not title:
-        return title
+def title_options(client, title, facts, what="YouTube Short", language=ROMAN):
+    """(head, tail, other titles that pass title_ok, how many were written): the tournament's
+    contenders, also offered as one-click choices in the Studio. Raises when the call fails."""
     head, tail = _title_tail(title)
     if not head:
-        return title
-    try:
-        got = kit.ask_json(client, Titles, TITLES_PROMPT.format(what=what, title=head, language=language,
-                                                                facts=(facts or "")[:4000]),
-                           model=writer_model())
-    except Exception:  # noqa: BLE001 — keep the first title
-        return title
+        return head, tail, [], 0
+    got = kit.ask_json(client, Titles, TITLES_PROMPT.format(what=what, title=head, language=language,
+                                                            facts=(facts or "")[:4000]),
+                       model=writer_model())
     room = 100 - len(tail) - 1
     seen, alive = set(), []
     for t in got.titles:
@@ -495,10 +514,25 @@ def pick_title(client, title, facts, what="YouTube Short", language=ROMAN, rnd=N
         if title_ok(t, head, facts or "") and len(t) <= room and t.lower() not in seen:
             seen.add(t.lower())
             alive.append(t)
+    return head, tail, alive, len(got.titles)
+
+
+def pick_title(client, title, facts, what="YouTube Short", language=ROMAN, rnd=None, log=print):
+    """A title tournament: 5 other angles, code drops those that break the rules or bring a number or
+    name the Short does not have, then the blind judge (shuffled, unlabelled) must prefer a survivor to
+    the first title, twice at most. The title is the one line every viewer reads before the hook."""
+    if os.environ.get("POLISH", "1") == "0" or not title:
+        return title
+    try:
+        head, tail, alive, written = title_options(client, title, facts, what, language)
+    except Exception:  # noqa: BLE001 — keep the first title
+        return title
+    if not head:
+        return title
     best = head
     for t in alive[:2]:
         if judge(client, what, "title", best, t, rnd):
             best = t
-    log(f"   🏆 Title: {len(alive)} of {len(got.titles)} other angles passed the checks; "
+    log(f"   🏆 Title: {len(alive)} of {written} other angles passed the checks; "
         + (f'"{head}" -> "{best}"' if best != head else "the first title kept."))
     return f"{best} {tail}".strip()

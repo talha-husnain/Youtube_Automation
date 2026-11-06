@@ -242,7 +242,8 @@ def round_photo(src, out_path, size, ring=10, gold=(255, 210, 63)):
 # rembg's isnet-general-use.onnx) through onnxruntime on the CPU; never rembg's default model, BRIA
 # RMBG, which is non-commercial. Kept only when the mask looks like a person: a sensible share of the
 # picture and reaching the bottom edge (a bust); otherwise the framed card as before. CUTOUT=0: never.
-CUTOUT_MODEL = os.environ.get("CUTOUT_MODEL") or r"D:\youtube\oss\models\isnet\isnet-general-use.onnx"
+CUTOUT_MODEL = os.environ.get("CUTOUT_MODEL") or os.path.join(os.path.dirname(ROOT), "oss", "models", "isnet",
+                                                              "isnet-general-use.onnx")
 _cut_session = []
 
 

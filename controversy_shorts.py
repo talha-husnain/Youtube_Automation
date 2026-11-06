@@ -254,8 +254,9 @@ def run(output_dir, pipeline):
         if k == 0:
             if photo:
                 # On frame 0, no fade from nothing: the frame the feed shows while people decide to swipe.
-                images.append({"path": photo["card"], "t0": 0.0, "t1": b, "y": 850, "zoom": 0.06, "fade_in": 0})
-                events += cs._pill(0.0, b, 1290, cs._txt(photo["info"]["player"], 26).upper(), fade_in=0)
+                images.append({"path": cs.photo_card(photo["card"]), "t0": 0.0, "t1": b, "y": cs.PHOTO_Y,
+                               "zoom": 0.06, "fade_in": 0})
+                events += cs._pill(0.0, b, cs.LABEL_Y, cs._txt(photo["info"]["player"], 26).upper(), fade_in=0)
                 images.append({"path": photo["badge"], "t0": b, "t1": body_end, "y": 200, "zoom": 0.0,
                                "x": kit.OUT_W - 150})
             else:
@@ -271,7 +272,7 @@ def run(output_dir, pipeline):
                                                                  rf"{cs._txt(story.status_line, 110)}"))
         else:
             events.append(kit.dialogue(4, a, b, "CkText", rf"{{\an5\pos({cs.CX},900)\1c{cs._c(fl.GOLD)}"
-                                                          rf"\fad(200,200)}}{cs._txt(story.question, 72)}"))
+                                                          rf"\fad(200,200)}}{cs._txt(story.question, 120)}"))
     clip = {"start": 0.0, "video_title_for_youtube_short": story.title, "viral_hook_text": story.hook_line,
             "why": f"Controversy explained: {topic}", "predicted_score": 88, "captions": kit.timed_transcript(caps),
             "genre": "controversy", "ai_voice": "AI voice", "comment_question": story.question,

@@ -434,7 +434,11 @@ never finished:
   lower-is-better (`context()` = bowling/batting/mixed, mixed keeps the
   model's call for a bare "AVERAGE"), "4/15" beats "4/22", matches played
   wins nothing; when the code changes the result the voiced verdict is
-  rewritten to match the screen.
+  rewritten to match the screen. Since 29-oct-2026 exactly 3 stats (`VS_ROWS`,
+  a longer table is cut and its verdict rewritten) and row lines name the
+  winner with one number at most: Dhoni vs Kohli read both decimals of 4 rows,
+  99 words in 45 s. Frame 0 shows the players, VS, "0 - 0" and the rows with
+  "?" values that fill in as each row is spoken (it was an empty gradient).
 - **Fast results** (`my_channels.match_watch`, cricket channel, every 2 h):
   a finished Pakistan or India match jumps the idea queue (`urgent`), is
   made even past the day's count and is scheduled 20 min after it is done.
@@ -1002,6 +1006,234 @@ never finished:
   "Wasim Akram ne 1992 final mein England ke 3 wicket kaise liye?".
 - **Wikipedia most-read** (`trends.wiki_top`, pageviews API, CC0, no key): yesterday's top English (120)
   and Hindi (30) articles go to the cricket, controversy and explainer planners (`wiki_hint`).
+- **Quality pass 3** (29-oct-2026, `tests/test_quality3.py`):
+  - A history job hung 4.5 h on one dead Gemini connection (10 CPU-seconds used): the genai
+    client had no timeout. `short_kit.http_options()` (GEMINI_TIMEOUT, 600 s) goes on every
+    generated-job client (kit.gemini, seo_copy, ai_take, caption_script); a timeout is a
+    ReadTimeout that ask_json retries. my_channels' "took too long" now calls
+    `app._cancel_job`, which kills the process TREE (`taskkill /T`): the venv python.exe is a
+    launcher and `kill()` left main.py running in the job slot.
+  - `cricket_shorts._txt` cuts between words ("7 SEPT 201", "COMMENT MEIN BAT" before);
+    closing questions take 120 characters (they wrap); fact stats 16, sized by `stat_size`.
+  - A Pixabay PNG cut-out cached as .jpg kept garbage colour under its transparent part
+    (green/magenta streaks round a statue): `stock_media._flatten` lays any see-through photo
+    on a dark ground at download (and on cache hits), `short_kit.opaque` for history pictures.
+  - Stickers work on ffmpeg 8 (no webp_anim): `stickers.as_apng` converts each Noto WebP once
+    to an .apng beside it (Pillow), read with `-f apng -ignore_loop 0`. STICKERS=0 is gone.
+  - Quiz: the countdown has a bar draining gold to red along the card's foot (animated
+    `\clip`; picture quizzes have no room for it); hook lines 3-7 words (the cold open had
+    question 1 on screen while a 12-word hook delayed it, countdown at ~12 s).
+  - autostart.bat sets PYTHONUNBUFFERED=1: server.log arrived in 8 KB lumps, minutes late.
+- **Hypit, studied not copied** (29-oct-2026): hypit-ai/hypit cloned to D:\youtube\oss\hypit (shallow, no
+  hooks; ~/.git-guard is not on this laptop). Its licence is Apache 2.0 with conditions: free for our own
+  channels, but no hosted/multi-tenant service and derivatives under the same licence, which conflicts
+  with this MIT repo and its cloud mode, so NO code of it is in here, only ideas from its playbooks
+  (skills/hypit/references). Its engine (SVML, Node 22, 64 headless Chromium) does not fit this CPU laptop.
+  - Captions grouped by meaning (`subtitles._glued`, `_TRAILING`/`_LEADING`): Urdu postpositions and
+    particles stay with the word before ("Sharma ne", "35 balls par"), names and number + unit stay whole,
+    a sentence end starts a new caption; up to 1.35x the width rather than split a phrase, else the phrase
+    moves to the next caption whole. max_chars < 6 (one-word styles) is left as it was.
+  - Cricket "top 5" countdown (`CRICKET_MODE=ranking`, idea kind `ranking`, "Top 5 ..." typed in Up next):
+    a board of 5 "?" rows on frame 0, #5 revealed first, #1 last with a gold frame and a bell; rank and
+    photo sit LEFT of each row's bar because render draws pictures under the text layer; "#1" in a title
+    becomes "No. 1" (the title cleaner strips it as a hashtag). 45-55 spoken words, ~23 s.
+    First live run (Most ODI sixes by Pakistanis, 452 s, 8 sources, all 5 photos): the hook polish and the
+    title tournament both put #1 first ("Afridi ke 351 ODI chhakke..."), as they reward the most surprising
+    number: `_spoils` (a word of #1's name or its number) puts the writer's hook / the countdown title back.
+    No stickers on the boards (`_finish(stickers=False)` for ranking and versus): a 👇 covered row 5.
+  - Viral studies carry a `timeline` (time-coded changes on screen and in sound, and what each does for
+    the viewer), passed to the niche playbook and the inspiration note.
+- **Quality pass 4** (29-oct-2026, `tests/test_creative_qa.py`, `tests/test_research.py`, `test_quality3.py`):
+  - **Visual check before upload** (`creative_qa.py`, CREATIVE_QA=0 off, `=report` records only): after
+    video_qa, one Gemini vision call sees the first frame + 12 numbered frames (Shorts sampled before
+    the 1.5 s end card, whose sliding words read as "cut off"); a video is held back only when a second
+    independent look calls the same defect "broken" (cut_text, overlap, boxes, garbage, empty_open;
+    "unreadable" never blocks). Verdicts go to state/creative_qa.jsonl; the job keeps `look`
+    ("first frame 7/10, polish 8/10"); the Sunday report has a "Looks" line per channel. Calibrated on
+    real Shorts: blocked the streaky controversy cut-out and the empty versus frame 0, passed the songs
+    and the ranking, missed one cut closing question (minor), no false block.
+  - **Audience research**: a studied viral video's top 60 comments (Data API commentThreads, 1 unit,
+    AUDIENCE_RESEARCH=0 off) go into the same watch call as data; the study keeps `audience` (what
+    commenters reacted to) and `asks` (topics they asked for), never the comments. Asks of the last 14
+    days reach the planners with our own viewers' requests, marked "(asked under a viral video in this
+    niche)".
+  - **Policy research** (web, 29-oct-2026, sources in the session): the spam policy now names "automated
+    or synthetic mass-production" with the example "the exact same background music and repetitive AI
+    generated imagery across many videos, each reading out an AI-generated script" (answer/2801973),
+    and a termination bars the owner from all their channels (answer/2802168): one channel's strike
+    risk is every channel's. Cricket, controversy and quiz had ONE music bed each under every Short:
+    `kit.music_track` now picks the least recently used (music/<kind>/.used.json) and
+    `music_beds.grow` adds a varied bed (VARIANTS of tempo/key/lead) about once a day per kind up to
+    TARGET 12. YPP's "Generic or Repetitive Content" (answer/1311392, July 2026) makes AI personas
+    posing as experts on health/legal/finance/politics non-monetizable: `script_craft.PERSONA` in
+    every Short and long prompt. Realistic synthetic death/disaster is not monetizable: history AI
+    pictures and AI thumbnails are "clearly a painting, never a photograph; no blood, bodies".
+    AI songs already carry containsSyntheticMedia (app._job_clips). The Oct 2026 Shorts update cuts
+    reach for channels that "mainly aggregate or re-upload other creators' clips" (the comedy
+    channel's model); the Quran channel's recitations are "readings of material you did not create"
+    for YPP. Metricool (2026) found 2-4 Shorts a week per channel performs best per Short; channels
+    post 2 a day (owner's call).
+- **Studio** (`studio.py`, `/api/studio/*`, dashboard tab "Studio" = `StudioTab.jsx`, `tests/test_studio.py`,
+  29-oct-2026, owner: "add studio to edit video"): every channel's recent videos still on disk (first-frame
+  posters), filters by channel and state (held for review / waiting / uploaded / failed / skipped), a player,
+  the visual check's verdict, and edits made server-side with ffmpeg in the project's file conventions, so
+  the upload needs no change (`app._canonical_clip_file` serves the newest derived file):
+  - title / description / tags into the metadata's `shorts[0]` seo fields; for an uploaded video
+    optionally pushed with `youtube_account.update_video` (videos.update, 51 units);
+  - captions: the metadata's top-level `transcript` (clip time; `kit.finish` leaves per-clip captions out
+    of `shorts`) edited line by line (same word count keeps the timings, else spread by word length) and
+    burned by `python studio.py reburn <job dir>` = `main.auto_caption_clip` in a subprocess (importing
+    main.py into the server is heavy) onto the newest clean cut; older `subtitled_` copies are removed;
+    ~26 s for a 30 s Short;
+  - trim: `recut_<ts>_<clip>.mp4` from the newest clean cut, transcript shifted, captions burned again;
+  - approve (sets `approved`: `held_for_review` lets it go), skip (`my_channels.skip`), make again (skip +
+    `_remake`). Any edit clears `qa`/`look`, so video_qa and creative_qa run again before upload.
+  Uploaded videos keep their file (YouTube cannot swap it): only details can change. Job ids are checked
+  against the uuid pattern before any path is built.
+- **AI editor** (`ai_editor.py`, `/api/studio/ai/*`, `/api/studio/upload`, Studio's "Tell the AI what to change"
+  box, `tests/test_ai_editor.py`; owner, 29-oct-2026: "not a generic editor... I give it a prompt and it does it").
+  Researched first (open-source editors, commercial ones, papers; ideas only, no code copied): video-use (MIT)
+  edit list + no cut inside a word + 30 ms fades + captions last + a frame checker; ai-video-editor (MIT)
+  revisions that never overwrite the input; Director: the model quotes words, code finds their times.
+  - One Gemini call (writer model; `AI_EDIT_MODEL`) turns the words into ops from a CLOSED list (`OPS`: cut,
+    keep, tighten, speed, zoom, text, caption_fix/style/captions/translate, music, volume, look, broll, title,
+    description, tags, remake, reframe). It sees an edit sheet (status, title, credits, edits so far, the
+    spoken words with times as the video is NOW) and, for Shorts (<= 180 s), watches a 360 px 10 fps proxy
+    (`proxy`, ~0.3 MB): the full 10-18 MB file sent inline had its connection reset on the first live run.
+  - Code resolves (`resolve`): quotes -> word times (`find_quote`, one word off allowed), cuts snapped into
+    word gaps (`_snap`), values clamped, ops impossible for this video refused with a reason (already on
+    YouTube: details only; music baked into an old Short: cannot be removed). Ops are stored in BASE time
+    and every revision re-renders from the original clean cut (`Timeline` maps base <-> output through cuts
+    and speed): no quality loss over many edits. Captions are re-burned last from the base transcript with
+    fixes / translation (cached per language) and the owner's style; sound levelled (`kit.level`).
+  - A before/after frame sheet + the request go to one vision call (`check`); a "not done" earns one re-plan
+    (`MAX_PASSES` 2). Results say what was assumed, refused and found. Live run on a real cricket Short
+    (upload): cut 1 s, yellow captions, zoom on "record" in 2 passes, 257 s; the check rightly reported the
+    captions over the video's own burned-in cards.
+  - One encode per pass: the captions are an .ass file (`caption_ass`) drawn last inside `render`'s graph.
+    The separate burn (preset medium) was about half of every pass and a second generation on the picture;
+    the same 27 s edit now renders with its captions in 29 s. Each stage line in edits/edit.log is timed.
+  - Revisions live in `<job>/edits/` (state.json, r<n>/final.mp4); the current one is published as
+    `subtitled_<ts>_ai<n>_<clip>.mp4` (newest derived file = what plays and uploads); undo/redo republishes
+    (`restore`), the metadata (transcript, seo fields) restored with it. A manual Studio edit starts a new
+    chain (`ensure_base`). Runs as `python ai_editor.py apply <job>` (server: `_ai_edits`, `_ai_edit_done`
+    re-checks QA, pushes details for a live video, remakes with notes). While it runs the job has
+    `editing_until` and `upload_waiting` skips it, urgent or not.
+  - New Shorts keep their voices without the bed (`short_kit.stem_path`, `KEEP_STEMS=0` off) so "change the
+    music" swaps the bed (mood beds made by Lyria into `music/mood_<words>/`, reused); "remake" sends the
+    topic back with the owner's notes (`_remake(notes)` -> idea `notes` -> payload `owner_notes` ->
+    `OWNER_NOTES` -> `script_craft.owner_notes()` in every Short/long prompt).
+  - Uploads: the owner's own video becomes a Studio job (`create_upload`, genre `studio_upload`, kept 7 days
+    via `.source.json` `keep_until`, listed from `state/studio_uploads.json`), transcribed by
+    `transcribe_backends` in a subprocess. **`app._queue_clips` skips `studio_upload`**: without it the main
+    channel's auto-poster would have published the owner's upload.
+- **Quality pass 5** (29-oct-2026, research + measurement):
+  - **Gemini TTS migration**: `gemini-2.5-flash-preview-tts` and `3.1-flash-tts-preview` shut down 17-nov-2026
+    (deprecations page). `ai_take.speak` now tries `gemini-3.8-flash-tts` / `-lite` first through the
+    Interactions API with the delivery in a `speech_metadata` style note (3.8 reads `text` verbatim: the old
+    call wrote the instruction into the text, which is why 3.8 read it aloud on 8-oct). Whisper + Gemini heard
+    a Roman Urdu take, a cricket line, an Urdu-script Quran line and English word for word.
+  - **Loudness**: whole Shorts measured -15 to -16 LUFS (voice lines are levelled, the pauses and bed are not)
+    and a Lyria song -10 LUFS with its true peak at 0.0 dBFS. `short_kit.level` = one ebur128 pass, one static
+    gain to -14 LUFS never past -2 dBTP, picture copied; after every render with a lead (voices or a song),
+    and on long history films. Cricket -15.4 -> -14.0, song -9.5 -> -14.1.
+  - **Colour**: renders took full-range BT.601 from JPEG photos/footage ("yuvj420p, bt470bg") or no tags.
+    `short_kit.TO_BT709` (+ `setparams`: ffmpeg 8 takes primaries/transfer from the frames, not from output
+    options) and `BT709_TAGS`: limited-range BT.709, tags survive the caption burn.
+  - **Captions sit under YouTube's own overlay** on phones (glyphs at y 1480-1660 of 1920, the title/handle
+    band; right end into the button column x > 888): moved with the card geometry, see **Look pass** below.
+- **Safety from studying two automation repos** (29-oct-2026; darkzOGx/youtube-automation-agent and
+  raunakpatil/youtube-agentic-ai-studio, both MIT, ideas only):
+  - Edited descriptions keep every credit block (`studio.keep_credits` / `credit_blocks`, `CREDIT_START`):
+    CC BY credits, Commons pictures, maps, stickers, stock footage, sources, Quran.com. Used by the manual save
+    and the AI editor; the body is cut, never the credits, at 5,000 bytes.
+  - No duplicate uploads: an upload whose end we never heard is `unknown` (session URL + size kept), and the
+    next `youtube_account.upload` of that file asks the session first (`_unfinished`): done -> that video id,
+    partial -> resumed, expired -> a fresh upload; still offline -> stays unknown, nothing new sent.
+  - Auto replies: comments are data, replies use only facts from the title or the comment, and a comment
+    saying a fact is wrong gets no reply (`Reply.correction`, `engage.corrections`, shown on Today).
+  - Same-age views: `learn` keeps `views_48h` (first pass at 48-72 h); format picks, A/B tests, the hour tip
+    and best/worst lists compare it; Today's median stays lifetime views.
+- The desktop sidebar scrolls (`App.jsx` nav `min-h-0 overflow-y-auto`): inside the overflow-hidden shell
+  the last tabs were cut off on a laptop screen (owner, 29-oct-2026); checked by a CDP mouse wheel at 600 px.
+- **Look pass** (29-oct-2026, `tests/test_look.py`; owner: the videos "are not that good"):
+  - **Captions out of YouTube's overlay.** Real Shorts had caption glyphs at y 1500-1650 (1876 when a block
+    wrapped), under the title/channel/subscribe row that covers a phone's bottom quarter, and lines to x 1022,
+    under the like/comment column (x > 888). Generated Shorts caption with `subtitles.SHORTS_CAPTION_STYLE`
+    (`auto_caption_style()`: where CAPTION_EMPHASIS=1, i.e. short_kit.finish and studio's reburn; CAPTION_SAFE=0
+    off; comedy untouched): font 38, ONE line inside x 48-888 (`box`), centred on 540 when it fits 192-888, else
+    moved left just enough (per-event margins). Blocks are cut by measured width, the pop included (`text_px`:
+    libass sizes a font by OS/2 usWinAscent+usWinDescent, 1.73 em for Anton, not PIL's hhea metrics), so
+    libass never wraps one; a lone too-wide word is drawn smaller on the same baseline. `CAPTION_TOP_PX` 1430
+    -> 1206: over every frame of a long track drawn by libass the glyphs (outline in) stay in y 1238-1433,
+    x 65-880. Centred 192-888 at font 40 came first: "MAXWELL T20I" needs 777 px, captions went one word a time.
+  - Above them everything ends by `cricket_shorts.BOARD_END` 1232: fact card 790 -> 672 tall, versus rows from
+    970, ranking rows 613 + 140k with values ending at x 876 (they sat under the like button), the opening photo
+    card at 88% centred 800 with its name pill across its bottom edge, a hidden player's name on the card's foot.
+    Stickers moved to the top-left corner (y 1290 is the caption band now and cards draw over stickers). Song
+    lyrics wrap inside x 192-888 (event margins), the follow line at 1400 (was 1640). Quiz was already clear.
+  - **Cricket footage that passes.** 40 of 46 cricket renders kept the gradient (server.log): the libraries hold
+    little cricket and the rule allowed cricket only. `stock_media.pool(kind)` (POOL_TERMS, cricket only): 7 broad
+    searches once a day through `search()` (its cache, rests, caps), kept 7 days, each clip tagged once by a
+    vision call that also reads its library tags / file name (kind / atmosphere / reject); other sports and the
+    insect are rejected in code first (POOL_NEVER), flags, text on shirts, named players and paintings by the
+    prompt. The picker sees 10 pool clips as "general" for every line; lines still empty get unused pool clips
+    (used longest ago first) before the 50% floor drops the footage. CRICKET_FOOTAGE takes neutral atmosphere
+    (lights, crowds, grass, trophies), never another sport. Same lines of two real cricket Shorts: old step 1/5
+    and 0/7 (both stayed on the gradient), new 5/5 and 7/7 (4 and 5 from the pool). With only a Pixabay key
+    the pool is mostly photos: 2 of 33 videos passed (insects, soccer, bats, streets); a Pexels key would add
+    portrait video. The pool alone may take landscape 4K cropped to 9:16 (1215x2160, never enlarged), only
+    files Pixabay says are <= STOCK_CROP_MB (25): its 4K ran 1.7-148 MB, downloads here 50 KB/s that night.
+  - Candidates are full HD first (720p only to fill), only enlarged clips are sharpened (`broll.upscaled`),
+    and a line without a clip borrows the least-used clip, not its neighbour's (`broll.borrow`; was a,a,a,b,b).
+  - **Footage that shows.** Over footage the fact cards are glass: `cricket_shorts.panel` names the panel
+    "frost x y w h r", `_finish` sends `frost_boxes(events)` to broll, which blurs the footage under each card
+    inside the shot encode (boxblur through a rounded mask, clearing in as the card lands), and `glass()` makes
+    the panel 54% opaque (was 81%). `broll.DIM` -0.10 -> -0.04; the title and small labels get a dark outline
+    over footage (`outlined`: the title nearly vanished on a white trophy photo). The gradient look is unchanged.
+  - Captions: "Dr.", "vs.", "etc.", initials ("M.S.") and "No." before a number no longer end a caption
+    (`subtitles._ends_sentence`; the name after "Dr." gets its colour too), and the active word's pop settles
+    back to 100% (`\t(110,200,...)`; it stayed at 108% while the word was said).
+- **Title ideas in Studio** (`POST /api/studio/video/{id}/titles`, declared before `{action}`, which would take
+  "titles"): `studio.title_options` = the title tournament's contenders that pass `title_ok`
+  (`script_craft.title_options`, also used by `pick_title`) + YouTube autocomplete for the topic's first 2 and 4
+  words; chips fill the title, search phrases add a tag, nothing saves until "save". A live checklist under the
+  fields: title 25-70 characters, no shouting words, description 150+ words, at most 15 hashtags (past that
+  YouTube ignores them all), tags within 500 characters.
+- **Money channel in motion graphics** (`money_shorts.py`, `motion_scenes.py`, channel kind / genre `money`,
+  `tests/test_money.py`; owner, 29-oct-2026: "research the most viral content of a niche, script it, make
+  motion graphics and voice it"). Research that day: money told as stories (prices then and now, salaries at
+  home and in the Gulf, company blunders, who earns what) leads the narrated viral Shorts with a number in the
+  title and first line; finance has the highest ad rates; no faceless Roman-Urdu channel does it. YPP does not
+  monetise "content that looks like it's made with a template": every video is its own researched story, the
+  templates only draw it, a colour set per topic (`palette_for`) and a writing shape per video.
+  - Drawn as ASS vector events through `short_kit.render`, like the cricket boards: libass drew a frame of 10
+    growing bars + a counter in 34 ms here, Pillow anti-aliased 656 ms, matplotlib 486 ms; headless-browser
+    renderers do worst on this CPU (and Remotion's licence does not fit MIT). Templates: `big_number` (count-up,
+    a comparison and code's ratio), `versus` (bars from the foot, code picks the winner), `bars`, `timeline`
+    (area + line revealed by an animated `\clip`), `list` (#n..#1, a bell on #1), `grid` (out of 100), `fact`
+    (a stamp). Hook number + hook words on frame 0, the biggest number last under turning rays, a source line
+    per scene. Everything ends above `cricket_shorts.BOARD_END`. Drawings start at (0, 0) and are placed by
+    their box: libass aligns a drawing by its bounding box. A waiting bar at 1% width showed as a sliver: a bar
+    appears when it starts to grow. Flags (`flags.fetch`, public domain) are pictures, drawn UNDER every ASS
+    layer, so no track or panel sits over a flag's spot. 44 s of all templates rendered in 45 s.
+  - The number gate (`validate`): every number on screen and in the voice must be in the grounded research
+    (`figures` reads "2.3 arab"/"$2.3B"/"1,20,000"; a scaled number matches only as scaled, so "23 crore" is
+    not supported by some 23 percent; "$38B" is an honest rounding of $38.3 billion); ratios, changes and gaps
+    between years come from code (`derived`, only from numbers that passed). A scene is dropped when its items
+    are not one measure in one currency (`motion_scenes.comparable`: never Rs against AED, never Pakistani
+    against Indian rupees; a first preview called Rs 45,000 vs AED 2,500 "18x"). Then one fact-check call (net
+    worth told as income, an old price as today's); one rewrite with the notes, then no video.
+  - Pure motion graphics: the job sets `STOCK_FOOTAGE=0` in its own process. Beds: `music_beds` kind "money".
+    Wired into my_channels (planner, end-card A/B, About text), engage (comments, replies that never give
+    advice: `MONEY_EXTRA`), niche_research / trends / viral_remix queries, localize, category 27.
+- **An outage no longer loses a planned idea**: a planned idea leaves the queue when its job starts, so a job
+  that failed on the network, the quota or a server restart (`transient`), or never started, lost its topic: an
+  urgent match result, the owner's own idea, one part of a history series. Jobs keep their `idea` and
+  `my_channels._requeue` puts it back after any urgent ideas, at most `REQUEUE_MAX` (2) times. A long video's
+  next try also skips what the failed one paid for: `history_videos` keeps the researched, fact-checked and
+  titled script in `state/resume/<hash of topic, minutes, language, mode, series, owner notes>.json` for
+  `RESUME_HOURS` (48) and starts at the voice; a finished video deletes it, so "make again" writes anew.
 - **Cricket birthdays**: the planner may plan "<player>'s birthday" for a
   player born today; `cricket_shorts.birthday_ok` keeps it only when the
   Wikipedia intro's "(born 15 October 1994)" matches (`player_photo.born`).
@@ -1027,8 +1259,273 @@ never finished:
   from the working folder ("not recognized"), so pass its full path, and launch it through a
   separate `powershell.exe -File` script (processes started straight from the tool's shell can
   stop when the command ends).
+- **Lives on the internal disk at `D:\Shortkaar`** (4-nov-2026; `Automate\`, `oss\`, `MoneyPrinterTurbo\`).
+  F: was an external USB disk that dropped off and was not mounted at login, so Shortkaar never started at
+  boot; the old Startup shortcut was gone too. `oss/` tools are found next to the project folder (every
+  default is `<project>/../oss/...`, env overrides kept), never by drive letter. The Startup folder's
+  `Shortkaar.lnk` runs `D:\Shortkaar\Automate\autostart.bat` minimised. F:\youtube is an old copy, and
+  D:\youtube is a junction to it, unused now.
 - Before starting uvicorn, check :8000: a server from an earlier session may
   still answer with old app.py code (job subprocesses load new code anyway).
+- **Boot + speed + quality pass** (4-nov-2026, `tests/test_boot.py`, `test_qsv_and_grain.py`,
+  `test_parallax_cache.py`; research notes in `docs/research-2026-11-04/free-upgrades.md`):
+  - The moved venvs' `Scripts\*.exe` (pip, pytest, edge-tts... 171 in 4 venvs) still started
+    `D:\youtube\...\python.exe` = the F: copy: `pip install` went into the OLD venv. `ops/fix_venv_paths.py`
+    (run with the venv's own python) rebuilds them from entry points; run it after any move.
+  - **Never edit autostart.bat while its watchdog runs**: cmd reads a running batch file by byte offset, so
+    the waiting `autostart.bat watch` resumes mid-line in the new file. Kill that cmd (found by command line)
+    and start autostart.bat again. The watchdog now: sets `SHORTKAAR_RESTART=watchdog` for a restart (the
+    server then toasts/Telegrams "it had stopped", `restart_notice.py`, once an hour), says "down" after 3
+    misses in a row (~15 min, the case where the server cannot start at all), refuses a port 8000 held by
+    another program (`ops/port_check.ps1`; Docker Desktop starts at login and docker-compose.yml publishes
+    8000 with restart: unless-stopped) and rotates server.log past 50 MB. `%~z1` of a missing file is empty
+    and made the size comparison a syntax error: check `if not exist` first.
+  - `KEEP_AWAKE=charger` (owner's .env; code default unchanged): the laptop is Modern Standby only (no S3,
+    RTC wake timers off), so between jobs it dozed and every loop froze. `heartbeat.py` pings
+    `HEALTHCHECK_URL` (off when unset) while both loops' `last_tick` are fresh.
+  - **Intel Quick Sync** (`FFMPEG_ENCODER=qsv`, also tried by `auto` after nvenc): the Iris Xe does h264/hevc
+    (no AV1). Look-ahead ICQ 20 matched x264 medium CRF 18 within 0.1 VMAF at 3.6-4.6x the speed (table in
+    ffmpeg_utils). A late `-pix_fmt yuv420p` from a caller just warns and uses nv12; BT.709 tags survive.
+    short_kit's fast render uses the new INTERMEDIATE tier (= FAST_PASS on x264). The hardcoded libx264 sites
+    (history shots, broll, parallax, long_video joins...) are unchanged.
+  - Gradient banding: CAMBI (`libvmaf=feature=name=cambi`, same file as both inputs) 0.9-17.6 on short_kit's
+    gradient (it varies: `gradients` picks random points; tests pass `seed=`); a FIXED grain
+    (`noise=alls=2`, no allf=t) -> 0.00, also after a 2.5 Mbps re-encode. `GRADIENT_GRAIN=0` off.
+  - parallax lost its depth effect on every cache hit: the .depth.npy is float16 and cv2.remap has no float16
+    kernel (`ifunc != 0`, imgwarp.cpp); only first-seen pictures moved.
+  - The OmniVoice model was missing from every disk (the user-profile HF cache was recreated 28-oct) and
+    every local-voice line went to Gemini. Its cache is now `oss/hf` (`local_voice.HF_DIR`, used when the
+    folder exists and HF_HOME is unset).
+- **AI editor, stronger** (4-nov-2026, `tests/test_ai_editor_plus.py`, `tests/test_phone_edit.py`; owner: "make it
+  more strong and better"). Tested live on sandbox copies (`studio.OUTPUT_DIR` redirected: a copy in output/
+  could be queued and uploaded) with real Gemini calls:
+  - New ops: `bleep` (beep or mute words), `blur` (box 0-1000 from the watched proxy, or a named spot; pixelate),
+    `sfx` (whoosh = the Kenney files, pop/ding/boom/click/rise/scratch synthesised by aevalsrc), `sticker` (Noto
+    via `stickers.overlay_args`, `alive_until=D`), `clean_audio` (highpass + afftdn tn=1 + gentle compressor),
+    `fade`, `undo` (typed: last or all; later versions stay to redo), `text` colour/size, and `speed` on ONE
+    stretch. `Timeline` is now pieces (a, b, factor): cuts, whole-video speed and a slow-motion stretch are one
+    thing; render trims each piece with setpts/atempo (atempo < 0.5 is chained). Footage covers every piece of a
+    stretch (it used to `break` after the first). Renders use `video_encode_args(INTERMEDIATE)` (Quick Sync).
+  - Found live and fixed: `sine=` is made at amplitude 1/8 (the beep came out 13 dB under the speech); the planner
+    sends a sound "at the start" as start=0/end=0 (both sounds dropped as "not found") and a sticker "there too"
+    with no moment (it now inherits the previous op's moment); the planner blurred the channel's OWN handle for
+    "another channel's logo" (the sheet lists OUR OWN BRANDING from frame.json + the card); an audio-only edit
+    after a blur went to the frame check, which said "cannot be seen" and forced a second render (only THIS
+    request's `VISIBLE_OPS` are checked); the planner's proxy encodes ultrafast. Quotes match spoken variants
+    (`_same`: records/record, 15,000/15000, Roman spellings).
+  - **Comedy (main pipeline) jobs are refused**: their metadata `transcript` is the WHOLE source (source seconds,
+    Devanagari) while the captions are Roman Urdu per clip, so the editor read the wrong words and burned another
+    part of the show; that transcript also serves the job's other clips. They are not in Studio anyway (the main
+    channel is not a card); bringing them in needs per-clip, multi-clip support.
+  - `ai_editor.suggest` + `POST /api/studio/ai/{id}/suggest` + Studio's "Suggest edits": one call watches the video
+    and proposes 3-5 instructions in the owner's language, cached in edits/suggest.json until the file changes.
+  - **Editing from the phone**: review notes carry `ref <job id>` and a hint; `telegram_notify.poll(on_text=)`
+    hands the owner's text REPLIES to `my_channels.telegram_reply`, which starts the edit through
+    `start_ai_edit` (= `app._phone_ai_edit`: the poll runs in an executor thread, so the start is scheduled on
+    `_main_loop`); `_ai_edit_done` sends the new video back (`send_video`, under 50 MB) with the ref again, so
+    replies chain. "suggest" as the reply sends the suggestions as one-per-row buttons (`ed:<job>:<n>`).
+  - A plan once degenerated into 62,000 characters of "000..." in a number (7 minutes, cut at the output
+    limit, the whole edit lost): `short_kit.ask_json(max_tokens=, invalid_tries=)` (opt-in; defaults unchanged)
+    caps and re-asks, and a failed second pass keeps the first version.
+- **Found in server.log, fixed** (4-nov-2026, tests in `test_boot.py`):
+  - 33 `open()` of job files in app.py had no encoding: studio._write / ai_editor keep Urdu and emoji as UTF-8,
+    so every Studio-edited job read as cp1252 failed ("Could not recover job ...: 'charmap' codec", 15 times;
+    the edit/subtitle/hook endpoints too). All UTF-8 now (the pipeline's own ASCII JSON reads the same).
+    A regex patch first turned the `'w'` opens into `open(x, 'w', 'r', ...)`: review every line a bulk patch touches.
+  - History teaser / moment Shorts passed their long video's pictures as `output\<long>\.hv_pics\...` (app's
+    OUTPUT_DIR is relative), but broll runs ffmpeg inside the teaser's folder: "footage shot failed". Absolute
+    paths there, and `broll._located` resolves any project-relative path.
+  - OmniVoice re-downloaded into `oss/hf` (xet transfer stalled here: `HF_HUB_DISABLE_XET=1`); one Urdu line
+    through `local_voice.speak_many` came back word for word through Whisper.
+- **The main comedy channel in Studio** (4-nov-2026, `tests/test_comedy_studio.py`; owner: "make it more powerful"):
+  - A Studio id is `<job id>` or `<job id>.<n>` (`studio.REF`, `split_ref`, `ref_of`; `.1` = the job id): each clip
+    of a comedy job (3 per show) is its own Studio video. Routes, the dashboard and the phone's `ref` carry it as is.
+    `studio.videos(main=app._queue_clips())` lists them with post-queue states (ready=waiting, posted=uploaded,
+    skipped); skip / approve ("put back") act on `post_queue`; no remake.
+  - `studio.shares_transcript` / `clip_transcript`: a comedy job's transcript is the WHOLE show (source seconds); a
+    clip reads the words that overlap it, moved to 0 (as its captions were made). The AI editor's base is that
+    slice; `_publish` never writes the shared transcript nor the clip's start/end (only `seconds`; `_job_clips`
+    prefers it). Edit chains: `edits/` for clip 1, `edits_clip<n>/` (`ae.edits_name`).
+  - Manual trim / caption save are refused for shared clips: they rewrite the shared words and `studio._reburn_here`
+    deletes EVERY `subtitled_*` of the folder (the other clips' too). The AI box does both.
+  - The comedy genre lives in `.source.json`, not the metadata: the editor read "" and would have drawn the Shorts'
+    emphasis captions instead of the comedy look (`ctx["genre"]` reads both now).
+  - A main clip being AI-edited carries `editing_until` in post_queue; `post_queue.plan` marks it `editing` and
+    `_auto_post_ready` / post-all skip it. Live on a sandbox copy of a real show: clip 3 "pehle 1 second kaato aur
+    captions peele karo", 75 s with one re-plan from the frame check; clips 1-2 and the transcript byte-identical.
+- **Mood playlists on the song channel** (5-nov-2026, `music_moods.py`, `tests/test_music_moods.py`; owner: "sad
+  song, romantic song, workout song, gym song"): MOODS sad / romantic / workout (upbeat cardio) / gym (phonk, trap) /
+  chill / party, each with its playlist title, styles (all in `music_shorts.STYLES`; "gym phonk" and "aggressive trap
+  anthem" added), themes and a brief for the song writer (`music_shorts.plan(brief=)`, env MUSIC_MOOD/MUSIC_BRIEF).
+  The card's `ch["moods"]` = {off, often (1/2/4), custom (name, sound, themes; up to 8)}; `pick` takes the mood
+  furthest below its share of the last 30 songs (`DEFAULT_OFTEN`: sad and romantic start at "more", so love songs
+  stay ~half, the 19-oct LOVE_SHARE finding; `pick_theme` only runs with every mood off); `next_mood` (Channels card "make one now", `/make {"mood"}`;
+  queued while a song is being made) wins once and is cleared by `make_one`. Within a mood `pick_format` still
+  learns the best style. Jobs and upload rows carry `mood`; `engage._mood_playlists` files EVERY song (old ones by
+  `infer` from style + theme: 46 of the 47 songs on the channel) into its mood playlist, `MOOD_PER_PASS` (10) a
+  pass, marked in engage.json `mood_playlisted`; "New AI songs" stays the all-songs list. Live plans: gym came
+  back as 145 BPM phonk with distorted 808 and cowbell, romantic as 72 BPM slow pop.
+- **Round of 5-nov-2026 (owner: "go ahead and do these all in detail"; research in
+  `docs/research-2026-11-05/channels-and-features.md`)**:
+  - **Horror channel** = the long channel's third mode (`LONG_MODES` "horror", `horror_stories.py`,
+    `tests/test_horror.py`): original fiction, no web research; a story check (rules, retold films, plot holes) gets one
+    rewrite. Pictures: no Wikipedia; the hook and chapter openers are AI paintings (`HORROR_AI_IMAGES` 14, even where
+    footage exists), dark stock footage between, one cold grade on both (`history_videos.mode_grade`); voice Algenib
+    with a slow style; a low sting per card; music_beds kind "horror"; red thumbnail text; "fiction" note in every
+    description; title keeps "Horror Story in Urdu" (`search_title`: the title tournament dropped it). Uploads are
+    Entertainment (`CATEGORY` "horror"/"horror_teaser" 24, `LONG_GENRES`); watch_next/series links accept both
+    genres. Pace MEASURED: one test line read at 86 wpm but a whole story at 160, so `WPM` 150 (planned at 90 a
+    "14-minute" story came out ~7). Safety net for every long video: `fit_voices` speeds the narration (atempo, at most
+    1.15x) when a <=14-min video would pass 14:45 (YouTube refuses >15:00 from unverified channels). Live 3-min run in
+    the sandbox: 18.7 min to make, -14.1 LUFS.
+  - Latent bug fixed: `segment_video` imported broll only in its motion branch but used `broll.grade()` in both.
+  - **Mood mixes** (`mood_mix.py`, `tests/test_mood_mix.py`): every finished song is archived whole with its timed
+    lyrics and a still (`music_moods.archive_song`, state/songs/<job>/, 120 days). `next_mix`: at most `mixes` a week
+    (default 1; 0 off), a day after a failed try; a song mood is ready with 8 uploaded songs never mixed; study and
+    sleep are MIX-ONLY instrumental moods (never Shorts, `song_moods`) whose tracks Lyria makes in the job up to
+    `mix_minutes` / `mix_budget` (~$0.08 a track, default $1.50). A mix is an EXTRA_FORMAT job (on top of the day's
+    Shorts), `MIX_TIMEOUT` 150 min, uploads as `music_mix` (Music, long), lyric-video chapters with a wave line, the
+    mood's painting for songs without a picture. Chapter stills are composed once by PIL (`backdrop`): blurring every
+    frame in ffmpeg took 7 min for a 3-min mix. `/api/process` keeps only song folders inside the archive.
+    Old song tests turn mixes off: a new music card's first job is otherwise the weekly study mix.
+  - **Duplicate songs** (`audio_dedupe.py`, Chromaprint `fpcalc` 1.5.1 in `oss/chromaprint/`): the Short's audio is
+    fingerprinted before upload and compared (best shift, popcount table: 39 ms a pair) with the channel's uploaded
+    songs; >= 0.80 is skipped. Live: the same song re-encoded and cut 5 s later 0.944, other songs 0.57-0.61.
+  - **YouTube's numbers** (`yt_insights.py`, `tests/test_insights.py`), checked live read-only: the retention curve
+    (the music channel's top Short: half gone by 0:07.9, a 26% drop at 0:04.7), real search terms ("long distance
+    song", "razia sultana"), creatorContentType comes back as "shorts"/"videoOnDemand" (NOT the documented SHORTS),
+    the Reporting API is on in the project. learn: curves for 6 videos a pass (`_insights`), the channel's
+    `retention_lesson` + search words into `hook_text` (the writers) and the AI editor's sheet and suggestions;
+    Studio's "On YouTube" panel (`studio.insights`: drops with the words said, search terms as tag chips); the week
+    report ends with the 2027 YPP targets (`reminders.ypp_lines`); thumbnail reach (Reporting API
+    channel_reach_basic_a1, daily) feeds the "thumb" A/B test (text left/right, metric ctr, `HISTORY_THUMB`).
+  - `MAX_CHANNELS` 6 -> 8 for the horror ("Raat Ki Kahaniyan": a history card in horror mode, 1 a day, 20 min,
+    capped at 14 until verified) and money ("Paisa Kahani") cards: the six cards had kept the laptop busy ~4 h of 24.
+  - **Podcasts** (`engage.podcasts`, switch "podcasts", long kinds only): a 1400x1400 cover (playlistImages.insert,
+    type "hero", upload URL /upload/youtube/v3/playlistImages) then playlists.update podcastStatus "enabled"; never
+    the 60-second lists; a failure waits a week.
+- **Channel hand-over** (5-nov-2026, `my_channels.hand_over`, POST `/api/my-channels/{cid}/take-over {"from"}`,
+  "or use the channel of" on an unconnected card, `tests/test_channel_handover.py`; owner: no Google accounts left
+  for new channels, "remove 2 least performing channel"). The new card takes the token; the old card's record,
+  uploads log, engagement state and kit MOVE to `state/retired/<old>-<time>/` (remove() would rmtree them). The
+  new card keeps its own empty uploads log (numbers, A/B tests, replies and playlists start from its own videos)
+  and drops about_credit/last_learn/long_uploads, so its first learn pass replaces the About text with its own
+  ABOUT (`add_to_channel_about(replace=, backup=)`, old text in the card folder). Name, handle and picture have no
+  API: the card tells the owner what to rename in Studio. Done that day after measuring all six (3 weeks, ~45
+  videos each): quiz median 1 view, history/explainer 0 in its last week, cricket's last week median ~1,000; Quran
+  kept (3 uploads in 14 days is too few to judge). Sawal Paheli -> Paisa Kahani (money), Tareekh History -> Raat Ki
+  Kahaniyan (horror). Old videos stay public until the owner decides.
+- **Few Instagram accounts** (5-nov-2026, `meta_publish.IG_RAMP` / `ig_cap` / `_ig_ready`, `my_channels.meta_ig_mode`
+  / `meta_score`). Every Instagram account starts slow: 1 Reel a day for 7 days from our first Reel on it, 2 until
+  day 14, then IG_DAILY 3 (state/meta/accounts.json). Cards that share one Page/Instagram ("auto" mode) send only
+  YouTube winners there: judged 24 h after the YouTube time, views >= max(20, 1.5 x the channel median), the best
+  ratio first, given up at 72 h ("skipped" with why). Facebook Pages take every Short (one Facebook profile owns
+  any number of Pages, no new email). Also fixed: a finished item's "done" was rewritten every pass (nothing ever
+  left the queue), and a Short queued during a pass was lost when the pass saved. Meta was never connected yet
+  (no META_APP_ID), so neither had bitten.
+- **Teardown** (5-nov-2026, `teardown.py`, `tests/test_teardown.py`; owner shared the REA reverse-engineering repo,
+  "see how we can reverse engineer something and make our system better"). REA itself (an MCP for binaries, apps,
+  websites; "software you own or are authorized to examine") was NOT installed: our rivals are videos, and taking
+  YouTube Studio's private calls apart would break YouTube's terms. Its idea was applied to videos: the research
+  pass fetches 2 studied winners a day (yt-dlp with `yt_clients.fallback_extractor_args`; format 18 alone was
+  "not available" and default/mweb alone 403'd), measures them and up to 3 of ours still on disk
+  (`recent_files`), each in its own process (Whisper "small", the cached model; "base" was a 150 MB download):
+  first cut, median shot, cuts/10 s, first word, words/s, words in 3 s, first-frame light, loop. `compare` keeps
+  gaps over a floor and 25%, with >= 4 winners and 3 of ours; `measured_text` heads `playbook_text`
+  (NICHE_PLAYBOOK now 2700). First numbers: our cricket Short first cut 4.1 s, shot 2.5 s, 2.8 words/s; a 4.3M-view
+  cricket winner first cut 6.3 s, shot 3.0 s, talking 93%. "pace" A/B (cricket, controversy, music): the winners'
+  shot scaled to our cut (`pace_cut`, 1.5-4 s, only when 15%+ apart) as BROLL_CUT -> `broll.cut_seconds`.
+  TEARDOWN=0 in the tests.
+- **Second REA pass, same day** (owner: "take all the good things", "make it easier for me", "go ahead"):
+  - **Channel doctor** (`channel_doctor.py`, `tests/test_channel_doctor.py`, summary()["doctor"], "What holds it
+    back" on each card): REA's investigation ledger on a channel. Fixed checks (connection, posting vs plan, reach
+    last week vs the two before, watch share + half_at, formats, posting hour = time_tip, A/B tests, measured niche
+    gaps with the winners as evidence links, search, and for long kinds clicks/length/verified); status problem /
+    tip / unknown / info / good, problems first; "next" says what the system already does. Its first run found: a
+    4-day outage (30 Oct-3 Nov: nothing in server.log; the Startup shortcut pointed elsewhere until 4 Nov; Windows
+    crash 30 Oct 03:13), the first study mix failing, Quran stuck, and the search-word leak below.
+  - **mood_mix.segment** takes absolute paths: ffmpeg runs in job_dir and the server's job folders are relative,
+    so the first live mix failed "Could not create a libass track" (the same class as the Quran mix on 23 Oct;
+    the rest of the cwd= calls use bare names). The render test now runs from a relative folder and was shown to
+    fail on the old code (mutant loaded as `mood_mix` through sys.modules: conftest puts ROOT first on sys.path).
+  - **Quran first frame**: the first background shot no longer fades in and the title card starts at 0 (fade
+    (0, 300)): frame 0 was black but for the handle and video_qa refused Yaseen part 2 three times; 36:13-22 was
+    queued again first through the card's ideas.
+  - **Search words after a hand-over**: `_insights` reads search_terms(days=days since the hand-over), none in the
+    first 2 days (the money card heard the quiz channel's "mushkil paheliyan").
+  - **Old videos private** (`hide_retired`, update(hide_old=True), the card's button): the retired log's done
+    uploads and its engage playlists (`ya.playlist_private`, snippet sent back) set private, HIDE_PER_PASS 15
+    every 10 min while the day's quota is under HIDE_CEILING 6000; done ids in the archive's hidden.json. Never a
+    row with "elsewhere" or another yt_channel; a 403 is "not this channel's" and not tried again.
+  - **An uploads-log row's "id" is OUR 12-character row id; YouTube's is "video_id" (11).** The first live hide
+    pass asked YouTube for 30 row ids, found nothing and marked them "gone" (nothing changed on YouTube); the
+    tests had used "id" as the video too, so they passed. hide_retired, recent_files and the doctor's evidence
+    use video_id now, hidden.json keeps only 11-character keys, update(hide_old=True) re-arms a finished pass,
+    and the tests' rows carry both ids (`V()` in test_channel_handover).
+  - **Horror shots that the grade turns black** (`history_videos._shot_tries`, `too_dark`, horror_stories.GRADE_LIFT):
+    the first live story was refused for "6 s of black picture" (chapter cards are 2.6 s of near-black under the
+    grade, plus a night shot after one). In horror mode every shot is measured (video_qa's detector at 1.5 s) and
+    made again with GRADE_LIFT, then without the horror grade. 0x282828 is black under GRADE, fine lifted.
+  - **Teardown on a busy laptop**: measurements run BELOW_NORMAL_PRIORITY_CLASS; a timeout raises `Busy`, which
+    ends the pass without marking the video failed (and old "TimeoutExpired" failures are measured again).
+  - **Meta made easy**: keys pasted in the dashboard (`save_keys`: format check, client_credentials app token
+    check, `.env` + os.environ, `write_env` refuses the real .env under pytest), META_CONFIG_ID -> `config_id`
+    in the dialog (Facebook Login for Business uses a configuration, not scope), `refresh_pages`, `check`
+    (Page token + content_publishing_limit, posts nothing), `use_redirect_host` (localhost / 127.0.0.1). One
+    Instagram per Page and one Page per Instagram, so a card has `meta_page` (Facebook) and `meta_ig_page` (whose
+    Instagram); queue items carry `ig_page`. `auto_link` after connect: Page by name (card name / YouTube title,
+    `page_for`), Instagram by IG_GROUPS (cricket alone; controversy, money, history/horror share; music and quran
+    Facebook only), owner choices kept. Setup guide for the owner: https://claude.ai/artifact/RDeepUwMHtaGfzbnabLDn4
+- **Cartoon channel "Billo aur Gang"** (`toon_shorts.py`, kind/genre `toons`, `tests/test_toons.py`; owner, 5-nov-2026:
+  "cartoons, baby talking, animal talking ... with a strong script"). Research: AI pet micro-dramas (stitched AI
+  pictures, under a minute, twist or cliffhanger) are the format of 2025-26; YouTube's July 2026 "inauthentic
+  content" clarification refuses templated repeats and "animals in exaggerated distress or peril"; animation is not
+  "made for kids" by itself (FTC factors). So: one fixed cast (`CAST`: Billo cat, Sheru dog, Mithu parrot, baby
+  Guddu who talks like an old uncle, Ammi heard off screen), one house (`PLACES`), a comic engine per episode
+  (`SHAPES`, never the last three), grown-up home comedy, never suffering (`RULES`).
+  - Writers' room: 2 drafts (two shapes, in parallel) -> code gates (`problems`: lines, words, hook, every speaker
+    in their shot, Latin, stale phrases) -> judge -> punch-up (kept only if it still passes) -> safety check (one
+    rewrite). `channel_ideas` drops premises too close to old ones (word Jaccard 0.5) and plans one idea in four as
+    a TWO-PART story: part 1 ends on a cliffhanger ("PART 2 JALD!"), part 2 opens on part 1's last lines
+    (`series_part`, from series.json "ending"); uploads link the parts (`history_videos.series_rows(genres=)`).
+  - Talking without a lip-sync model: each shot is one picture with mouths closed; the image model edits ONLY the
+    speaker's mouth open (and the eyes shut for blinks); `mask_of` = the changed blob (median diff <= 12, 0.02-6% of
+    the picture, centroid on the character's side) laid over the closed picture when the voice is loud (`flaps`,
+    held 2 frames). The picture check (`look_check`, one vision call) found open mouths in 4 of 5 first shots: those
+    get a close-mouths EDIT (`close_mouths`), only other problems are redrawn. Camera: push-in, lean to the speaker,
+    punch on the punchline, depth parallax (`DEPTH_AMP`, parallax.depth_of; TOON_PARALLAX=0). Real-ESRGAN anime x2.
+  - Voices: 4 Urdu edge voices pitched apart (free_voice.speak `pitch`, `edge_voice` on the item); a line that fell
+    to the local/Gemini voice is asked of the character's edge voice again (`same_voices`: a transient
+    NoAudioReceived gave Sheru the narrator's voice on episode 1). Whisper heard episode 1 back almost word for word.
+  - State in state/toons/ (cast/ references: keep or replace the PNGs; series.json; episodes/ for the compilation;
+    art/ banner + icon from `python toon_shorts.py art`). Tests redirect STATE_DIR (conftest).
+  - Weekly compilation (`toon_mix.py`, format "mix", genre "toons_mix" = a long Comedy video): every episode is kept
+    cut before its end card; with 7 new ones and 6 days since the last, the next job joins up to 16 with chapters
+    and a 3-picture thumbnail. Why: from 1-feb-2027 new YPP applicants need 8,000 watch hours or 20M Shorts views,
+    and Shorts views are no watch hours. meta_publish skips vertical videos over 180 s (REEL_MAX_SECONDS).
+  - Cost ~$0.4 of Gemini an episode (~6 text calls, ~15-18 pictures), ~10 min on this laptop.
+  - Replies in character (`engage.TOONS_EXTRA`): auto replies are written as Billo, Sheru, Mithu or Guddu and signed.
+  - A/B test `toonlen` (my_channels EXPERIMENTS, `TOON_LENGTH`, toon_shorts.LENGTHS/`limits()`): 35-45 s vs 25-32 s
+    episodes, since our Shorts lose half their viewers by 0:07-0:12 (channel doctor, 5-nov-2026).
+  - The writer may return a shape's description for its key ("secret out: ..."); `tidy` maps it back.
+  - A shot the image model returns no picture for (3 tries; episode 4's "Guddu reads the bill" first shot) is drawn
+    once more without its action (`shot_prompt(simple=True)`, SIMPLE_PICTURE); the error carries the model's text.
+  - toon_shorts / toon_mix run in the job process (main.py), so their changes need no server restart; my_channels,
+    app, engage and meta_publish do.
+- A replace-Edit whose old_string is a `def` line must keep that line in new_string: adding `with_part` above
+  `same_voices` deleted the latter's header, its body sat dead after a `return`, and only the live part-2 run hit the
+  NameError (the -k test runs skipped its test). Run the whole module's tests after such an edit.
+- Reels captions ask for the send (`meta_publish.SHARE_LINES`, toons/quiz/cricket/money): Instagram ranks sends per
+  reach and watch time first.
+- `upscale._run` falls back to the first GPU on "invalid gpu device" (5-nov-2026 Vulkan saw only the Iris Xe; the Arc
+  A370M was gone, so every upscale failed).
+- Never write heredoc patch scripts containing backslashes (this harness turns `\\n` into a newline inside the
+  Python string: a toon_shorts prompt became an unterminated literal); use the Edit tool.
+- `caption_script._roman_clip` takes every word OVERLAPPING the clip (as `_collect_word_blocks` shows them): a long
+  word starting > 1 s before the clip stayed Devanagari on Roman captions (2 of 15 caption files on disk).
+- `tests/test_editor_properties.py`: seeded random invariants (no Hypothesis) for Timeline out/base roundtrip,
+  order, duration, out_ranges, compile_ops keep ranges and the clip slice. At a cut's seam `base()` answers the
+  earlier side (same frame on screen): not a bug.
 - **Every tab needs its own scrolling frame**: the shell and `<main>` are
   overflow-hidden, so a tab whose root is plain content (Today and Channels
   were) cannot be scrolled at all. They now sit in App.jsx's

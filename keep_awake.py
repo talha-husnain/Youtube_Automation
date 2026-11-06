@@ -11,6 +11,14 @@ sleeps it (that is a separate setting this does not touch).
 ``refresh`` must run on a thread that lives as long as the server (the event
 loop's), because Windows ties the request to the calling thread.
 ``KEEP_AWAKE=0`` turns it off.
+
+``KEEP_AWAKE=charger`` (4-nov-2026, set in the owner's .env): stay awake on
+the charger whenever the server runs, not only during a job. The laptop has
+Modern Standby only (S0 low-power idle, no S3) and wake timers are off, so
+once it dozed between jobs every loop froze with it: first comments, claim
+checks, the Facebook/Instagram posts timed to each YouTube slot, the next
+job. The screen still turns off, battery and a closed lid still sleep. The
+default (``1``) is unchanged for other self-host installs.
 """
 import contextlib
 import os
@@ -69,12 +77,16 @@ def _set(flags):
 def refresh(working):
     """Ask Windows to stay awake while ``working`` (or an upload runs), else
     let it sleep again. Returns the state shown in the system check."""
-    if os.environ.get("KEEP_AWAKE", "1").strip() == "0":
+    mode = os.environ.get("KEEP_AWAKE", "1").strip().lower()
+    always = mode in ("charger", "always")
+    if mode == "0":
         want, why = False, "off (KEEP_AWAKE=0)"
-    elif not (working or busy()):
+    elif not (working or busy() or always):
         want, why = False, "idle"
     elif not on_charger():
         want, why = False, "on battery, the laptop may sleep"
+    elif always and not (working or busy()):
+        want, why = True, "on the charger, the laptop stays awake for Autopilot"
     else:
         want, why = True, "working, the laptop stays awake"
     if want != _state["awake"] or why != _state["why"]:

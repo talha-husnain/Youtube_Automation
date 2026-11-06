@@ -56,7 +56,7 @@ FOOTAGE_RULE = ("Mood footage that fits the song's feeling. In a love or heartbr
                 "text. ")
 STYLES = ["upbeat pop", "lo-fi chill", "acoustic love song", "EDM dance pop", "R&B slow jam", "pop punk",
           "country pop", "indie folk", "afrobeats", "synthwave", "motivational anthem", "sad piano ballad",
-          "heartbreak pop ballad", "romantic slow pop"]
+          "heartbreak pop ballad", "romantic slow pop", "gym phonk", "aggressive trap anthem"]
 THEMES = ["falling in love", "heartbreak", "summer nights", "late night drive", "best friends",
           "chasing dreams", "missing home", "first crush", "self-love", "rainy days", "gym motivation",
           "city lights", "long distance", "new beginnings", "dancing all night"]
@@ -93,7 +93,7 @@ class SongPlan(BaseModel):
 
 
 PLAN_PROMPT = """Write an ORIGINAL catchy English song for a YouTube Shorts music channel.
-Style: {style}. Theme: {theme}. Lead vocal: {vocal}.
+Style: {style}. Theme: {theme}. Lead vocal: {vocal}.{mood}
 Love and heartbreak songs hit hardest when they feel real: one specific moment
 (a text left on read, her perfume on his jacket, the last goodbye at the door),
 told from the heart, with a chorus people want to send to someone.
@@ -138,11 +138,16 @@ def _avoid():
         return []
 
 
-def plan(client, style, theme, vocal="a female lead singer"):
+def plan(client, style, theme, vocal="a female lead singer", brief=""):
     from quiz_shorts import quiz_model
-    p = kit.ask_json(client, SongPlan, PLAN_PROMPT.format(style=style, theme=theme, vocal=vocal,
-                                                          avoid=", ".join(_avoid()) or "(none yet)"),
-                     model=quiz_model())
+    import script_craft
+    # The playlist mood the song is made for (music_moods.py): it shapes tempo, lyrics and title.
+    mood = (f"\nMood (the playlist this song is made for; the music, lyrics and title must fit it): {brief}"
+            if brief else "")
+    # + what the niche's most viewed song Shorts do now (niche_research); the song stays our own.
+    p = kit.ask_json(client, SongPlan, PLAN_PROMPT.format(style=style, theme=theme, vocal=vocal, mood=mood,
+                                                          avoid=", ".join(_avoid()) or "(none yet)")
+                     + script_craft.playbook(), model=quiz_model())
     if len(p.verse) < 2 or len(p.chorus) < 2:
         raise RuntimeError("The song came back without lyrics; try again.")
     return p
@@ -307,6 +312,17 @@ def _t(text, limit):
     return fl.clean_title(re.sub(r"\s*[·•–—]\s*", " - ", text or ""))[:limit]
 
 
+# Lyric lines wrap inside x 192-888 (the event's own margins; \pos keeps them centred): at the style's
+# 60/60 a long line reached x 1050, under YouTube's like/comment column (frames of 29-oct-2026).
+NARROW = ",192,192,0,,"
+LYRIC_Y, NEXT_Y = 1150, 1315      # were 1180 and 1310; a 3-line lyric now ends ~1240
+FOLLOW_Y = 1400                   # the closing follow line sat at 1640, under YouTube's channel row
+
+
+def _narrow(event):
+    return event.replace(",0,0,0,,", NARROW, 1)
+
+
 def lyric_events(lines, total, title, genre, handle, hook=""):
     ev = []
     if hook.strip():
@@ -342,17 +358,36 @@ def lyric_events(lines, total, title, genre, handle, hook=""):
         weights = [len(x) + 2 for x in words] or [1]
         karaoke = "".join(rf"{{\kf{max(1, round(sung * 100 * wt / sum(weights)))}}}{x} "
                           for x, wt in zip(words, weights)).strip()
-        ev.append(kit.dialogue(5, a - 0.12, hold, "MuLine",
-                               rf"{{\an5\pos({CX},1180)\fad(120,150)\fscx92\fscy92\t(0,160,\fscx100\fscy100)}}"
-                               rf"{karaoke}"))
+        ev.append(_narrow(kit.dialogue(5, a - 0.12, hold, "MuLine",
+                                       rf"{{\an5\pos({CX},{LYRIC_Y})\fad(120,150)\fscx92\fscy92\t(0,160,\fscx100\fscy100)}}"
+                                       rf"{karaoke}")))
         if nxt and nxt[1] - b < 3.0:
-            ev.append(kit.dialogue(4, a - 0.12, hold, "MuNext",
-                                   rf"{{\an5\pos({CX},1310)\alpha&H70&\fad(120,150)}}{_t(nxt[0], 60)}"))
+            ev.append(_narrow(kit.dialogue(4, a - 0.12, hold, "MuNext",
+                                           rf"{{\an5\pos({CX},{NEXT_Y})\alpha&H70&\fad(120,150)}}{_t(nxt[0], 60)}")))
     return ev
+
+
+def _with_mood_tags(tags, mood):
+    """The song's own tags, then what people search for its mood ("sad songs", "gym phonk"), 15 at most."""
+    import music_moods
+    extra = (music_moods.MOODS.get(mood) or {}).get("tags") or []
+    own = [t for t in tags if t]
+    return list(dict.fromkeys(own[:15 - min(len(extra), 4)] + extra[:4] + own))[:15]
+
+
+def broll_frame(video, out, at=1.0):
+    """A still of the song's footage for its mix chapter, or None."""
+    import subprocess
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{at:.2f}", "-i", video, "-frames:v", "1",
+                        "-q:v", "2", out], capture_output=True, text=True, timeout=120)
+    return out if r.returncode == 0 and os.path.isfile(out) else None
 
 
 def run(output_dir, pipeline):
     import random
+    if os.environ.get("MUSIC_MIX"):
+        import mood_mix                 # the weekly long mood mix (music_moods.next_mix)
+        return mood_mix.run(output_dir, pipeline)
     cfg = fl.settings()
     style = (os.environ.get("MUSIC_STYLE") or random.choice(STYLES))[:60]
     theme = (os.environ.get("MUSIC_THEME") or pick_theme())[:60]
@@ -360,12 +395,16 @@ def run(output_dir, pipeline):
     if os.environ.get("MUSIC_DANCE") == "1":
         vocal = "female"           # the dancer is the singer
     vocal = "a male lead singer" if vocal.lower().startswith("m") else "a female lead singer"
+    mood = (os.environ.get("MUSIC_MOOD") or "")[:30]
+    brief = (os.environ.get("MUSIC_BRIEF") or "")[:300]
+    if mood:
+        print(f"🎧 Mood: {mood} (its playlist gets this song)")
     client = kit.gemini()
     stem = kit.neutral_stem("Song")
     song = os.path.join(output_dir, f".{stem}_song.mp3")
     for attempt in range(SING_TRIES):
         print(f"🎵 AI song: writing a {style} song about {theme} ({vocal})...")
-        p = plan(client, style, theme, vocal)
+        p = plan(client, style, theme, vocal, brief)
         print(f"   ✅ \"{p.title}\" ({p.genre})")
         print("🎤 Lyria is singing it...")
         try:
@@ -402,6 +441,7 @@ def run(output_dir, pipeline):
                 ai_influencer.record(usd)
     start, end = window(lines, seconds, media_seconds(dance_bg) if dance_bg else SHORT_SONG,
                         p.chorus[0] if p.chorus else None)
+    full_lines = list(lines)            # the whole song's timed lyrics, for its mood mix (music_moods.archive_song)
     lines = [(t, a - start, min(b, end) - start) for t, a, b in lines if a < end - 0.5 and a >= start]
     body = end - start
     print(f"   ✅ {len(lines)} lines timed; using {start:.1f}-{end:.1f}s.")
@@ -414,9 +454,9 @@ def run(output_dir, pipeline):
     if not card_ev:
         # Loop-friendly ending (no end card): a small follow line over the
         # last seconds of the music instead.
-        events.append(kit.dialogue(6, max(0.0, body - 4.0), body, "MuPill",
-                                   rf"{{\an5\pos({CX},1640)\1c&HFFFFFF&\fad(300,300)}}"
-                                   rf"NEW SONG EVERY DAY{(' | ' + cfg['handle']) if cfg['handle'] else ''}"))
+        events.append(_narrow(kit.dialogue(6, max(0.0, body - 4.0), body, "MuPill",
+                                           rf"{{\an5\pos({CX},{FOLLOW_Y})\1c&HFFFFFF&\fad(300,300)}}"
+                                           rf"NEW SONG EVERY DAY{(' | ' + cfg['handle']) if cfg['handle'] else ''}")))
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
     # Free mood footage under the lyrics, one clip per line (broll.py); the
     # AI cover (a paid image call) only when no footage is found.
@@ -446,13 +486,20 @@ def run(output_dir, pipeline):
             "video_title_for_youtube_short": p.title, "viral_hook_text": p.chorus[0],
             "why": f"AI song: {style}, {theme}", "predicted_score": 80, "genre": "music",
             "seo_title": p.youtube_title[:100], "seo_description": description,
-            "seo_tags": [t for t in p.tags if t][:15], "hashtags": (p.hashtags or [])[:4],
+            "seo_tags": _with_mood_tags(p.tags, mood), "hashtags": (p.hashtags or [])[:4],
             "video_description_for_tiktok": f"{p.title} {hashtags}".strip(),
             "video_description_for_instagram": description,
             "ai_voice": "AI music and vocals (Google Lyria)", "ai_made": bool(dance_bg),
             "comment_question": "Which line hit you the hardest? 🎧",
-            "song": {"title": p.title, "style": style, "theme": theme, "genre": p.genre, "vocal": vocal,
+            "song": {"title": p.title, "style": style, "theme": theme, "genre": p.genre, "vocal": vocal, "mood": mood,
                      "lyrics": lyrics, "cover": bool(art),
                      **({"dancer": dancer["name"]} if dance_bg else {})},
             "footage": [{"provider": f["provider"], "page": f["page"], "author": f["author"]} for f in footage]}
     kit.finish(output_dir, stem, [clip], None, pipeline, extra={"genre": "music"})
+    if mood:
+        import music_moods
+        still = art or (broll_frame(bg, os.path.join(output_dir, f".{stem}_still.jpg")) if bg else None)
+        music_moods.archive_song(os.path.basename(os.path.normpath(output_dir)), song, {
+            "title": p.title, "youtube_title": p.youtube_title, "mood": mood, "style": style, "theme": theme,
+            "genre": p.genre, "lyrics": lyrics, "lines": [[t, round(a, 2), round(b, 2)] for t, a, b in full_lines],
+            "colors": colors, "seconds": round(seconds, 2), "vocal": vocal}, still)

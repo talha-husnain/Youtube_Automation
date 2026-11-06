@@ -114,10 +114,10 @@ def to_urdu_script(client, lines):
     return out
 
 
-async def _say(text, voice, rate, mp3):
+async def _say(text, voice, rate, mp3, pitch="+0Hz"):
     import edge_tts
     words = []
-    comm = edge_tts.Communicate(text, voice, rate=rate, boundary="WordBoundary")
+    comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch, boundary="WordBoundary")
     with open(mp3, "wb") as f:
         async for chunk in comm.stream():
             if chunk["type"] == "audio":
@@ -127,9 +127,10 @@ async def _say(text, voice, rate, mp3):
     return words
 
 
-def speak(text, path, voice, rate="+0%"):
+def speak(text, path, voice, rate="+0%", pitch="+0Hz"):
     """``text`` read by an edge voice into a 24 kHz mono wav at ``path``, the
-    word times saved beside it. Returns the length, or None."""
+    word times saved beside it. Returns the length, or None. ``pitch`` ("+14Hz"):
+    the cartoon channel's characters are four voices pitched apart (toon_shorts.CAST)."""
     import time
     if resting():
         return None
@@ -138,7 +139,9 @@ def speak(text, path, voice, rate="+0%"):
         if attempt:
             time.sleep(3 * attempt)
         try:
-            words = asyncio.run(asyncio.wait_for(_say(text, voice, rate, mp3), TIMEOUT))
+            # The pitch only when one is set: the narrators' calls (and their test fakes) stay as they were.
+            say = _say(text, voice, rate, mp3, pitch) if pitch != "+0Hz" else _say(text, voice, rate, mp3)
+            words = asyncio.run(asyncio.wait_for(say, TIMEOUT))
             if not os.path.isfile(mp3) or os.path.getsize(mp3) < 2000:
                 raise ValueError("no audio")
             subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", mp3, "-ar", "24000", "-ac", "1",
@@ -165,7 +168,9 @@ def speak(text, path, voice, rate="+0%"):
         finally:
             if os.path.exists(mp3):
                 os.remove(mp3)
-    print(f"   ⚠️ Free voice failed ({type(last).__name__}: {str(last)[:100]}).")
+    # The voice and its settings: NoAudioReceived came back on 3 of ~30 cartoon lines on 5-nov-2026 (the same line
+    # read fine a minute later); this says whether a character's pitch is behind a pattern.
+    print(f"   ⚠️ Free voice failed ({type(last).__name__}: {str(last)[:100]}) [{voice} {rate} {pitch}].")
     return None
 
 
@@ -193,7 +198,10 @@ def voice_items(client, items):
     for k, it in enumerate(items):
         g = gender(it.get("voice"))
         if k in converted:
-            out.append((converted[k], URDU[g], rate_for(it.get("style"))))
+            # A character's own Urdu voice, pace and pitch (toon_shorts.CAST), else the narrator's by gender.
+            voice = it["edge_voice"] if str(it.get("edge_voice") or "").startswith("ur-") else URDU[g]
+            row = (converted[k], voice, it.get("rate") or rate_for(it.get("style")))
+            out.append(row + (it["pitch"],) if it.get("pitch") else row)
         elif (it.get("language") or "") == "English":
             out.append((it["text"], ENGLISH[g], rate_for(it.get("style"))))
         else:

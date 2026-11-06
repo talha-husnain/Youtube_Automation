@@ -45,7 +45,9 @@ def _client():
     key = os.getenv("GEMINI_API_KEY")
     if not key:
         return None, None
-    return genai.Client(api_key=key), os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
+    import short_kit
+    return (genai.Client(api_key=key, http_options=short_kit.http_options()),
+            os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite")
 
 
 def _ask(client, model, prompt):
@@ -104,8 +106,12 @@ def _clip_segments(transcript, start, end):
 
 def _roman_clip(client, model, transcript, clip):
     segs = _clip_segments(transcript, clip["start"], clip["end"])
+    # Every word the captions will show: subtitles._collect_word_blocks takes each word that OVERLAPS the
+    # clip. Words were picked by their start (within 1 s) and a long word running into the clip from before
+    # stayed in Devanagari on a Roman caption (2 of 15 caption files on disk, 4-nov-2026: "कि", "मुझे").
     words = [w for s in segs for w in s["words"]
-             if not w.get("_script") and clip["start"] - 1 <= w["start"] <= clip["end"] + 1]
+             if not w.get("_script") and float(w.get("end", w["start"])) > clip["start"] - 1
+             and w["start"] < clip["end"] + 1]
     items = [w["word"].strip() for w in words]
     title = clip.get("video_title_for_youtube_short") or ""
     for _ in range(2):

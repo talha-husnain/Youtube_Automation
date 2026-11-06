@@ -43,9 +43,15 @@ CLAIM_CHECK_EVERY = 1800
 LEARN_EVERY = 6 * 3600
 LOOKBACK_DAYS = 30
 MATURE_HOURS = 48
+# Views at a fixed age (research, 29-oct-2026): on lifetime views a Short counted at 30 days beat one counted
+# at 3, which tilted the A/B tests, the format picks, the posting-hour tip and the best/worst lists toward
+# old Shorts. The first learn pass between 48 and 72 h keeps the number as views_48h; decisions use it.
+FAIR_AGE, FAIR_WINDOW = timedelta(hours=48), timedelta(hours=24)
 JOB_TIMEOUT = 50 * 60
 KEEP_DAYS = 7
-MAX_CHANNELS = 6
+# 8 since 5-nov-2026 (the horror and money channels): one job at a time on this laptop, and the six cards kept it
+# busy about 4 h of 24 (measured that day), so two more fit.
+MAX_CHANNELS = 8
 MAX_PER_DAY = 10          # the channel's own daily upload limit is about 10 (14-oct-2026)
 TRIES_PER_SHORT = 2       # a day of failures stops at twice the Shorts wanted
 # Failures that say nothing about the idea: Gemini's quota, a network drop.
@@ -90,6 +96,19 @@ KINDS = {
                     "about": "What really happened in famous people's controversies: researched with sources, "
                              "allegations told as allegations, both sides, a fairness check before every video. "
                              "No religion, politics or army."},
+    # Motion graphics (money_shorts.py, owner 29-oct-2026): money told as stories, every number researched.
+    "money": {"label": "Money in numbers (motion graphics)", "genre": "money", "color": "#0A2A1F",
+              "times": ["15:00", "21:00"], "per_day": 2,
+              "about": "Animated charts that tell money stories in Roman Urdu: prices then and now, salaries at home "
+                       "and abroad, companies' biggest mistakes. Every number researched with sources, checked "
+                       "twice, never advice. About $0.05 of Gemini per Short."},
+    # Cartoon comedy (toon_shorts.py, owner 5-nov-2026): talking animals and a talking baby, one cast, a series.
+    "toons": {"label": "Talking animals cartoon comedy (Billo and Gang)", "genre": "toons", "color": "#3B1F5C",
+              "times": ["17:30", "21:45"], "per_day": 2,
+              "about": "An original cartoon series: Billo the cat, Sheru the dog, Mithu the parrot and baby Guddu who "
+                       "talks like an old uncle, in one Lahore home. Every episode a new situation with a twist, two "
+                       "drafts judged and punched up, the characters' mouths animated to their voices. About $0.4 "
+                       "of Gemini per episode."},
     "music": {"label": "AI songs in English", "genre": "music", "color": "#2A0B2E",
               "times": ["18:00", "23:00"], "per_day": 2,
               "about": "Original songs under a minute: AI lyrics, sung by Google Lyria, with a cover "
@@ -112,12 +131,14 @@ KINDS = {
                        "mosque footage, no music. Popular surahs first, then the whole Quran in order."},
 }
 # The planner module of each kind that works from a queue of researched ideas.
-PLANNERS = {"cricket": "cricket_shorts", "controversy": "controversy_shorts", "history": "history_videos"}
+PLANNERS = {"cricket": "cricket_shorts", "controversy": "controversy_shorts", "history": "history_videos",
+            "money": "money_shorts", "toons": "toon_shorts"}
 MINUTES_RANGE, DEFAULT_MINUTES = (2, 30), 10
 LANGS = ("urdu", "english")
 # The long channel's subject: "history" documentaries, or "explainer", this
 # week's hot topics explained (trend_explainer.py; owner, 21-oct-2026).
-LONG_MODES = ("history", "explainer")
+# "horror": original horror stories (horror_stories.py; owner, 5-nov-2026: the new channel).
+LONG_MODES = ("history", "explainer", "horror")
 FORMATS = {"quiz": ["mcq", "riddle", "math", "flags", "truefalse", "oddone", "stars", "islamic"]}
 # Fast results on the cricket channel: a match Pakistan or India just
 # finished is the most searched cricket topic of the day, worth more than
@@ -132,12 +153,14 @@ If none (or one is still being played), answer exactly: NONE"""
 # engage.py switches. On for the new channels (nothing happens before the
 # owner connects them); off on the main channel until the owner turns them
 # on, because there they would start posting on a live channel at once.
-ENGAGE_DEFAULTS = {"first_comment": True, "auto_reply": True, "playlists": True, "cross_promo": True}
+# "podcasts": long-video playlists as YouTube podcast shows (engage.podcasts; long kinds only).
+ENGAGE_DEFAULTS = {"first_comment": True, "auto_reply": True, "playlists": True, "cross_promo": True, "podcasts": True}
 MAIN_ENGAGE_DEFAULTS = {k: False for k in ENGAGE_DEFAULTS}
 ENGAGE_EVERY = 900
 _lock = threading.Lock()
 _ideas_failed = {}
 failure_reason = None     # app.py sets it: job id -> the one-line reason the job failed
+cancel_job = None         # app.py sets it: stops a job's process (one past its time still held a slot)
 
 
 # ------------------------------------------------------------------ store
@@ -315,17 +338,35 @@ def update(cid, patch):
             ch["notes"] = " ".join(str(patch["notes"] or "").split())[:300]
         if "daily_short" in patch:
             ch["daily_short"] = bool(patch["daily_short"])
+        if "toon_mix" in patch:
+            ch["toon_mix"] = bool(patch["toon_mix"])      # the cartoon channel's weekly compilation (toon_mix.py)
         # Facebook / Instagram cross-posting (meta_publish.py): which Page, and which of the two.
         if "meta_page" in patch:
             ch["meta_page"] = re.sub(r"[^0-9]", "", str(patch["meta_page"] or ""))[:30]
         for key in ("meta_fb", "meta_ig"):
             if key in patch:
                 ch[key] = bool(patch[key])
+        if patch.get("meta_ig_mode") in META_IG_MODES:
+            ch["meta_ig_mode"] = patch["meta_ig_mode"]
+        if "meta_ig_page" in patch:
+            ch["meta_ig_page"] = re.sub(r"[^0-9]", "", str(patch["meta_ig_page"] or ""))[:30]
+        if patch.get("hide_old") and ch.get("took_over"):
+            # hide_retired does it, a few per pass; asked again, a finished pass looks again (nothing done twice).
+            ch["took_over"].setdefault("hide", int(time.time()))
+            for k in ("hide_done", "hide_at"):
+                ch["took_over"].pop(k, None)
         if "review_hours" in patch:
             try:
                 ch["review_hours"] = max(0, min(REVIEW_MAX_HOURS, int(patch["review_hours"])))
             except (TypeError, ValueError):
                 pass
+        if ch["kind"] == "music" and isinstance(patch.get("moods"), dict):
+            import music_moods                     # moods and their playlists (on/off, how often, the owner's own)
+            ch["moods"] = music_moods.settings_of(patch["moods"])
+        if ch["kind"] == "music" and "next_mood" in patch:
+            ch["next_mood"] = re.sub(r"[^a-z0-9_]", "", str(patch["next_mood"] or ""))[:30]
+        if ch["kind"] == "music" and "next_mix" in patch:
+            ch["next_mix"] = re.sub(r"[^a-z0-9_]", "", str(patch["next_mix"] or ""))[:30]
         if ch["kind"] == "quran" and isinstance(patch.get("quran"), dict):
             import quran_videos
             ch["quran"] = quran_videos.settings_of({**(ch.get("quran") or {}), **patch["quran"]})
@@ -419,6 +460,143 @@ def remove(cid):
         shutil.rmtree(folder(cid), ignore_errors=True)
 
 
+def retired_dir():
+    """Where a retired card's files go: state/retired, beside CHANNELS_DIR (so a test's redirect covers it)."""
+    return os.path.join(os.path.dirname(CHANNELS_DIR), "retired")
+
+
+def hand_over(old_cid, new_cid, now=None):
+    """Give one card's YouTube channel to another card (owner, 5-nov-2026: no Google accounts left for new
+    channels, so the two weakest ones were reused for the horror and money cards).
+
+    The new card takes the Google token, so its videos go up on that channel from now on. The old card goes
+    away, but nothing is deleted: its record, uploads log, engagement state and kit move to
+    state/retired/<old>-<time>/, and its videos stay on YouTube. The new card keeps its own empty uploads log,
+    so its numbers, A/B tests, playlists and replies start from its own videos, and its next learn pass puts
+    its own About text on the channel (about_credit, the old text backed up). The channel's name, handle and
+    picture have no API: the owner changes them in YouTube Studio.
+    Refused for the main channel, while either card is making a video, when the old card has no channel or
+    the new one already has one."""
+    now = now or time.time()
+    with _lock:
+        data = _read(STATE_FILE, {})
+        rows = data.get("channels") or []
+        old = next((c for c in rows if c.get("id") == old_cid), None)
+        new = next((c for c in rows if c.get("id") == new_cid), None)
+        if not old or not new or old_cid == new_cid:
+            raise ValueError("Pick two different channel cards.")
+        token = os.path.join(folder(old_cid), "token.json")
+        if not os.path.isfile(token):
+            raise ValueError(f"{old['name']} is not connected to a YouTube channel.")
+        if os.path.isfile(os.path.join(folder(new_cid), "token.json")):
+            raise ValueError(f"{new['name']} already has its own YouTube channel. Disconnect it first.")
+        busy = [c["name"] for c in (old, new) if running(c)]
+        if busy:
+            raise ValueError(f"{busy[0]} is making a video now. Try again when it is done.")
+        try:
+            with open(token, encoding="utf-8") as f:
+                yt = (json.load(f) or {}).get("channel") or {}
+        except (OSError, ValueError):
+            yt = {}
+        dest = os.path.join(retired_dir(), f"{old_cid}-{datetime.fromtimestamp(now).strftime('%Y%m%d-%H%M%S')}")
+        os.makedirs(folder(new_cid), exist_ok=True)
+        os.makedirs(retired_dir(), exist_ok=True)
+        shutil.move(token, os.path.join(folder(new_cid), "token.json"))
+        shutil.move(folder(old_cid), dest)
+        with open(os.path.join(dest, "card.json"), "w", encoding="utf-8") as f:
+            json.dump(old, f, ensure_ascii=False, indent=1)
+        title = (old.get("yt_title") or yt.get("title") or "").strip()
+        new.update(yt_channel=old.get("yt_channel") or yt.get("id") or "", yt_title=title,
+                   took_over={"from": old["name"], "kind": old["kind"], "yt_title": title,
+                              "handle": yt.get("handle") or "", "at": int(now),
+                              "archive": os.path.relpath(dest, os.path.dirname(os.path.dirname(CHANNELS_DIR)))})
+        for key in ("about_credit", "long_uploads", "last_learn", "placement_checked"):
+            new.pop(key, None)          # asked again of the channel it has now
+        data["channels"] = [c for c in rows if c.get("id") != old_cid]
+        _write(STATE_FILE, data)
+    dropped = len(waiting(old))
+    return {"ok": True, "to": new_cid, "from": old_cid, "channel": title, "archive": dest, "dropped": dropped}
+
+
+HIDE_PER_PASS = 15             # old videos set private per pass (51 units each)
+HIDE_EVERY = 10 * 60
+HIDE_CEILING = 6000            # the day's quota units in use before hiding waits for tomorrow (uploads come first)
+
+
+def _archive_of(ch):
+    t = ch.get("took_over") or {}
+    if not t.get("archive"):
+        return None
+    root = os.path.dirname(os.path.dirname(CHANNELS_DIR))
+    return os.path.join(root, t["archive"])
+
+
+def hide_retired(ch, log=print, now=None):
+    """Set the retired card's videos and playlists on this channel to private, a few per pass, oldest first
+    (owner, 5-nov-2026: the old quiz and history videos off the new money and horror channels). Only the ids
+    in the retired card's own logs, so nothing this card made is touched; reversible in YouTube Studio.
+    Asked with update(hide_old=True); the done ids are kept in the archive's hidden.json. Returns how many."""
+    import youtube_account as ya
+    t = ch.get("took_over") or {}
+    now = now or time.time()
+    folder_ = _archive_of(ch)
+    if not t.get("hide") or t.get("hide_done") or not folder_ or now - t.get("hide_at", 0) < HIDE_EVERY:
+        return 0
+    path = os.path.join(folder_, "hidden.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            done = json.load(f)
+    except (OSError, ValueError):
+        done = {}
+    # Only YouTube's 11-character ids count as done: the first pass kept our own row ids, which hid nothing.
+    done["videos"] = {k: v for k, v in (done.get("videos") or {}).items() if len(k) == 11}
+    done.setdefault("playlists", {})
+
+    def rows(name, default):
+        try:
+            with open(os.path.join(folder_, name), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return default
+    mine = ch.get("yt_channel") or ""
+    # A row uploaded while the old card pointed at another of our channels (check_placement's "elsewhere") is
+    # not on this channel: never touched from here.
+    # YouTube's id is "video_id" ("id" is our own 12-character row id: the first pass on 5-nov-2026 asked YouTube
+    # for 30 row ids, found nothing and marked them gone; nothing was changed on YouTube).
+    vids = [r["video_id"] for r in sorted(rows("uploads.json", []), key=lambda r: r.get("created", 0))
+            if r.get("video_id") and r.get("status") == "done" and r["video_id"] not in done["videos"]
+            and not r.get("elsewhere") and (not mine or not r.get("yt_channel") or r["yt_channel"] == mine)]
+    lists = [p for p in ((rows("engage.json", {}) or {}).get("playlists") or {}).values()
+             if p and p not in done["playlists"]]
+    n = 0
+    with ya.use(account(ch["id"])):
+        if not ya.status()["connected"]:
+            return 0
+        for kind, ids, fn in (("videos", vids, ya.unschedule), ("playlists", lists, ya.playlist_private)):
+            for vid in ids:
+                if n >= HIDE_PER_PASS or ya.quota_used() + ya.UPDATE_UNITS > HIDE_CEILING:
+                    break
+                try:
+                    done[kind][vid] = "private" if fn(vid) else "gone"
+                except Exception as e:  # noqa: BLE001 — the next pass tries it again
+                    if re.search(r"\b403\b|forbidden|insufficientPermissions", str(e), re.I):
+                        done[kind][vid] = "not this channel's"         # never tried again
+                        n += 1
+                        continue
+                    log(f"⚠️ {ch['name']}: could not hide an old {kind[:-1]} ({str(e)[:80]}).")
+                    break
+                n += 1
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(done, f, indent=1)
+    left = len(vids) + len(lists) - n
+    _change(ch["id"], lambda c: c.setdefault("took_over", {}).update(
+        hide_at=int(now), hidden=len(done["videos"]) + len(done["playlists"]), hide_left=max(0, left),
+        **({"hide_done": int(now)} if left <= 0 else {})))
+    if n:
+        log(f"🙈 {ch['name']}: {n} old {t.get('kind', '')} video(s)/playlist(s) set to private, {max(0, left)} to go.")
+    return n
+
+
 # ------------------------------------------------------------------ status
 
 def today(now=None):
@@ -432,7 +610,9 @@ def _jobs_on(ch, day, statuses=("running", "done", "uploaded")):
 
 
 # Shorts of the history channel that come on top of its long videos.
-EXTRA_FORMATS = ("teaser", "today")
+# "mix": the song channel's weekly long mood mix (mood_mix.py): on top of the day's Shorts, never in their stats.
+EXTRA_FORMATS = ("teaser", "today", "mix")
+MIX_TIMEOUT = 150 * 60          # Lyria makes an instrumental mix's tracks one by one, then 30+ min of video
 
 
 def today_short_due(ch, now=None):
@@ -440,7 +620,7 @@ def today_short_due(ch, now=None):
     Short (history_today.py): on by default (daily_short), two tries a day."""
     if not KINDS.get(ch.get("kind"), {}).get("story") or not ch.get("daily_short", True):
         return False
-    if ch.get("mode") == "explainer":      # "on this day" is a history Short
+    if ch.get("mode", "history") != "history":      # "on this day" is a history Short
         return False
     day = today(now)
     mine = [j for j in ch.get("jobs") or [] if j.get("format") == "today" and j.get("day") == day]
@@ -637,12 +817,27 @@ def summary(ch):
                    quran_options={"reciters": [[k, v] for k, v in qv.RECITERS.items()],
                                   "urdu": [[k, v] for k, v in qv.URDU.items()],
                                   "english": [[k, v] for k, v in qv.ENGLISH.items()]})
+    if ch["kind"] == "music":
+        import engage
+        import music_moods
+        settings = music_moods.settings_of(ch.get("moods"))
+        try:
+            lists = (engage.load(account(ch["id"])) or {}).get("playlists") or {}
+        except Exception:  # noqa: BLE001 — the card shows the moods without links
+            lists = {}
+        out.update(moods=music_moods.summary(settings, ch.get("jobs"), lists), mood_settings=settings,
+                   next_mood=ch.get("next_mood") or "", next_mix=ch.get("next_mix") or "",
+                   mix_status=music_moods.mix_summary(settings, ch.get("jobs")),
+                   mix_settings={k: music_moods.mix_setting(settings, k)
+                                 for k in ("mixes", "mix_minutes", "mix_budget")})
     out.update({
         "max_per_day": cap(ch), "long": long,
         **engage_settings(ch), "match_watch": bool(ch.get("match_watch", True)),
         "meta_page": ch.get("meta_page") or "", "meta_fb": bool(ch.get("meta_fb", True)),
         "meta_ig": bool(ch.get("meta_ig", True)),
-        "kind_label": KINDS.get(ch["kind"], {}).get("label", ch["kind"]),
+        "meta_ig_mode": ch.get("meta_ig_mode") or "auto", "meta_ig_now": meta_ig_mode(ch),
+        "kind_label": ("Horror stories (long videos)" if ch["kind"] == "history" and ch.get("mode") == "horror"
+                       else KINDS.get(ch["kind"], {}).get("label", ch["kind"])),
         "youtube": yt, "made_today": len(_jobs_on(ch, day)),
         "uploaded_today": sum(1 for r in rows if r.get("status") == "done"
                               and today(datetime.fromtimestamp(r.get("created", 0))) == day),
@@ -654,6 +849,13 @@ def summary(ch):
         "up_next_series": [f"{i['series']}, part {i['part']} of {i['parts']}" if i.get("series") else ""
                            for i in (ch.get("ideas") or [])[:UP_NEXT_SHOWN]],
     })
+    try:
+        import channel_doctor
+        import niche_research
+        out["doctor"] = channel_doctor.run(ch, rows, niche_research.load(niche_of(ch)), yt)
+    except Exception as e:  # noqa: BLE001 — the card shows without its checks
+        out["doctor"] = [{"key": "error", "question": "Channel checks", "status": "unknown",
+                          "finding": f"Could not run the checks ({type(e).__name__}).", "evidence": [], "next": ""}]
     return out
 
 
@@ -663,7 +865,9 @@ UP_NEXT_SHOWN = 8
 def _owner_idea(kind, text):
     """An idea the owner typed, in the planner's shape. Cricket needs its
     kind: "India vs Pakistan, Asia Cup final" is a match, "Babar vs Kohli" a
-    player fight, anything else a topic."""
+    player fight, "Top 5 ..." a ranking, anything else a topic."""
+    if kind == "cricket" and re.match(r"\s*top\s*(5|five|10|ten)\b", text, re.I):
+        return {"kind": "ranking", "text": text, "owner": True}
     if kind == "cricket" and re.search(r"\bvs\.?\b|\bversus\b", text, re.I):
         return {"kind": "match" if re.search(r",|\b(final|semi|cup|trophy|series|test|odi|t20|league|psl|ipl)\b",
                                              text, re.I) else "versus", "text": text, "owner": True}
@@ -706,28 +910,49 @@ def add_idea(cid, text):
     return _change(cid, fn)
 
 
-def _remix_first(ch, client_fn, log=print):
-    """Once a day a cricket or controversy channel studies this week's most viewed Short in its
-    niche (viral_remix) and makes its own video on that angle next. Urgent match results and
-    the owner's own ideas still go first. ``remix_days`` counts tries, so a day with nothing new
-    to study costs one look at the cached trends, not one per video."""
+def niche_of(ch):
+    """The research niche of a card (niche_research.NICHES): its kind, or "explainer" for the
+    long channel in explainer mode; the main channel is "comedy"."""
+    if not ch or ch.get("id") == "main":
+        return "comedy"
+    if ch.get("kind") == "history" and ch.get("mode") in ("explainer", "horror"):
+        return ch["mode"]
+    return ch.get("kind")
+
+
+def remix_idea(ch, log=print):
+    """Today's idea from the niche's studied viral videos (niche_research), at most
+    viral_remix.PER_DAY a day per channel, or None. ``remix_days`` counts what was taken."""
+    import niche_research
     import viral_remix
-    if ch["kind"] not in ("cricket", "controversy") or viral_remix.made_today(ch) >= viral_remix.PER_DAY:
+    if not niche_research.enabled() or os.environ.get("VIRAL_REMIX", "1") == "0" \
+            or viral_remix.made_today(ch) >= viral_remix.PER_DAY:
+        return None
+    idea = niche_research.next_idea(niche_of(ch), used=ch.get("used") or [])
+    if idea:
+        day = time.strftime("%Y-%m-%d")
+        _change(ch["id"], lambda c: c.update(remix_days={day: viral_remix.made_today(c) + 1}))
+        log(f"🧪 {ch['name']}: next video rides a viral one: {idea['text']}")
+    return idea
+
+
+def _remix_first(ch, client_fn, log=print):
+    """Once a day a planned channel (cricket, controversy, history) makes its own video on the angle
+    of a viral one its research agent studied (niche_research), before the planner's ideas. Urgent
+    match results and the owner's own ideas still go first. The study happened in the research pass,
+    so this takes no network call."""
+    if ch["kind"] not in PLANNERS:
         return ch
     head = (ch.get("ideas") or [{}])[0]
     if head.get("urgent") or head.get("owner") or head.get("remix"):
         return ch
-    day = time.strftime("%Y-%m-%d")
-    _change(ch["id"], lambda c: c.update(remix_days={day: viral_remix.made_today(c) + 1}))
-    try:
-        idea = viral_remix.auto_idea(client_fn(), ch["kind"], log=log)
-    except Exception as e:  # noqa: BLE001 — a bonus idea
-        log(f"⚠️ {ch['name']}: viral study failed ({type(e).__name__}).")
-        idea = None
-    used = {str(u).lower() for u in ch.get("used") or []}
-    if not idea or idea["text"].lower() in used:
+    idea = remix_idea(ch, log)
+    if not idea:
         return get(ch["id"])
-    log(f"🧪 {ch['name']}: next video rides a viral one: {idea['text']}")
+    if ch["kind"] == "cricket" and idea["kind"] not in ("topic", "match", "versus", "ranking"):
+        idea["kind"] = "topic"
+    if ch["kind"] != "cricket":
+        idea["kind"] = "topic"
 
     def fn(c):
         rest = [i for i in c.get("ideas") or [] if i.get("text", "").lower() != idea["text"].lower()]
@@ -791,11 +1016,14 @@ def learn(ch, log=print):
             if not n:
                 continue
             r.update(views=n["views"], likes=n["likes"], comments=n["comments"], public=n["public"])
-            youtube_account._save_upload(r)
             try:
                 age = now - datetime.fromisoformat((n["published"] or "").replace("Z", "+00:00"))
             except ValueError:
+                youtube_account._save_upload(r)
                 continue
+            if "views_48h" not in r and FAIR_AGE <= age < FAIR_AGE + FAIR_WINDOW:
+                r["views_48h"] = n["views"]
+            youtube_account._save_upload(r)
             if n["public"] and age >= timedelta(hours=MATURE_HOURS):
                 mature.append(r)
         # How much of each video people watch: on a small channel it moves
@@ -811,6 +1039,10 @@ def learn(ch, log=print):
                 if a.get("engaged") is not None and a.get("a_views"):
                     r.update(stayed=round(100 * a["engaged"] / a["a_views"], 1), a_views=a["a_views"])
                 youtube_account._save_upload(r)
+        insights = _insights(ch, mature, log)
+    lifetime = [r["views"] for r in mature]
+    # Decisions compare views at the same age (views_48h) where a Short has that number.
+    mature = [{**r, "views": r.get("views_48h", r["views"])} for r in mature]
     by_format, kept = {}, {}
     for r in mature:
         by_format.setdefault(r.get("format") or "other", []).append(r["views"])
@@ -822,7 +1054,7 @@ def learn(ch, log=print):
                     reverse=True)
     stats = {"at": int(time.time()), "tracked": len(rows), "counted": len(mature),
              "views": sum((numbers.get(r["video_id"]) or {}).get("views", 0) for r in rows),
-             "median": _median([r["views"] for r in mature]),
+             "median": _median(lifetime),
              "formats": {f: {"shorts": len(v), "median": _median(v),
                              **({"watched": _median(kept[f])} if kept.get(f) else {})}
                          for f, v in by_format.items()},
@@ -834,12 +1066,71 @@ def learn(ch, log=print):
     stats["ab"] = ab_stats(mature)
     stats["hooks"] = hook_lessons(mature)
     stats["hours"] = _by_hour(mature)
+    stats.update(insights)
 
     def fn(c):
         c["stats"] = stats
         c["last_learn"] = int(time.time())
     log(f"📈 {ch['name']}: {stats['counted']} Shorts counted, median {stats['median']} views.")
     return _change(ch["id"], fn)
+
+
+CURVE_MIN_VIEWS = 50        # the retention curve comes back empty for a video with very few views
+CURVE_PER_PASS = 6          # curves read per learn pass (one Analytics call each)
+CURVE_REFRESH = 7 * 86400   # a video's curve is read again weekly in its first month
+DAILY = 20 * 3600
+
+
+def _insights(ch, mature, log=print):
+    """yt_insights for a learn pass (inside the channel's youtube_account.use): retention curves on the upload
+    rows, and once a day the channel's search terms and (long videos) thumbnail reach. Returns the stats keys;
+    a failing read keeps the last ones, never stops the pass."""
+    import youtube_account
+    import yt_insights
+    old = ch.get("stats") or {}
+    now = time.time()
+    out = {k: old[k] for k in ("search", "search_at", "reach_at", "reach_error") if k in old}
+    due = [r for r in mature if (r.get("a_views") or r.get("views") or 0) >= CURVE_MIN_VIEWS and r.get("seconds")
+           and (not r.get("curve_at") or (now - r["curve_at"] > CURVE_REFRESH
+                                          and now - r.get("created", now) < 30 * 86400))]
+    for r in sorted(due, key=lambda r: r.get("curve_at") or 0)[:CURVE_PER_PASS]:
+        try:
+            summary = yt_insights.curve_summary(yt_insights.retention(r["video_id"]), float(r["seconds"]))
+        except Exception as e:  # noqa: BLE001 — curves are a bonus over the views
+            log(f"   ℹ️ {ch['name']}: no retention curve ({str(e)[:80]}).")
+            break
+        r["curve_at"] = int(now)
+        if summary:
+            r["curve"] = summary
+        youtube_account._save_upload(r)
+    long = bool(KINDS.get(ch["kind"], {}).get("long"))
+    out["retention_lesson"] = yt_insights.retention_lesson(mature, long=long)
+    # A channel handed over from another card (hand_over) reads only the searches since then: the 90 days
+    # before were the old videos' (the money card heard "mushkil paheliyan", 5-nov-2026), and those words
+    # would steer its new titles.
+    took = (ch.get("took_over") or {}).get("at") or 0
+    days = min(90, int((now - took) // 86400)) if took else 90
+    if took and days < 2:
+        out["search"], out["search_at"] = [], int(now)
+    elif now - old.get("search_at", 0) > DAILY:
+        try:
+            out["search"] = yt_insights.search_terms(days=days)
+        except Exception as e:  # noqa: BLE001
+            log(f"   ℹ️ {ch['name']}: no search terms ({str(e)[:80]}).")
+        out["search_at"] = int(now)
+    if long and now - old.get("reach_at", 0) > DAILY:
+        out["reach_at"] = int(now)
+        try:
+            totals = yt_insights.reach(ch["id"])
+            out.pop("reach_error", None)
+            for r in mature:
+                t = totals.get(r["video_id"])
+                if t and t["impressions"]:
+                    r.update(impressions=t["impressions"], ctr=t["ctr"])
+                    youtube_account._save_upload(r)
+        except Exception as e:  # noqa: BLE001 — most often the Reporting API is not switched on yet
+            out["reach_error"] = str(e)[:200]
+    return out
 
 
 TIP_MIN = 4           # Shorts counted at an hour before that hour is compared
@@ -932,12 +1223,25 @@ AB_EXPLORE = 0.2
 AB_SINCE = 1792688400
 # Each test: the channel kinds it runs on and its two sides (the first is today's default).
 EXPERIMENTS = {
-    "outro": {"kinds": ("cricket", "controversy", "quiz"), "arms": (True, False),
+    "outro": {"kinds": ("cricket", "controversy", "quiz", "money"), "arms": (True, False),
               "label": "FOLLOW end card", "names": ("with", "without")},
     # Quiz countdowns were cut by a second on 22-oct-2026 (the median viewer left at 7 s, about when
     # the first one starts): "long" puts the second back, so the cut is measured, not assumed.
     "timer": {"kinds": ("quiz",), "arms": ("short", "long"), "label": "quiz countdown",
               "names": ("1 s shorter", "as before")},
+    # Long videos' thumbnails (5-nov-2026): the text on the left (as always) or on the right, judged by the
+    # click-through rate of the Reporting API's reach reports (yt_insights.reach), not by views.
+    "thumb": {"kinds": ("history",), "arms": ("left", "right"), "label": "thumbnail text side",
+              "names": ("text left", "text right"), "metric": "ctr"},
+    # Footage cut pace (5-nov-2026): our usual cut every broll.CUT seconds, or the length that gives our
+    # Shorts the median shot of the niche's winners as teardown.py measures their files (pace_now). Runs
+    # only once both sides are measured and differ by 15% or more.
+    "pace": {"kinds": ("cricket", "controversy", "music"), "arms": ("ours", "rivals"), "label": "cut pace",
+             "names": ("our usual cuts", "the winners' pace")},
+    # Cartoon episode length (toon_shorts.LENGTHS, 5-nov-2026): our Shorts lose half their viewers by 0:07-0:12,
+    # so a 25-32 s episode is measured against the 35-45 s one, not assumed better.
+    "toonlen": {"kinds": ("toons",), "arms": ("long", "short"), "label": "episode length",
+                "names": ("35-45 seconds", "25-32 seconds")},
 }
 AB_KINDS = EXPERIMENTS["outro"]["kinds"]
 
@@ -987,34 +1291,47 @@ def hook_lessons(rows, n=3):
 
 
 def hook_text(stats):
-    """The lessons as one prompt line ("" without them)."""
-    h = (stats or {}).get("hooks") or {}
-    if not h.get("best"):
-        return ""
-    return ("THIS CHANNEL'S OWN VIEWERS (share who stayed past the first seconds): openings that kept them: "
-            + "; ".join(h["best"]) + ". Openings they swiped away from: " + "; ".join(h["worst"])
-            + ". Learn what the first kind does differently; never copy their words.")[:1500]
+    """The lessons as one prompt line ("" without them): the openings that kept viewers, where the channel's
+    viewers leave (retention curves) and what they searched (yt_insights)."""
+    import yt_insights
+    stats = stats or {}
+    h = stats.get("hooks") or {}
+    parts = []
+    if h.get("best"):
+        parts.append(("THIS CHANNEL'S OWN VIEWERS (share who stayed past the first seconds): openings that kept them: "
+                      + "; ".join(h["best"]) + ". Openings they swiped away from: " + "; ".join(h["worst"])
+                      + ". Learn what the first kind does differently; never copy their words.")[:1500])
+    if stats.get("retention_lesson"):
+        parts.append(stats["retention_lesson"][:400])
+    hint = yt_insights.search_hint([tuple(t) for t in stats.get("search") or []])
+    if hint:
+        parts.append(hint[:500])
+    return "\n".join(parts)
 
 
 def ab_stats(rows, since=AB_SINCE):
     """{test: {side: {"shorts", "median", "watched"?}, "p": p}} over counted Shorts since ``since``."""
     out = {}
-    for key in EXPERIMENTS:
+    for key, exp in EXPERIMENTS.items():
+        metric = exp.get("metric", "views")
         arms = {}
         for r in rows:
             if r.get(key) is None or r.get("format") == "teaser" or r.get("created", 0) < since:
                 continue
+            if r.get(metric) is None:
+                continue                   # a thumbnail without reach numbers yet counts for nothing
             arms.setdefault(_arm(r[key]), []).append(r)
         if not arms:
             continue
         res = {}
+        mid = _median if metric == "views" else (lambda xs: round(statistics.median(xs), 2) if xs else 0)
         for a, rs in arms.items():
             kept = [r["retention"] for r in rs if r.get("retention") is not None]
-            res[a] = {"shorts": len(rs), "median": _median([r["views"] for r in rs]),
+            res[a] = {"shorts": len(rs), "median": mid([r[metric] for r in rs]),
                       **({"watched": _median(kept)} if kept else {})}
         if len(arms) == 2:
             (_a, ra), (_b, rb) = arms.items()
-            res["p"] = round(perm_p([r["views"] for r in ra], [r["views"] for r in rb]), 3)
+            res["p"] = round(perm_p([r[metric] for r in ra], [r[metric] for r in rb]), 3)
         out[key] = res
     return out
 
@@ -1056,9 +1373,11 @@ def ab_line(ch):
         if not exp or ch.get("kind") not in exp["kinds"]:
             continue
         parts = []
+        ctr = exp.get("metric") == "ctr"
         for side, name in zip(exp["arms"], exp["names"]):
             s = res.get(_arm(side)) or {}
-            parts.append(f"{name}: {s.get('shorts', 0)} Shorts, median {s.get('median', 0)} views"
+            parts.append(f"{name}: {s.get('shorts', 0)} {'videos' if ctr else 'Shorts'}, median {s.get('median', 0)}"
+                         + ("% click rate" if ctr else " views")
                          + (f", {s['watched']:.0f}% watched" if s.get("watched") is not None else ""))
         win = ab_winner(res, key)
         verdict = (f"winner: {exp['names'][exp['arms'].index(win)]}" if win is not None else
@@ -1109,12 +1428,36 @@ def next_payload(ch, client_fn, log=print):
     if payload and meta.get("format") != "teaser":
         if ch["kind"] in EXPERIMENTS["outro"]["kinds"]:
             payload["frame_outro"] = meta["outro"] = ab_choice(ch, "outro")
+        if ch["kind"] in EXPERIMENTS["thumb"]["kinds"] and meta.get("format") == "history":
+            payload["history_thumb"] = meta["thumb"] = ab_choice(ch, "thumb")
         if ch["kind"] in EXPERIMENTS["timer"]["kinds"]:
             meta["timer"] = ab_choice(ch, "timer")
             payload["quiz_timer_add"] = 0 if meta["timer"] == "short" else 1
+        if ch["kind"] in EXPERIMENTS["toonlen"]["kinds"] and meta.get("format") == "toons":
+            payload["toon_length"] = meta["toonlen"] = ab_choice(ch, "toonlen")
+        cut = pace_now(ch) if ch["kind"] in EXPERIMENTS["pace"]["kinds"] else None
+        if cut:
+            meta["pace"] = ab_choice(ch, "pace")
+            if meta["pace"] == "rivals":
+                payload["broll_cut"] = cut
     if payload and hook_text(ch.get("stats")):
         payload["hook_lessons"] = hook_text(ch.get("stats"))
+    if payload:
+        import niche_research
+        book = niche_research.playbook_text(niche_of(ch))
+        if book:
+            payload["niche_playbook"] = book
     return payload, meta
+
+
+def pace_now(ch):
+    """The winners' footage cut length for this card's niche (teardown.pace_cut), or None."""
+    try:
+        import niche_research
+        import teardown
+        return teardown.pace_cut(niche_research.load(niche_of(ch)), teardown.BASE_CUT)
+    except Exception:  # noqa: BLE001 — no test this time
+        return None
 
 
 def _next_payload(ch, client_fn, log=print):
@@ -1129,7 +1472,7 @@ def _next_payload(ch, client_fn, log=print):
         _set_job(ch["id"], long_video["job_id"], teaser="started", parts=part + 1)
         return ({**look, "genre": "history", "history_teaser_of": long_video["job_id"],
                  "history_video_id": long_video["video_id"], "history_lang": ch.get("lang", "urdu"),
-                 "history_teaser_part": part, "bg_music": True},
+                 "history_teaser_part": part, "bg_music": True, "history_mode": ch.get("mode", "history")},
                 {"label": f"{'Moment ' + str(part) if part else 'Teaser'}: {long_video.get('label', '')}"[:120],
                  "format": "teaser", "part": part, "topic": long_video.get("topic"),
                  "teaser_of": long_video["job_id"], "publish_after": long_video.get("slot")})
@@ -1140,6 +1483,13 @@ def _next_payload(ch, client_fn, log=print):
                 {"label": f"Aaj ki tareekh: {datetime.now():%d %B}", "format": "today", "topic": ""})
     if kind == "quran":
         return _quran_payload(ch, look, log)
+    if kind == "toons" and mix_due(ch):
+        # The week's episodes as one long video (toon_mix.py): watch hours, on top of the day's Shorts.
+        import toon_mix
+        vol = len(toon_mix.mixes()) + 1
+        count = len(toon_mix.pending()[:toon_mix.MAX_EPISODES])
+        return ({**look, "genre": "toons", "toon_mix": True, "frame_outro": False},
+                {"label": f"Compilation vol. {vol}: {count} episodes", "format": "mix", "topic": "compilation"})
     if kind in PLANNERS:
         if ch.get("mode") == "explainer" and ch.get("ideas"):
             # News goes stale: ideas planned more than a day and a half ago are dropped.
@@ -1156,13 +1506,21 @@ def _next_payload(ch, client_fn, log=print):
             # The history channel also hears the owner's topic wishes, its language and length.
             extra = ({"notes": ch.get("notes") or "", "lang": ch.get("lang", "urdu"),
                       "minutes": ch.get("minutes", DEFAULT_MINUTES),
-                      **({"mode": "explainer"} if ch.get("mode") == "explainer" else {})}
-                     if kind == "history" else {})
+                      **({"mode": ch["mode"]} if ch.get("mode") in ("explainer", "horror") else {})}
+                     if kind == "history" else {"notes": ch.get("notes") or ""} if kind in ("money", "toons")
+                     else {})
             # Topics viewers asked for in comments (engage.auto_replies); the
             # planner's own rules still decide whether any of them is made.
             import engage
             import inspect
             asked = engage.requests(account(ch["id"]))
+            # ...and what viewers of this niche's viral videos asked for under them (niche_research).
+            try:
+                import niche_research
+                asked = asked + [f"{a} (asked under a viral video in this niche)"
+                                 for a in niche_research.asks(niche_of(ch))][:max(0, 7 - len(asked))]
+            except Exception:  # noqa: BLE001 — the planner works without them
+                pass
             if asked and "requests" in inspect.signature(planner.channel_ideas).parameters:
                 extra["requests"] = asked
             try:
@@ -1180,9 +1538,22 @@ def _next_payload(ch, client_fn, log=print):
         ch = _remix_first(ch, client_fn, log)
         idea = ch["ideas"][0]
         _change(ch["id"], lambda c: c.update(ideas=(c.get("ideas") or [])[1:]))
+        if idea.get("notes"):
+            look = {**look, "owner_notes": idea["notes"]}      # a remake with the owner's notes (_remake)
         if kind == "controversy":
             return ({**look, "genre": "controversy", "controversy_topic": idea["text"], "bg_music": True},
-                    {"label": idea["text"], "format": "controversy", "topic": idea["text"]})
+                    {"label": idea["text"], "format": "controversy", "topic": idea["text"], "idea": idea})
+        if kind == "money":
+            return ({**look, "genre": "money", "money_topic": idea["text"], "bg_music": True},
+                    {"label": idea["text"], "format": "money", "topic": idea["text"], "idea": idea})
+        if kind == "toons":
+            series = ({"toon_series": idea["series"], "toon_part": idea.get("part") or 1,
+                       "toon_parts": idea.get("parts") or 2} if idea.get("series") else {})
+            return ({**look, "genre": "toons", "toon_premise": idea["text"], "toon_shape": idea.get("shape") or "",
+                     "bg_music": True, **series},
+                    {"label": (f"Part {idea.get('part') or 1}: " if series else "") + idea["text"], "format": "toons",
+                     "topic": idea["text"], "idea": idea,
+                     **({"series": idea["series"], "series_part": idea.get("part") or 1} if series else {})})
         if kind == "history":
             series = ({"history_series": idea["series"], "history_part": idea["part"],
                        "history_parts": idea["parts"], "history_before": idea.get("before") or []}
@@ -1192,11 +1563,11 @@ def _next_payload(ch, client_fn, log=print):
                      "history_mode": ch.get("mode", "history"),
                      "frame_outro": False, **series},
                     {"label": (f"Part {idea['part']}: " if series else "") + idea["text"], "format": "history",
-                     "topic": idea["text"],
+                     "topic": idea["text"], "idea": idea,
                      **({"series": idea["series"], "series_part": idea["part"]} if series else {})})
         return ({**look, "genre": "cricket", "cricket_mode": idea["kind"], "cricket_match": idea["text"],
                  "bg_music": True},
-                {"label": idea["text"], "format": idea["kind"], "topic": idea["text"],
+                {"label": idea["text"], "format": idea["kind"], "topic": idea["text"], "idea": idea,
                  **({"urgent": True} if idea.get("urgent") else {})})
     if kind == "quiz":
         import quiz_shorts
@@ -1205,27 +1576,100 @@ def _next_payload(ch, client_fn, log=print):
         topic = random.choice(topics) if fmt in quiz_shorts.FACT_FORMATS else ""
         if ch.get("notes") and fmt in quiz_shorts.FACT_FORMATS and fmt != "islamic" and random.random() < 0.5:
             topic = ch["notes"][:80]
+        # Once a day the subject of a viral quiz the research agent studied (niche_research).
+        idea = remix_idea(ch, log)
+        if idea:
+            fmt = idea["kind"] if idea["kind"] in quiz_shorts.FACT_FORMATS else "mcq"
+            topic = idea["text"][:80]
         # The channel's running number: "QUIZ #12" makes a daily series to come back for.
         number = 1 + sum(1 for j in ch.get("jobs") or [] if j.get("status") in ("done", "uploaded"))
         return ({**look, "genre": "quiz", "quiz_format": fmt, "quiz_topic": topic, "bg_music": True,
                  "quiz_avoid": (ch.get("used") or [])[-80:], "quiz_number": number},
                 {"label": f"{fmt}{': ' + topic if topic else ''}", "format": fmt, "topic": topic})
     if kind == "music":
+        mix = _mix_payload(ch, look)
+        if mix:
+            return mix
         import music_shorts
         import ai_influencer
-        style = pick_format(ch, music_shorts.STYLES)
-        theme = music_shorts.pick_theme()
+        import music_moods
+        # Every song is made for a mood and its playlist (owner, 5-nov-2026): the mood furthest behind its
+        # share of the last songs, then the best of that mood's styles and one of its themes.
+        moods = music_moods.settings_of(ch.get("moods"))
+        recent = [j.get("mood") or music_moods.infer(j.get("format"), j.get("topic"))
+                  for j in sorted(ch.get("jobs") or [], key=lambda j: j.get("at", 0))
+                  if j.get("status") in ("running", "done", "uploaded")]
+        wanted = (ch.get("next_mood") or "")
+        mood_key = wanted if wanted in music_moods.song_moods(moods) else music_moods.pick(moods, recent)
+        brief = ""
+        if mood_key:
+            mood = music_moods.song_moods(moods)[mood_key]
+            style, theme, brief = music_moods.song_choice(mood, music_shorts.STYLES,
+                                                          lambda opts: pick_format(ch, opts))
+        else:
+            style = pick_format(ch, music_shorts.STYLES)
+            theme = music_shorts.pick_theme()
+        # Once a day the theme and style of a viral song Short the research agent studied (within the mood:
+        # its theme, and its style only when that style is one of the mood's).
+        idea = remix_idea(ch, log) if not wanted else None
+        if idea:
+            theme = idea["text"][:60]
+            mood_styles = music_moods.song_moods(moods)[mood_key].get("styles") if mood_key else music_shorts.STYLES
+            style = idea["kind"] if idea["kind"] in (mood_styles or []) else style
         # The channel's AI singer dances in the first songs of the day, up to
         # ai_influencer.DAILY_MAX (she costs about $0.70 a Short); the rest are
         # the usual songs. Off until there is a fal.ai key and a chosen character.
         dance = ai_influencer.available()
         # No end card on songs: a Short that ends on the music loops straight
         # back into the first line, and replays count as views.
+        mood_name = music_moods.all_moods(moods)[mood_key]["name"] if mood_key else ""
         return ({**look, "genre": "music", "music_style": style, "music_theme": theme, "frame_outro": False,
-                 "music_avoid": (ch.get("used") or [])[-60:], **({"music_dance": True} if dance else {})},
-                {"label": f"{'Dance: ' if dance else ''}{style} song about {theme}",
-                 "format": "dance" if dance else style, "topic": theme})
+                 "music_avoid": (ch.get("used") or [])[-60:], **({"music_dance": True} if dance else {}),
+                 **({"music_mood": mood_key, "music_brief": brief} if mood_key else {})},
+                {"label": f"{'Dance: ' if dance else ''}{mood_name + ': ' if mood_name else ''}{style} song about {theme}",
+                 "format": "dance" if dance else style, "topic": theme, **({"mood": mood_key} if mood_key else {})})
     return None, None
+
+
+def mix_due(ch, now=None):
+    """True when the song channel owes its weekly mood mix (music_moods.next_mix), or the cartoon channel its
+    weekly compilation (toon_mix.due)."""
+    if ch.get("kind") == "toons":
+        if not ch.get("toon_mix", True):
+            return False
+        import toon_mix
+        try:
+            return toon_mix.due(ch.get("jobs"), now.timestamp() if hasattr(now, "timestamp") else now)
+        except Exception:  # noqa: BLE001 — episodes go on without the compilation
+            return False
+    if ch.get("kind") != "music":
+        return False
+    import music_moods
+    try:
+        return music_moods.next_mix(music_moods.settings_of(ch.get("moods")), ch.get("jobs"),
+                                    now=now.timestamp() if hasattr(now, "timestamp") else now,
+                                    wanted=ch.get("next_mix") or "") is not None
+    except Exception:  # noqa: BLE001 — songs go on without the mix
+        return False
+
+
+def _mix_payload(ch, look):
+    """(payload, meta) of the song channel's due mood mix, or None."""
+    import music_moods
+    settings = music_moods.settings_of(ch.get("moods"))
+    got = music_moods.next_mix(settings, ch.get("jobs"), wanted=ch.get("next_mix") or "")
+    if not got:
+        return None
+    key, dirs = got
+    mood = music_moods.all_moods(settings)[key]
+    vol = 1 + sum(1 for j in ch.get("jobs") or [] if j.get("format") == "mix" and j.get("mood") == key
+                  and j.get("status") in ("done", "uploaded"))
+    return ({**look, "genre": "music", "music_mix": key, "music_mix_mood": mood, "music_mix_songs": dirs,
+             "music_mix_minutes": music_moods.mix_setting(settings, "mix_minutes"),
+             "music_mix_budget": music_moods.mix_setting(settings, "mix_budget"), "music_mix_vol": vol,
+             "frame_outro": False},
+            {"label": f"{mood['name']} mix, vol. {vol}" + (f" ({len(dirs)} songs)" if dirs else ""),
+             "format": "mix", "topic": mood["name"], "mood": key})
 
 
 QURAN_TRIES = 3
@@ -1279,7 +1723,7 @@ def wants_more(ch, now=None):
     day = today(now)
     if not ch.get("enabled") or running(ch) or ch.get("paused_until", 0) > (now.timestamp() if now else time.time()):
         return False
-    if teaser_due(ch) or today_short_due(ch, now):
+    if teaser_due(ch) or today_short_due(ch, now) or mix_due(ch, now):
         return True
     made = len(_jobs_on(ch, day))
     passing = sum(1 for j in _jobs_on(ch, day, ("failed",)) if j.get("transient"))
@@ -1348,7 +1792,17 @@ async def make_one(submit, ch, client_fn, log=print, now=None):
     except Exception as e:  # noqa: BLE001
         row.update(status="failed", error=str(e)[:200])
         log(f"⚠️ {ch['name']}: could not start '{meta['label'][:60]}': {e}")
-    _change(ch["id"], lambda c: c.update(jobs=((c.get("jobs") or []) + [row])[-200:]))
+
+    def fn(c):
+        c["jobs"] = ((c.get("jobs") or []) + [row])[-200:]
+        if (c.get("next_mix") and row.get("format") == "mix" and row.get("mood") == c["next_mix"]
+                and row["status"] != "failed"):
+            c.pop("next_mix")                      # the owner's "make a mix now" is on its way
+        if c.get("next_mood") and row.get("mood") == c["next_mood"] and row["status"] != "failed":
+            c.pop("next_mood")                     # the owner's "make a <mood> song" is on its way
+        if row["status"] == "failed" and c["kind"] in PLANNERS and _requeue(c, row.get("idea")):
+            row["requeued"] = True                 # never started: the idea itself was never tried
+    _change(ch["id"], fn)
     if row.get("job_id"):
         log(f"🎬 {ch['name']}: making '{meta['label'][:70]}'.")
     return row.get("job_id")
@@ -1387,7 +1841,13 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
             changed.append((j["job_id"], "failed", reason or "the job failed", []))
         elif state == "missing" and now - j.get("at", now) > LOST_AFTER:
             changed.append((j["job_id"], "failed", LOST, []))
-        elif now - j.get("at", now) > KINDS.get(ch["kind"], {}).get("timeout", JOB_TIMEOUT):
+        elif now - j.get("at", now) > (MIX_TIMEOUT if j.get("format") == "mix"
+                                       else KINDS.get(ch["kind"], {}).get("timeout", JOB_TIMEOUT)):
+            if cancel_job:
+                try:
+                    cancel_job(j["job_id"], "stopped: it took too long")
+                except Exception:  # noqa: BLE001 — the job is still marked failed
+                    pass
             changed.append((j["job_id"], "failed", "took too long", []))
     if not changed:
         return ch
@@ -1408,6 +1868,8 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
                     elif status == "failed" and err and TRANSIENT.search(err):
                         j["transient"] = True
                         c["paused_until"] = int(now) + TRANSIENT_PAUSE
+                    if j.get("transient") and c["kind"] in PLANNERS and _requeue(c, j.get("idea")):
+                        j["requeued"] = True
             job = next((j for j in c["jobs"] if j.get("job_id") == job_id), {})
             topic = job.get("topic")
             if status == "done" and job.get("format") != "teaser":   # a teaser's topic is already used
@@ -1425,6 +1887,11 @@ def held_for_review(ch, j, now=None):
     """True while a finished video waits the channel's review_hours, so the
     owner can watch it (Channels tab or Telegram) and skip it first."""
     hours = int(ch.get("review_hours") or 0)
+    # Studio's AI editor is changing the file (ai_editor.py): never upload the half-edited video.
+    if (j.get("editing_until") or 0) > (now or time.time()):
+        return True
+    if j.get("approved"):            # approved in the Studio (studio.act): no need to wait out the hold
+        return False
     return bool(hours) and (now or time.time()) < (j.get("done_at") or j.get("at", 0)) + hours * 3600
 
 
@@ -1441,7 +1908,8 @@ def _tell_review(ch, job_ids, job_clips):
             if clips:
                 telegram_notify.send_text(
                     f"{ch['name']}: \"{clips[0]['title'][:90]}\" is ready and goes up in "
-                    f"{ch['review_hours']} h unless you skip it here or in Shortkaar (Channels tab).",
+                    f"{ch['review_hours']} h unless you skip it here or in Shortkaar (Channels tab).\n"
+                    f"{PHONE_EDIT_HINT}\nref {job_id}",
                     buttons=[("Skip this video", f"skip:{ch['id']}:{job_id}")])
     except Exception:  # noqa: BLE001 — a message never stops the channel
         pass
@@ -1473,7 +1941,8 @@ def _link_previous_part(row, j, ch, log=print):
     import history_videos
     import youtube_account
     part = int(j.get("series_part") or 1)
-    prev = history_videos.series_rows(youtube_account.uploads(), j["series"]).get(part - 1)
+    genres = ("toons",) if ch.get("kind") == "toons" else history_videos.LONG_GENRES
+    prev = history_videos.series_rows(youtube_account.uploads(), j["series"], genres).get(part - 1)
     if not prev or prev.get("next_linked"):
         return
     try:
@@ -1507,19 +1976,40 @@ def stale(j, now=None):
     return bool(hours) and now - j.get("at", now) > hours * 3600
 
 
-def _remake(cid, j):
+REQUEUE_MAX = 2
+
+
+def _requeue(c, idea):
+    """A planned idea whose job died of something outside the idea (network, quota, a server restart)
+    goes back in the queue: after any urgent match results, before the rest. A planned idea leaves the
+    queue when its job starts, so an outage used to lose it: an urgent result, the owner's own topic,
+    one part of a history series. At most REQUEUE_MAX times; an idea already queued is left alone."""
+    if not isinstance(idea, dict) or not idea.get("text") or int(idea.get("requeued") or 0) >= REQUEUE_MAX:
+        return False
+    ideas = c.get("ideas") or []
+    if any(str(i.get("text") or "").lower() == idea["text"].lower() for i in ideas):
+        return False
+    lead = 0 if idea.get("urgent") else next((k for k, i in enumerate(ideas) if not i.get("urgent")), len(ideas))
+    c["ideas"] = ideas[:lead] + [{**idea, "requeued": int(idea.get("requeued") or 0) + 1}] + ideas[lead:]
+    return True
+
+
+def _remake(cid, j, notes=""):
     """A planned topic goes back to the front of the ideas (after urgent
-    results), for a video that cannot be posted as it was made."""
+    results), for a video that cannot be posted as it was made. ``notes``: what
+    the owner wants different (Studio's AI editor), sent to the writer as OWNER_NOTES."""
     if not j.get("topic") or j.get("format") in EXTRA_FORMATS or j.get("series"):
         return
-    kind = j["format"] if j.get("format") in ("match", "versus", "topic") else "topic"
+    kind = j["format"] if j.get("format") in ("match", "versus", "topic", "ranking") else "topic"
+    notes = " ".join(str(notes or "").split())[:500]
 
     def fn(c):
         if c["kind"] not in PLANNERS:
             return
         rest = [i for i in c.get("ideas") or [] if i.get("text") != j["topic"]]
         urgent = [i for i in rest if i.get("urgent")]
-        c["ideas"] = urgent + [{"kind": kind, "text": j["topic"]}] + [i for i in rest if not i.get("urgent")]
+        c["ideas"] = (urgent + [{"kind": kind, "text": j["topic"], **({"notes": notes} if notes else {})}]
+                      + [i for i in rest if not i.get("urgent")])
         c["used"] = [u for u in c.get("used") or [] if u != j["topic"][:140]]
     _change(cid, fn)
 
@@ -1548,6 +2038,8 @@ def upload_waiting(ch, job_clips, log=print):
                 _set_job(ch["id"], j["job_id"], status="skipped", error="too old to post now (news of an earlier day)")
                 log(f"⏭️ {ch['name']}: not uploading '{(j.get('label') or j.get('topic') or '')[:60]}': too old now.")
                 continue
+            if (j.get("editing_until") or 0) > time.time():     # the AI editor is changing it, even if urgent
+                continue
             if held_for_review(ch, j) and not j.get("urgent"):   # a match result is news for hours only
                 continue
             _state, clips = job_clips(j["job_id"])
@@ -1558,7 +2050,8 @@ def upload_waiting(ch, job_clips, log=print):
             if not j.get("qa") and os.environ.get("VIDEO_QA", "1") != "0":
                 # Nobody watches these go up: a silent, black or frozen render stops here.
                 import video_qa
-                long = bool(KINDS.get(ch["kind"], {}).get("long")) and j.get("format") not in EXTRA_FORMATS
+                long = ((bool(KINDS.get(ch["kind"], {}).get("long")) and j.get("format") not in EXTRA_FORMATS)
+                        or j.get("format") == "mix")
                 try:
                     problems = video_qa.check(clip["path"], long=long)
                 except video_qa.Unchecked as e:
@@ -1574,6 +2067,19 @@ def upload_waiting(ch, job_clips, log=print):
                     log(f"🚫 {ch['name']}: not uploading '{clip['title'][:60]}': {'; '.join(problems)}.")
                     continue
                 _set_job(ch["id"], j["job_id"], qa="ok")
+            if not j.get("look"):
+                import creative_qa
+                if creative_qa.enabled():
+                    # Eyes on it before it goes up (creative_qa.py): words cut mid-word, a corrupted
+                    # picture, an empty first frame. Once per job; a check that cannot run lets it go up.
+                    seen = creative_qa.review(clip["path"], clip.get("title") or "", ch["kind"], ch.get("name") or "")
+                    if seen and seen["blocked"] and creative_qa.blocks():
+                        _set_job(ch["id"], j["job_id"], status="failed", look="blocked",
+                                 error="visual check: " + seen["reason"])
+                        log(f"🚫 {ch['name']}: not uploading '{clip['title'][:60]}': visual check: {seen['reason'][:150]}.")
+                        continue
+                    _set_job(ch["id"], j["job_id"],
+                             look=f"first frame {seen['first_frame']}/10, polish {seen['polish']}/10" if seen else "unchecked")
             if j.get("urgent"):
                 slot = datetime.now().astimezone() + timedelta(minutes=URGENT_AFTER_MINUTES)
             elif j.get("format") == "teaser":
@@ -1614,6 +2120,11 @@ def upload_waiting(ch, job_clips, log=print):
                     desc = history_videos.series_links(desc, ups, j["series"], j.get("series_part") or 1,
                                                        ch.get("lang", "urdu"))
                 desc = history_videos.watch_next(desc, ups, ch.get("lang", "urdu"))
+            elif ch["kind"] == "toons" and j.get("series"):
+                # Part 2 of a two-part cartoon links its part 1 (and part 1 gets the link to it after this upload).
+                import history_videos
+                desc = history_videos.series_links(desc, youtube_account.uploads(), j["series"],
+                                                   j.get("series_part") or 1, "urdu", genres=("toons",))
             # Hindi and Urdu-script titles for viewers searching in those scripts (localize.py).
             import localize
             translated = {}
@@ -1623,9 +2134,21 @@ def upload_waiting(ch, job_clips, log=print):
                     translated = localize.build(short_kit.gemini(), clip["title"], desc, ch["kind"], log=log)
                 except Exception:  # noqa: BLE001 — never holds an upload back
                     translated = {}
+            # The same song never goes up twice (audio_dedupe.py, Chromaprint); a mix reuses songs on purpose.
+            fp = None
+            if ch["kind"] == "music" and j.get("format") != "mix":
+                import audio_dedupe
+                fp = audio_dedupe.fingerprint(clip["path"]) if audio_dedupe.available() else None
+                dup = audio_dedupe.duplicate(ch["id"], fp, exclude=j["job_id"])
+                if dup:
+                    _set_job(ch["id"], j["job_id"], status="skipped",
+                             error=f"the same song as '{dup['title'][:60]}', already uploaded")
+                    log(f"⏭️ {ch['name']}: not uploading '{clip['title'][:60]}': the same song as "
+                        f"'{dup['title'][:60]}' ({dup['score']:.0%} of its fingerprint).")
+                    continue
             row = youtube_account.upload(
                 clip["path"], clip["title"], desc, clip["tags"],
-                "history_teaser" if j.get("format") in EXTRA_FORMATS else KINDS[ch["kind"]]["genre"],
+                upload_genre(ch, j),
                 publish_at=slot, ai_made=clip.get("ai_made", False),
                 **({"localizations": translated} if translated else {}),
                 meta={"job_id": j["job_id"], "clip_index": clip["index"], "channel": ch["id"],
@@ -1634,10 +2157,17 @@ def upload_waiting(ch, job_clips, log=print):
                       # What the first seconds say and show, for hook_lessons.
                       "opening": clip.get("opening") or "", "screen": clip.get("hook") or "",
                       **({"series": j["series"], "series_part": j.get("series_part")} if j.get("series") else {}),
+                      **({"mood": j["mood"]} if j.get("mood") else {}),
+                      **({"thumb": j["thumb"]} if j.get("thumb") else {}),
                       **({"outro": j["outro"]} if j.get("outro") is not None else {}),
-                      **({"timer": j["timer"]} if j.get("timer") is not None else {})})
+                      **({"timer": j["timer"]} if j.get("timer") is not None else {}),
+                      **({"pace": j["pace"]} if j.get("pace") else {}),
+                      **({"toonlen": j["toonlen"]} if j.get("toonlen") else {})})
             if row.get("status") == "done":
                 done += 1
+                if fp:
+                    import audio_dedupe
+                    audio_dedupe.remember(ch["id"], j["job_id"], clip["title"], fp)
                 if clip.get("thumbnail"):
                     youtube_account.add_thumbnail(row, clip["thumbnail"])
                     _keep_for_retry(ch, row, "thumbnail", clip["thumbnail"])
@@ -1656,7 +2186,8 @@ def upload_waiting(ch, job_clips, log=print):
                 try:
                     import meta_publish
                     # The same Short on the channel's Facebook Page and Instagram at its YouTube time.
-                    if meta_publish.enqueue(ch, {**row, "description": desc}, clip["path"], slot):
+                    if meta_publish.enqueue(ch, {**row, "description": desc}, clip["path"], slot,
+                                            ig_wait=meta_ig_mode(ch) == "winners"):
                         log(f"   📋 {ch['name']}: queued for Facebook / Instagram.")
                 except Exception as e:  # noqa: BLE001 — YouTube is what matters
                     log(f"   ⚠️ {ch['name']}: not queued for Facebook / Instagram ({type(e).__name__}).")
@@ -1702,7 +2233,7 @@ def _keep_for_retry(ch, row, key, path, lang=None):
 VOICE_CREDIT = ("Some narration is made with OmniVoice. Built with Higgs Materials licensed from Boson AI USA, Inc., "
                 "Copyright Boson AI USA, Inc., All Rights Reserved and Meta Llama 3 licensed under the Meta Llama 3 "
                 "Community License, Copyright Meta Platforms, Inc., All Rights Reserved.")
-VOICE_KINDS = ("cricket", "quiz", "controversy", "history", "quran")
+VOICE_KINDS = ("cricket", "quiz", "controversy", "history", "quran", "money", "toons")
 # Every channel's About text was empty on 22-oct-2026, which also wastes YouTube's channel search: an
 # empty one gets this before the credit. Plain facts only; the owner can rewrite it in Studio any time.
 ABOUT = {
@@ -1714,30 +2245,51 @@ ABOUT = {
     "controversy": "Viral stories and controversies explained simply in Urdu and Hindi: what was reported, what "
                    "is alleged and what each side says, with the sources in every description. New explainers "
                    "every day.",
+    "money": "Money stories told with animated charts, in Urdu and Hindi: what things cost then and now, what "
+             "people earn at home and abroad, and the biggest money mistakes of famous companies. Every number "
+             "comes from published sources, listed in each description. Information only, never financial "
+             "advice. New Shorts every day.",
     "history": "Urdu documentaries on history and the big stories of today: empires, battles, scholars, "
                "turning points and the news everyone is talking about, explained with sources. New videos "
                "every day, plus short clips from each one.",
     "quran": "Tilawat of the Holy Quran by Qari Mishary Rashid Alafasy, ayah by ayah, with the Arabic text "
              "and the Urdu translation of Maulana Muhammad Junagarhi on screen. Recitation and texts from the "
              "Quran Foundation (quran.com). A new surah or part every day.",
+    # The long channel in horror mode (ABOUT key = engage_kind).
+    "horror": "Original horror stories in Urdu and Hindi, told late at night: haunted havelis, highways, hostels "
+              "and the things that wait in the dark. Every story is fiction, written for this channel, with "
+              "painted pictures and a narrator. New stories every week, plus short clips from each one.",
+    "toons": "Billo the cat, Sheru the dog, Mithu the parrot and baby Guddu, who talks like a tired old uncle: an "
+             "original animated comedy series about one Lahore home. Bills, guests, cricket on TV, rishta aunties "
+             "and Ammi's kitchen rules, a new episode with a twist every day. All characters are fictional; the "
+             "pictures and voices are made with AI.",
 }
 
 
 def about_credit(ch, log=print):
-    """Add VOICE_CREDIT to the channel's About text once (``about_credit`` on the card)."""
+    """Add VOICE_CREDIT to the channel's About text once (``about_credit`` on the card). A channel handed over
+    from a card of another kind (hand_over) gets its own kind's About in place of the old one, which is kept in
+    the card's folder."""
     import youtube_account
     if ch.get("kind") not in VOICE_KINDS or ch.get("about_credit"):
         return False
+    about = ABOUT.get(engage_kind(ch)) or ABOUT.get(ch["kind"])
+    swap = bool(ch.get("took_over")) and bool(about)
     with youtube_account.use(account(ch["id"])):
         if not youtube_account.status()["connected"]:
             return False
         try:
-            added = youtube_account.add_to_channel_about(VOICE_CREDIT, if_empty=ABOUT.get(ch["kind"]))
+            more = ({"replace": about, "backup": os.path.join(folder(ch["id"]), f"about_backup_{today()}.txt")}
+                    if swap else {})
+            added = youtube_account.add_to_channel_about(VOICE_CREDIT, if_empty=about, **more)
         except Exception as e:  # noqa: BLE001 — tried again on the next learn pass
             log(f"⚠️ {ch.get('name')}: voice credit not added ({str(e)[:80]}).")
             return False
     _change(ch["id"], lambda c: c.update(about_credit=int(time.time())))
-    log(f"📝 {ch.get('name')}: voice credit {'added to' if added else 'already in'} the channel's About text.")
+    if swap:
+        log(f"📝 {ch.get('name')}: the channel's About text now describes this card (the old one is backed up).")
+    else:
+        log(f"📝 {ch.get('name')}: voice credit {'added to' if added else 'already in'} the channel's About text.")
     return added
 
 
@@ -1782,9 +2334,98 @@ def retry_extras(ch, log=print, now=None):
     return fixed
 
 
+# Editing from the phone (4-nov-2026): a text reply to a review note, or to an edited video the bot sent
+# back, is an AI-editor request for that video. app.py sets ``start_ai_edit(job_id, prompt)`` (the same
+# subprocess as Studio's box; it raises with a reason the owner can read).
+PHONE_EDIT_HINT = ("Reply to this message with a change (e.g. \"captions peele karo\", \"pehle 2 second kaato\"), "
+                   "or \"suggest\" for the AI's own ideas.")
+start_ai_edit = None
+# "<job id>" or "<job id>.<n>": clip n of a job cut into several Shorts (studio.REF).
+_REF = re.compile(r"\bref ([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:\.[1-9][0-9]?)?)\b")
+
+
+SUGGEST_WORDS = {"suggest", "suggestions", "ideas", "idea", "kya behtar ho sakta hai", "behtar karo", "mashwara",
+                 "tips"}
+
+
+def _phone_suggestions(job_id):
+    """The AI editor's own suggestions as Telegram buttons ("ed:<job>:<n>": a press applies that one)."""
+    import ai_editor
+    import telegram_notify
+    try:
+        items = (ai_editor.suggest(job_id) or {}).get("items") or []
+    except Exception as e:  # noqa: BLE001 — the reason goes back to the phone
+        return f"No suggestions right now ({getattr(e, 'args', [''])[0] or type(e).__name__})."
+    if not items:
+        return "The AI has nothing to suggest: this one looks ready."
+    lines = [f"{k + 1}. {s['text']}" + (f" ({s['why']})" if s.get("why") else "") for k, s in enumerate(items)]
+    telegram_notify.send_text("Suggested edits (tap one to make it):\n" + "\n".join(lines) + f"\nref {job_id}",
+                              buttons=[(f"{k + 1}. {s['text']}", f"ed:{job_id}:{k}") for k, s in enumerate(items)],
+                              rows=True)
+    return ""
+
+
+def _press_suggestion(rest):
+    """A tap on a suggestion button: that suggestion becomes the edit request."""
+    import ai_editor
+    import studio
+    job_id, _, k = rest.rpartition(":")
+    try:
+        path = studio.job_dir(job_id)
+        folder = ai_editor.edits_name(studio.split_ref(job_id)[1])
+        items = (ai_editor._read_json(os.path.join(path, folder, "suggest.json"), {}) or {}).get("items") or []
+        text = items[int(k)]["text"]
+    except (studio.StudioError, ValueError, IndexError, KeyError):
+        return "That suggestion is gone; reply \"suggest\" for new ones."
+    if not start_ai_edit:
+        return "The editor is not running; open Shortkaar's Studio."
+    try:
+        start_ai_edit(job_id, text)
+    except Exception as e:  # noqa: BLE001
+        return f"Could not start the edit: {getattr(e, 'detail', None) or e}"
+    return f"Working on it: \"{text[:120]}\". The new version comes here in about a minute."
+
+
+def telegram_reply(text, replied):
+    """The owner replied ``text`` to the bot's message ``replied``: start that video's AI edit."""
+    m = _REF.search(replied or "")
+    if not m:
+        return ""                                     # a reply to some other note: nothing to do
+    import studio
+    job_id = m.group(1)
+    jid, index = studio.split_ref(job_id)
+    found = next(((c, j) for c in channels() for j in c.get("jobs") or [] if j.get("job_id") == jid), None)
+    if found and not index:
+        status = found[1].get("status")
+    else:
+        # The main channel's clips and the owner's uploads are Studio videos too.
+        try:
+            path = studio.job_dir(job_id)
+            studio.clip_of(studio._read(path), index)
+        except studio.StudioError:
+            return "That video is no longer in Shortkaar."
+        main = studio.main_clip(jid, index, path)
+        status = {"posted": "uploaded", "skipped": "skipped"}.get((main or {}).get("status"), "done")
+    if status in ("skipped", "failed"):
+        return f"That video was {status}, so there is nothing to edit."
+    if not start_ai_edit:
+        return "The editor is not running; open Shortkaar's Studio."
+    if text.strip().lower().strip("?!. ") in SUGGEST_WORDS:
+        return _phone_suggestions(job_id)
+    try:
+        start_ai_edit(job_id, text)
+    except Exception as e:  # noqa: BLE001 — the reason goes back to the phone
+        return f"Could not start the edit: {getattr(e, 'detail', None) or e}"
+    if status == "uploaded":
+        return "Working on it. It is already on YouTube, so only the title, description and tags can change."
+    return f"Working on it: \"{text[:120]}\". The new version comes here in about a minute."
+
+
 def telegram_press(data):
     """A button pressed in Telegram (telegram_notify.poll): the answer text."""
     kind, _, rest = data.partition(":")
+    if kind == "ed":
+        return _press_suggestion(rest)
     cid, _, job_id = rest.partition(":")
     if kind != "skip" or not cid or not job_id:
         return ""
@@ -1838,7 +2479,21 @@ def promo_targets(exclude):
 def engage_kind(ch):
     """The kind engage.py words comments, playlists and replies for: a long
     channel in explainer mode is not a history channel any more."""
-    return "explainer" if ch.get("kind") == "history" and ch.get("mode") == "explainer" else ch["kind"]
+    if ch.get("kind") == "history" and ch.get("mode") in ("explainer", "horror"):
+        return ch["mode"]
+    return ch["kind"]
+
+
+def upload_genre(ch, j):
+    """The genre an upload goes up as (youtube_account.CATEGORY): a horror story is Entertainment, its Shorts
+    too; the history channel's Shorts are "history_teaser"."""
+    if j.get("format") == "mix":
+        # A long video: the songs' mood mix (Music) or the cartoon series' compilation (Comedy).
+        return "toons_mix" if ch.get("kind") == "toons" else "music_mix"
+    horror = ch.get("kind") == "history" and ch.get("mode") == "horror"
+    if j.get("format") in EXTRA_FORMATS:
+        return "horror_teaser" if horror else "history_teaser"
+    return "horror" if horror else KINDS[ch["kind"]]["genre"]
 
 
 def promote(description, cid):
@@ -1859,6 +2514,7 @@ def engage_pass(cid, client_fn, log=print):
     import engage
     import youtube_account as ya
     acct = None if cid == "main" else account(cid)
+    moods, ch = None, None
     if cid == "main":
         sw, kind = main_settings(), "comedy"
     else:
@@ -1866,6 +2522,9 @@ def engage_pass(cid, client_fn, log=print):
         if not ch:
             return
         sw, kind = engage_settings(ch), engage_kind(ch)
+        if ch["kind"] == "music":
+            import music_moods                     # songs also go into their mood's playlist
+            moods = music_moods.settings_of(ch.get("moods"))
     st = engage.load(acct)
     if time.time() - st.get("last_pass", 0) < ENGAGE_EVERY:
         return
@@ -1876,7 +2535,9 @@ def engage_pass(cid, client_fn, log=print):
             return
         me = yt.get("channel") or {}
         for key, job in (("first_comment", lambda: engage.first_comments(acct, kind, log)),
-                         ("playlists", lambda: engage.add_to_playlists(acct, kind, log)),
+                         ("playlists", lambda: engage.add_to_playlists(acct, kind, log, moods=moods)),
+                         ("podcasts", lambda: engage.podcasts(acct, kind, me.get("title") or "",
+                                                              (ch or {}).get("color") or "#1F1408", log)),
                          ("auto_reply", lambda: engage.reply_due(acct) and engage.auto_replies(
                              acct, kind, me.get("handle") or "", me.get("id"), client_fn, log))):
             if not sw.get(key):
@@ -1954,10 +2615,12 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
             await make_one(submit, ch, client_fn, log)
     # Skip presses on the review messages (Telegram) before any upload, so a
     # press just before the hold ends still stops it.
-    if any(c.get("review_hours") for c in rows):
+    # Text replies there are AI edits from the phone (telegram_reply), so it polls whenever the editor is
+    # wired up too (poll returns at once when Telegram is not connected).
+    if any(c.get("review_hours") for c in rows) or start_ai_edit:
         try:
             import telegram_notify
-            await loop.run_in_executor(None, telegram_notify.poll, telegram_press)
+            await loop.run_in_executor(None, lambda: telegram_notify.poll(telegram_press, on_text=telegram_reply))
         except Exception as e:  # noqa: BLE001
             log(f"⚠️ Telegram poll: {type(e).__name__}")
     for ch in live:
@@ -1976,12 +2639,62 @@ async def tick(submit, job_clips, output_dir, client_fn, log=print, now=None):
                 await loop.run_in_executor(None, check_placement, ch["id"], log)
             except Exception as e:  # noqa: BLE001 — next learn pass
                 log(f"⚠️ {ch['name']}: placement check failed ({type(e).__name__}).")
+        if (ch.get("took_over") or {}).get("hide") and not ch["took_over"].get("hide_done"):
+            try:
+                await loop.run_in_executor(None, hide_retired, ch, log, t)
+            except Exception as e:  # noqa: BLE001 — the next pass
+                log(f"⚠️ {ch['name']}: hiding the old videos failed ({type(e).__name__}).")
         if ch.get("kind") == "cricket":
             await loop.run_in_executor(None, match_watch, ch, client_fn, log, t)
     # Engagement on every connected channel, the main one included.
     for cid in ["main"] + [c["id"] for c in live]:
         await loop.run_in_executor(None, engage_pass, cid, client_fn, log)
     await loop.run_in_executor(None, meta_pass, log, t)
+    await loop.run_in_executor(None, research_pass, [niche_of(c) for c in live], client_fn, log, t)
+
+
+def research_pass(niches, client_fn, log=print, now=None):
+    """The research agent of ONE niche that is due (niche_research.run), the main channel's comedy
+    included: one per loop tick keeps each tick short (a pass is ~30-60 s of searches and Gemini
+    watching). Returns the niche researched, or None."""
+    import niche_research
+    if not niche_research.enabled():
+        return None
+    for niche in dict.fromkeys(["comedy"] + list(niches)):
+        if niche in niche_research.NICHES and niche_research.due(niche, now):
+            ch = next((c for c in channels() if niche_of(c) == niche), None)
+            stats = (ch or {}).get("stats") or {}
+            ours = (f"{stats.get('counted')} videos counted, median {stats.get('median')} views, "
+                    f"{stats.get('watched')}% watched" if stats.get("counted") else "")
+            try:
+                niche_research.run(niche, client_fn(), log, now, ours=ours, ours_files=recent_files(niche))
+            except Exception as e:  # noqa: BLE001 — run() already never raises; the client might
+                log(f"⚠️ Research for {niche} failed ({type(e).__name__}).")
+            return niche
+    return None
+
+
+def recent_files(niche, rows=None, output_dir=None):
+    """Our uploaded videos of ``niche`` whose file is still in its job folder (about a day), newest first:
+    [{"id", "path", "title", "views", "channel"}], for teardown.py to measure against the niche's winners.
+    A long channel's Shorts (teasers, "Aaj ki tareekh") and the song mixes are not its main videos."""
+    import youtube_account
+    output_dir = output_dir or os.path.join(ROOT, "output")
+    out = []
+    for ch in (channels() if rows is None else rows):
+        if niche_of(ch) != niche:
+            continue
+        with youtube_account.use(account(ch["id"])):
+            ups = youtube_account.uploads()
+        for r in sorted(ups, key=lambda r: r.get("created", 0), reverse=True):
+            vid = r.get("video_id")          # YouTube's id ("id" is our own row id)
+            if r.get("status") != "done" or not vid or r.get("format") in EXTRA_FORMATS:
+                continue
+            path = os.path.join(output_dir, str(r.get("job_id") or ""), str(r.get("file") or ""))
+            if r.get("job_id") and r.get("file") and os.path.isfile(path):
+                out.append({"id": vid, "path": path, "title": r.get("title"), "views": r.get("views"),
+                            "channel": ch["id"]})
+    return out
 
 
 META_EVERY = 10 * 60
@@ -2000,17 +2713,131 @@ def meta_pass(log=print, now=None):
             return 0
         import keep_awake
         with keep_awake.task():
-            return meta_publish.post_pass(log, now)
+            return meta_publish.post_pass(log, now, score=meta_score)
     except Exception as e:  # noqa: BLE001 — next pass
         log(f"⚠️ Facebook / Instagram pass failed ({type(e).__name__}).")
         return 0
 
 
+META_IG_MODES = ("auto", "all", "winners")
+# Few Instagram accounts (owner, 5-nov-2026, "I will go with your suggestions"): cricket has its own; the
+# Roman-Urdu story channels share one; songs (an English audience) and the Quran stay on Facebook only.
+IG_GROUPS = {"cricket": "cricket", "controversy": "stories", "money": "stories", "history": "stories",
+             "quiz": "stories", "music": None, "quran": None,
+             "toons": "toons"}            # cartoon animals are Reels' best fit: their own account, not a hub
+_STOP = {"the", "and", "of", "in", "a", "an", "ki", "ka", "ke", "official", "page", "tv"}
+
+
+def _words(text):
+    return set(re.findall(r"[a-z0-9]+", str(text or "").lower())) - _STOP
+
+
+def page_for(ch, pages, taken=()):
+    """The Facebook Page named like this card (its name or its YouTube channel's), or None."""
+    best, score = None, 0.0
+    names = [ch.get("name"), ch.get("yt_title"), (ch.get("took_over") or {}).get("yt_title")]
+    for p in pages:
+        pw = _words(p.get("name"))
+        if p["id"] in taken or not pw:
+            continue
+        for n in names:
+            nw = _words(n)
+            s = len(pw & nw) / len(pw | nw) if nw else 0.0
+            if s > score:
+                best, score = p, s
+    return best if score >= 0.5 else None
+
+
+def auto_link(rows=None, pages=None, log=print):
+    """After Facebook is connected (or its Pages read again): each card without a Page gets the one named like
+    it, and its Instagram: its own Page's when it has one, else the account its IG_GROUPS group shares; songs
+    and the Quran Facebook only. Choices the owner made stay. [{"card", "name", "page", "instagram"}]."""
+    import meta_publish
+    rows = [c for c in (channels() if rows is None else rows) if c.get("id") != "main"]
+    pages = (meta_publish._token() or {}).get("pages") or [] if pages is None else pages
+    by_id = {p["id"]: p for p in pages}
+    taken = {c["meta_page"] for c in rows if c.get("meta_page") in by_id}
+    fresh = set()
+    for ch in rows:
+        if ch.get("meta_page") in by_id:
+            continue
+        p = page_for(ch, pages, taken)
+        if p:
+            taken.add(p["id"])
+            ch["meta_page"] = p["id"]
+            fresh.add(ch["id"])
+            _change(ch["id"], lambda c, pid=p["id"]: c.update(meta_page=pid))
+    hubs = {}
+    for ch in rows:                      # a group's shared account: the Instagram of one of its own Pages
+        p = by_id.get(ch.get("meta_page"))
+        g = IG_GROUPS.get(ch.get("kind"))
+        if g and p and p.get("ig_id"):
+            hubs.setdefault(g, p["id"])
+    out = []
+    for ch in rows:
+        own = by_id.get(ch.get("meta_page")) or {}
+        g = IG_GROUPS.get(ch.get("kind"), "stories")
+        if ch["id"] in fresh and not ch.get("meta_ig_page"):
+            if g is None:
+                patch = {"meta_ig": False}
+            elif own.get("ig_id"):
+                patch = {"meta_ig": True, "meta_ig_page": ""}
+            elif hubs.get(g):
+                patch = {"meta_ig": True, "meta_ig_page": hubs[g]}
+            else:
+                patch = {}
+            if patch:
+                ch.update(patch)
+                _change(ch["id"], lambda c, x=patch: c.update(x))
+        ig = by_id.get(ch.get("meta_ig_page") or ch.get("meta_page")) if ch.get("meta_ig", True) else None
+        out.append({"card": ch["id"], "name": ch.get("name"), "page": own.get("name") or "",
+                    "instagram": (ig or {}).get("ig_username") or ""})
+    if fresh:
+        log(f"🔗 Facebook: {len(fresh)} channel(s) linked to their Pages by name.")
+    return out
+
+
+def meta_ig_mode(ch, rows=None):
+    """"all" or "winners": which of the card's Shorts go to its Instagram. "auto" (the default) is
+    "winners" when another running card posts to the same Instagram (owner, 5-nov-2026: one or two
+    Instagram accounts for all the channels), so a shared account gets only what already won on YouTube."""
+    mode = ch.get("meta_ig_mode") or "auto"
+    if mode != "auto":
+        return mode
+    mine = ch.get("meta_ig_page") or ch.get("meta_page")
+    if not mine or not ch.get("meta_ig", True):
+        return "all"
+    rows = channels() if rows is None else rows
+    shared = any(c.get("id") != ch.get("id") and c.get("enabled") and c.get("meta_ig", True)
+                 and (c.get("meta_ig_page") or c.get("meta_page")) == mine for c in rows)
+    return "winners" if shared else "all"
+
+
+def meta_score(item):
+    """(views, the channel's median views) of a queued Short's YouTube upload, for meta_publish's
+    winners-only Instagram; None when the card or its numbers are not known yet."""
+    ch = get(item.get("channel"))
+    vid = item.get("video_id") or str(item.get("id", "")).split("_", 1)[-1]
+    if not ch or not vid:
+        return None
+    import youtube_account
+    with youtube_account.use(account(ch["id"])):
+        row = next((r for r in youtube_account.uploads() if (r.get("video_id") or r.get("id")) == vid), None)
+    if not row or row.get("views") is None:
+        return None
+    return row["views"], (ch.get("stats") or {}).get("median") or 0
+
+
+last_tick = None     # time.time() at the start of the loop's latest tick (heartbeat.py)
+
+
 async def loop_forever(submit, job_clips, output_dir, client_fn, is_active=lambda: True, today_fn=None):
+    global last_tick
     while True:
         await asyncio.sleep(TICK_SECONDS)
         if not is_active():
             continue
+        last_tick = time.time()
         try:
             await tick(submit, job_clips, output_dir, client_fn)
         except Exception as e:  # noqa: BLE001 — the loop must survive a bad day

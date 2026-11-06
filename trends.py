@@ -22,6 +22,10 @@ QUERIES = {
                 "virat kohli shorts"],
     "controversy": ["controversy explained shorts", "celebrity controversy shorts hindi",
                     "pakistani celebrity controversy shorts", "cricketer controversy shorts"],
+    "money": ["salary comparison shorts", "price then and now shorts", "business mistake shorts hindi",
+              "pakistan economy shorts"],
+    "toons": ["talking cat cartoon shorts hindi", "billi ki kahani shorts", "funny cartoon shorts urdu",
+              "talking baby funny shorts hindi"],
 }
 
 

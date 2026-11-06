@@ -742,12 +742,15 @@ def footage(client, total, log=print):
     return found
 
 
-def shot(src, seconds, offset, out):
-    """One background shot: the clip filling 16:9, a little darker, fading in and out."""
+def shot(src, seconds, offset, out, fade_in=True):
+    """One background shot: the clip filling 16:9, a little darker, fading in and out. The video's first shot
+    does not fade in: its frame 0 was black but for the handle, and video_qa refused Surah Yaseen part 2 three
+    times as an empty opening (5-nov-2026)."""
     fade = min(0.6, seconds / 4)
     vf = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},setsar=1,"
           f"eq=brightness=-0.03:saturation=0.9,drawbox=x=0:y=0:w=iw:h=ih:color=black@0.32:t=fill,"
-          f"fade=t=in:st=0:d={fade:.2f},fade=t=out:st={seconds - fade:.2f}:d={fade:.2f},format=yuv420p")
+          + (f"fade=t=in:st=0:d={fade:.2f}," if fade_in else "")
+          + f"fade=t=out:st={seconds - fade:.2f}:d={fade:.2f},format=yuv420p")
     r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{offset:.2f}", "-stream_loop", "-1",
                         "-i", src, "-vf", vf, "-frames:v", str(int(round(seconds * FPS))), "-r", str(FPS),
                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
@@ -783,7 +786,7 @@ def background(job_dir, clips, total, log=print):
             room = max(0.0, float(c.get("seconds") or 0) - lengths[k] - 0.5)
             # A clip used twice starts at another moment the second time.
             offset = random.uniform(0, room) if room > 1 else 0.0
-            shot(c["path"], lengths[k], offset, out)
+            shot(c["path"], lengths[k], offset, out, fade_in=k > 0)
             if not too_dark(out):
                 break
             dark.add(c["id"])
@@ -1011,11 +1014,12 @@ def run(output_dir, pipeline):
     # The timeline: title card, then per ayah its recitation and its translation read out.
     events, pieces, ur_cues, en_cues = [], [], [], []
     s0 = segs[0][0]
-    events += [_at(5, 0.2, INTRO, "QArBig", W // 2, 400, SPECIAL_ARABIC.get(tuple(segs[0])) or chapter(s0)["arabic"],
-                   fade=(400, 300)),
-               _at(5, 0.4, INTRO, "QTitle", W // 2, 560, SPECIAL.get(tuple(segs[0])) or display_name(s0),
-                   fade=(400, 300)),
-               _at(5, 0.6, INTRO, "QPill", W // 2, 650, f"Qari {RECITERS[settings['reciter']]}", fade=(400, 300))]
+    # The title card is on screen from frame 0 (no fade in): a dark first frame read as an empty opening.
+    events += [_at(5, 0, INTRO, "QArBig", W // 2, 400, SPECIAL_ARABIC.get(tuple(segs[0])) or chapter(s0)["arabic"],
+                   fade=(0, 300)),
+               _at(5, 0, INTRO, "QTitle", W // 2, 560, SPECIAL.get(tuple(segs[0])) or display_name(s0),
+                   fade=(0, 300)),
+               _at(5, 0, INTRO, "QPill", W // 2, 650, f"Qari {RECITERS[settings['reciter']]}", fade=(0, 300))]
     t = INTRO
     for k, u in enumerate(us):
         ayah_start = t

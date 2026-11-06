@@ -88,6 +88,13 @@ def licence(url):
         hit = _cache.get(vid)
         if hit and time.time() - hit[0] < LICENCE_TTL:
             return hit[1]
+    # The Data API first (1 unit, no bot check): from this laptop's network every yt-dlp read was
+    # "Sign in to confirm you're not a bot" on 28-oct-2026 and each video read as "not CC".
+    out = _api_licence(vid)
+    if out:
+        with _cache_lock:
+            _cache[vid] = (time.time(), out)
+        return out
     try:
         info = section_fetch.video_info(f"https://www.youtube.com/watch?v={vid}")
     except Exception as e:  # noqa: BLE001 — the check is advice, never a blocker
@@ -101,6 +108,23 @@ def licence(url):
     with _cache_lock:
         _cache[vid] = (time.time(), out)
     return out
+
+
+def _api_licence(vid):
+    """licence()'s answer from the Data API, or None when it cannot answer (not connected, out of
+    research quota, a private video)."""
+    try:
+        import yt_api
+        rows = yt_api.videos([vid])
+    except Exception:  # noqa: BLE001 — yt-dlp is the fallback
+        return None
+    if not rows or not rows[0].get("licence"):
+        return None
+    r = rows[0]
+    cc = r["licence"] == "creativeCommon"
+    return {"licence": "creative_commons" if cc else "standard",
+            "label": "Creative Commons Attribution license (reuse allowed)" if cc else "Standard YouTube licence",
+            "title": r["title"], "channel": r["channel"], "channel_url": r["channel_url"], "seconds": r["seconds"]}
 
 
 def channel_url(channel):

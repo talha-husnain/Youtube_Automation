@@ -162,8 +162,59 @@ def craft_line(rows, views_of, now, since=None, least=3):
     return f"  New scripts: {say(after)}; the month before: {say(before)}."
 
 
-def week_text(today, now=None, rows_fn=_channel_rows):
-    """The last 7 days per channel: videos up, their views, the best one."""
+def look_line(kind):
+    """The week's visual check of this kind of channel (creative_qa): average scores and the defect
+    seen most, or ""."""
+    try:
+        import creative_qa
+        d = creative_qa.digest().get(kind or "")
+    except Exception:  # noqa: BLE001 — a bonus line
+        return ""
+    if not d or not d.get("videos"):
+        return ""
+    line = (f"  Looks ({d['videos']} checked): first frame {d['first_frame']}/10, polish {d['polish']}/10")
+    if d["issues"]:
+        worst = max(d["issues"], key=d["issues"].get)
+        line += f"; seen most: {worst.replace('_', ' ')} ({d['issues'][worst]}x)"
+    return line + "."
+
+
+def _ypp(cid):
+    """The channel's numbers against the YPP terms of 1-feb-2027 (yt_insights.ypp_numbers), or None."""
+    import my_channels
+    import youtube_account as ya
+    import yt_insights
+    with ya.use(None if cid == "main" else my_channels.account(cid)):
+        if not ya.status().get("connected"):
+            return None
+        return yt_insights.ypp_numbers()
+
+
+def ypp_lines(today, ypp_fn=_ypp):
+    """One line per connected channel on the 2027 targets ([] when none could be read)."""
+    import yt_insights
+    out = []
+    for ch in today.get("channels") or []:
+        try:
+            n = ypp_fn(ch["id"])
+        except Exception:  # noqa: BLE001 — one unreadable channel does not stop the report
+            continue
+        if n:
+            out.append(yt_insights.ypp_line(ch.get("name") or ch["id"], n))
+    return out
+
+
+def week_text(today, now=None, rows_fn=_channel_rows, ypp_fn=_ypp):
+    """The last 7 days per channel: videos up, their views, the best one; then the 2027 YPP targets."""
+    text = _week_videos(today, now, rows_fn)
+    ypp = ypp_lines(today, ypp_fn) if ypp_fn else []
+    if ypp:
+        text += ("\nYouTube's new money rules from 1 Feb 2027 (sign the new terms in YouTube Studio before then):\n"
+                 + "\n".join(ypp))
+    return text
+
+
+def _week_videos(today, now=None, rows_fn=_channel_rows):
     ts = now or time.time()
     since = ts - 7 * 86400
     lines, total_n, total_v = [], 0, 0
@@ -192,6 +243,9 @@ def week_text(today, now=None, rows_fn=_channel_rows):
             lines += my_channels.ab_line(my_channels.get(ch["id"]) or {})
         except Exception:  # noqa: BLE001 — the tests' state is a bonus line
             pass
+        look = look_line(ch.get("kind"))
+        if look:
+            lines.append(look)
     if not lines:
         return "No videos went up this week."
     head = f"This week: {total_n} videos, {total_v:,} views on them so far."

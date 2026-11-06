@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     Loader2, CheckCircle2, Circle, Copy, Check, AlertTriangle, Rocket, Trophy, HelpCircle, Music, Layers,
-    Bell, CalendarClock, Clock, Eye, Users, Upload, Clapperboard, ExternalLink, Flame, Landmark, Youtube,
+    Bell, CalendarClock, Clock, Eye, Users, Upload, Clapperboard, ExternalLink, Flame, Landmark, Youtube, Coins, Cat,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
@@ -10,7 +10,7 @@ import { getApiUrl } from '../config';
 // glance, what the owner still has to do, the next posts, and the switches
 // for the Windows reminders and the evening summary (reminders.py).
 
-const KIND_ICON = { comedy: Rocket, cricket: Trophy, quiz: HelpCircle, music: Music, controversy: Flame, history: Landmark };
+const KIND_ICON = { comedy: Rocket, cricket: Trophy, quiz: HelpCircle, music: Music, controversy: Flame, history: Landmark, money: Coins, toons: Cat };
 const at = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : '');
 const day = (ts) => new Date(ts * 1000).toLocaleString(undefined, { weekday: 'long', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
@@ -172,6 +172,13 @@ export default function TodayTab({ onOpenTab }) {
                         {c.asked?.length > 0 && (
                             <p className="px-3 text-xs text-muted">Viewers asked for: {c.asked.join(' · ')} (the next ideas hear this)</p>
                         )}
+                        {(c.corrections || []).map((x) => (
+                            <p key={`${x.video_id}-${x.at}`} className="px-3 text-xs text-warn break-words">
+                                A viewer says a fact is wrong (no auto reply was sent): "{x.text}"{' '}
+                                <a href={`https://studio.youtube.com/video/${x.video_id}/comments`} target="_blank" rel="noreferrer"
+                                   className="underline">see the comments</a>
+                            </p>
+                        ))}
                         {c.time_tip && (
                             <div className="flex flex-wrap items-center gap-2 px-3 text-xs text-ink2">
                                 <Clock size={12} className="text-brass" /> <span className="flex-1 min-w-0">{c.time_tip.text}</span>

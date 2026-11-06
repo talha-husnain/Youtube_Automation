@@ -165,7 +165,13 @@ def test_place_times_and_sides(sticker_dir):
     assert got[0]["t0"] == pytest.approx(0.35) and got[0]["t1"] == pytest.approx(2.55)  # HOLD caps it
     assert got[1]["t1"] == pytest.approx(8.15)   # a short line still shows 1 s
     assert got[2]["t1"] == pytest.approx(13.0)   # never past the video
-    assert [g["x"] for g in got] == [780, 300, 780]
+    # The top-left corner: never over the captions (which moved up out of YouTube's overlay into the
+    # old sticker band) or a card, nor under YouTube's button column or the centred kicker pill.
+    import cricket_shorts
+    import short_kit
+    for g in got:
+        assert g["y"] + g["size"] / 2 < cricket_shorts.CARD_Y - 72 < short_kit.CAPTION_TOP_PX
+        assert g["x"] - g["size"] / 2 >= 0 and g["x"] + g["size"] / 2 <= 380
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")

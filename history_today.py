@@ -195,7 +195,7 @@ def run(output_dir, pipeline):
     for k, a, b in windows:
         sfx.append((kit.WHOOSH, 0.3, max(0.0, a - 0.15)))
         if k == 0:
-            events += cs._pill(a + 0.3, b, 1290, cs._txt(f"{day_month(d).upper()} {story.year}", 26))
+            events += cs._pill(a + 0.3, b, cs.LABEL_Y, cs._txt(f"{day_month(d).upper()} {story.year}", 26))
             events.append(kit.dialogue(4, a, b, "CkText", rf"{{\an5\pos({cs.CX},900)\fad(200,200)}}"
                                                           rf"{cs._txt(story.hook_line, 90)}"))
         elif k <= n:
@@ -208,7 +208,7 @@ def run(output_dir, pipeline):
                                                                  rf"{cs._txt(story.why_line, 110)}"))
         else:
             events.append(kit.dialogue(4, a, b, "CkText", rf"{{\an5\pos({cs.CX},900)\1c{cs._c(fl.GOLD)}"
-                                                          rf"\fad(200,200)}}{cs._txt(story.question, 72)}"))
+                                                          rf"\fad(200,200)}}{cs._txt(story.question, 120)}"))
     clip = {"start": 0.0, "video_title_for_youtube_short": story.title, "viral_hook_text": story.hook_line,
             "why": f"On this day: {story.event} ({story.year})", "predicted_score": 85,
             "captions": kit.timed_transcript(caps), "genre": "history", "ai_voice": "AI voice",

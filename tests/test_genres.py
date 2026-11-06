@@ -161,8 +161,9 @@ def test_fact_cards_count_up_numbers_and_shrink_long_headlines():
     long_ = ck.Fact(headline="Pakistan Ke Sabse Ziada Centuries", stat="2021, 2022", detail="d", line="x")
     a = " ".join(ck.fact_events(1, 4, short, 2.0, 6.0))
     b = " ".join(ck.fact_events(2, 4, long_, 2.0, 6.0))
-    assert "}97" in a and "\\fs74" in a                       # counts up to the number
-    assert "Centuries" in b and "\\fs54" in b and "2021, 2022" in b
+    assert "}97" in a and "\\fs88" in a                       # counts up to the number
+    assert f"\\fs{ck.STAT_PX}" in a                           # the stat is the biggest thing on the card
+    assert "Centuries" in b and "\\fs58" in b and "2021, 2022" in b
 
 
 def test_links_and_ideas():
@@ -189,6 +190,41 @@ def test_background_music_sits_under_the_voice(tmp_path, monkeypatch):
                          capture_output=True, text=True).stderr
     level = float(vol.split("mean_volume:")[1].split("dB")[0])
     assert -45 < level < -22   # there, and well under a voice at -14 LUFS
+
+
+def _versus(rows=3, verdict="Kohli do stats mein aage."):
+    stats = [("ODI SR", "87.56", "94.00", 1), ("T20I SR", "126.13", "135.2", 1), ("TEST SR", "59.11", "55.57", 0),
+             ("ODI AVERAGE", "50.57", "58.00", 1)]
+    return ck.Versus(found=True, title="Dhoni ya Kohli?", format_label="STRIKE RATE",
+                     players=[ck.Side(name="MS Dhoni", team="IND"), ck.Side(name="Virat Kohli", team="IND")],
+                     hook_line="Dhoni ya Kohli, kaun tez?", verdict_line=verdict, question="Kaun? Comment mein batao",
+                     rows=[ck.Row(label=l, a=a, b=b, better=w, line="x") for l, a, b, w in stats[:rows]])
+
+
+def test_versus_shows_players_and_a_table_of_question_marks_on_frame_zero():
+    story = _versus()
+    windows = [(k, 0.15 + 3 * k, 3.15 + 3 * k) for k in range(6)]
+    ev = ck.versus_events(story, windows, 18.0, "@x", [None, None])
+    first = [e for e in ev if e.split(",")[1] == "0:00:00.00"]
+    text = " ".join(first)
+    for want in ("Dhoni ya Kohli?", "}VS", "MS Dhoni", "Virat Kohli", "}0 - 0", "ODI SR", "T20I SR", "TEST SR"):
+        assert want in text, want
+    assert text.count("}?") == 6 and not re.search(r"\\fad\([1-9]", text) and r"\alpha&HFF&" not in text
+    # A value appears only once its row is spoken.
+    assert not any(v in text for v in ("87.56", "94.00", "59.11"))
+    shown_at = {e.rsplit("}", 1)[-1]: e.split(",")[1] for e in ev if e.endswith("87.56")}
+    assert shown_at == {"87.56": "0:00:03.30"}
+
+
+def test_versus_keeps_three_stats_and_the_verdict_matches_them(monkeypatch):
+    monkeypatch.setattr(ck, "grounded", lambda client, prompt: ("Dhoni and Kohli career numbers", []))
+    monkeypatch.setattr(ck, "remix_note", lambda topic: "")
+    monkeypatch.setattr(ck, "remix_guard", lambda topic, story: None)
+    monkeypatch.setattr(kit, "ask_json", lambda *a, **k: _versus(rows=4, verdict="Chaar mein se teen Kohli ke."))
+    story, _facts, _sources = ck.find_versus(None, "Dhoni vs Kohli", "@x")
+    assert [r.label for r in story.rows] == ["ODI SR", "T20I SR", "TEST SR"]
+    assert "chaar" not in story.verdict_line.lower() and "Virat Kohli 2" in story.verdict_line
+    assert "exactly 3 stats" in ck.VERSUS_PROMPT and "never read both" in ck.VERSUS_PROMPT
 
 
 def test_a_match_the_search_cannot_find_stops_with_a_clear_message():

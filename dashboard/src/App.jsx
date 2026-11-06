@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle, Film, Eye, Layers, Sun } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle, Film, Eye, Layers, Sun, Clapperboard } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
@@ -31,6 +31,7 @@ import AutopilotLocal from './components/AutopilotLocal';
 import ChannelTab from './components/ChannelTab';
 import ChannelsTab from './components/ChannelsTab';
 import TodayTab from './components/TodayTab';
+import StudioTab from './components/StudioTab';
 import PostPlan from './components/PostPlan';
 import CommentsTab from './components/CommentsTab';
 import ReadyBanner from './components/ReadyBanner';
@@ -952,7 +953,8 @@ function App() {
   const [channelsNotice, setChannelsNotice] = useState(null);
   useEffect(() => {
     const DEEP_LINK_TABS = ['autopilot', 'history', 'gallery', 'settings', 'thumbnails', 'dashboard',
-      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments', 'long-video', 'rivals', 'channels', 'today'];
+      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments', 'long-video', 'rivals', 'channels', 'today',
+      'studio'];
     const apply = () => {
       const hash = window.location.hash || '';
       if (!hash.startsWith('#app?')) return;
@@ -1275,7 +1277,9 @@ function App() {
   //   { id: 'ugc-gallery', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery' },
   const navItems = [
     // Self-host: Today first (every channel at a glance).
-    ...(billingEnabled ? [] : [{ id: 'today', ord: '00', icon: Sun, label: 'Today', short: 'today', primary: true }]),
+    ...(billingEnabled ? [] : [{ id: 'today', ord: '00', icon: Sun, label: 'Today', short: 'today', primary: true },
+      // Studio (studio.py): check, fix and approve the channels' videos before they go up.
+      { id: 'studio', ord: 'ST', icon: Clapperboard, label: 'Studio', short: 'studio', primary: true }]),
     { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Make Shorts', short: 'create', primary: true },
     { id: 'history', ord: '02', icon: History, label: 'History', short: 'history', primary: true },
     { id: 'gallery', ord: '03', icon: LayoutGrid, label: 'Gallery', short: 'gallery', primary: true },
@@ -1328,12 +1332,14 @@ function App() {
   // entirely — an unlabelled 80px rail ate a fifth of a phone screen.
   const Sidebar = () => (
     <div className="hidden md:flex w-20 lg:w-64 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-all duration-300">
-      <a href="#app" onClick={() => goToTab('dashboard')} className="p-6 flex items-center gap-3" title="Shortkaar">
+      <a href="#app" onClick={() => goToTab('dashboard')} className="p-6 flex items-center gap-3 shrink-0" title="Shortkaar">
         <Logo size={36} className="shrink-0 drop-shadow-[0_0_14px_var(--color-glow)]" />
         <Wordmark className="text-xl text-ink hidden lg:block" />
       </a>
 
-      <nav className="flex-1 px-4 py-4 space-y-1">
+      {/* min-h-0 + its own scroll: inside the overflow-hidden shell a taller list was cut off with no
+          way to reach the last tabs on a laptop screen (owner, 29-oct-2026). */}
+      <nav className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 py-4 space-y-1">
         {navItems.map((item) => {
           const NavIcon = item.icon;
           const isActive = activeTab === item.id;
@@ -1361,7 +1367,7 @@ function App() {
         })}
       </nav>
 
-      <div className="p-4 border-t border-rule space-y-1">
+      <div className="p-4 border-t border-rule space-y-1 shrink-0">
         <NavFooterLinks collapsed />
       </div>
     </div>
@@ -2057,6 +2063,11 @@ function App() {
           {activeTab === 'today' && !billingEnabled && (
             <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-8 animate-fade">
               <TodayTab onOpenTab={setActiveTab} />
+            </div>
+          )}
+          {activeTab === 'studio' && !billingEnabled && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-8 animate-fade">
+              <StudioTab />
             </div>
           )}
           {activeTab === 'channels' && !billingEnabled && (

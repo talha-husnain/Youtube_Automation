@@ -116,3 +116,22 @@ def test_a_long_batch_goes_to_gemini_instead_of_holding_the_loop(monkeypatch, tm
     run, calls = _fake_worker()
     assert local_voice.speak_many([("a" * 11, str(tmp_path / "1.wav"), "male", "+0%")], run=run) == [None]
     assert calls == []
+
+
+def test_the_worker_reads_the_model_from_the_project_cache(monkeypatch, tmp_path):
+    """4-nov-2026: the user-profile Hugging Face cache lost the model; the cache now sits in oss/hf."""
+    monkeypatch.setenv("LOCAL_VOICE", "1")
+    monkeypatch.setenv("OMNIVOICE_PYTHON", __file__)
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setattr(local_voice, "VOICES_DIR", str(tmp_path / "voices"))
+    jobs = [("ek", str(tmp_path / "1.wav"), "male", "+0%")]
+    monkeypatch.setattr(local_voice, "HF_DIR", str(tmp_path / "hf"))
+    run, calls = _fake_worker()
+    local_voice.speak_many(jobs, run=run)
+    assert "HF_HOME" not in calls[-1][1]["env"]                     # folder missing: the default cache
+    (tmp_path / "hf").mkdir()
+    local_voice.speak_many(jobs, run=run)
+    assert calls[-1][1]["env"]["HF_HOME"] == str(tmp_path / "hf")
+    monkeypatch.setenv("HF_HOME", "X:/own")                           # the owner's own setting wins
+    local_voice.speak_many(jobs, run=run)
+    assert calls[-1][1]["env"]["HF_HOME"] == "X:/own"

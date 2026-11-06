@@ -192,6 +192,15 @@ def make(cid, client=None):
     banner(os.path.join(out, "banner.png"), name, got.tagline[:40], ch.get("color") or k["color"],
            MOTIF.get(ch["kind"], ch["kind"]), pill)
     profile(os.path.join(out, "profile.png"), got.initials or name[:1], ch.get("color") or k["color"])
+    if ch["kind"] == "toons":
+        # The cartoon series has its own cast artwork (toon_shorts.channel_art): the four friends on the banner,
+        # Billo as the icon, instead of letters on a colour.
+        import shutil
+        import toon_shorts
+        art = os.path.join(toon_shorts.STATE_DIR, "art")
+        for src, dst in (("banner.png", "banner.png"), ("avatar.png", "profile.png")):
+            if os.path.isfile(os.path.join(art, src)):
+                shutil.copyfile(os.path.join(art, src), os.path.join(out, dst))
     data = {**got.model_dump(), "description": got.description[:1000],
             "keywords": [re.sub(r"[\"<>]", "", w).strip()[:40] for w in got.keywords if w.strip()][:15],
             "made_for": name}

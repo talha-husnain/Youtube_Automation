@@ -15,7 +15,8 @@ import subprocess
 
 import numpy as np
 
-MODEL = os.environ.get("DEPTH_MODEL") or r"D:\youtube\oss\models\depth-anything-v2-small\model.onnx"
+MODEL = os.environ.get("DEPTH_MODEL") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                      "oss", "models", "depth-anything-v2-small", "model.onnx")
 INPUT = 518                     # the model's training size (a multiple of its 14 px patches)
 AMP = 0.012                     # the nearest pixels move this share of the frame width more than the farthest
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -58,7 +59,10 @@ def _depth_cached(path, bgr):
     if os.path.isfile(cache):
         d = np.load(cache)
         if d.shape == bgr.shape[:2]:
-            return d
+            # The cache is float16 to save disk; cv2.remap has no float16 kernel ("ifunc != 0" in
+            # imgwarp.cpp), so a cache hit used to fail every shot of a reused or retried picture
+            # (server.log, 4-nov-2026: a 111-shot history video lost its parallax shot after shot).
+            return d.astype(np.float32)
     d = depth_of(bgr)
     np.save(cache, d.astype(np.float16))
     return d.astype(np.float32)

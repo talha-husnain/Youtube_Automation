@@ -1234,7 +1234,8 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         return None  # silent video: nothing to caption
     try:
         import subtitles as _subs
-        style = _subs.AUTO_CAPTION_STYLE
+        # A generated Short's captions keep to YouTube's safe area (subtitles.SHORTS_CAPTION_STYLE).
+        style = _subs.auto_caption_style()
         output_dir = os.path.dirname(clip_path)
         stem = os.path.basename(clip_path)
         generation_id = int(time.time())
@@ -1282,7 +1283,7 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
                 font_name=style["font_name"], font_color=style["font_color"],
                 border_color=style["border_color"], border_width=style["border_width"],
                 highlight_color=style["highlight_color"], effect=style["effect"],
-                base_opacity=style["base_opacity"], uppercase=style["uppercase"]):
+                base_opacity=style["base_opacity"], uppercase=style["uppercase"], box=style.get("box")):
             print("   ℹ️ No words in range — clip ships without captions.")
             return None
 
@@ -2361,9 +2362,10 @@ if __name__ == '__main__':
     # Generated shorts with no source video (cricket, quiz and music_shorts.py).
     if args.generate:
         _kind = (os.environ.get("CONTENT_GENRE") or "cricket").lower()
-        if _kind in ("quiz", "music", "controversy", "history", "quran"):
+        if _kind in ("quiz", "music", "controversy", "history", "quran", "money", "toons"):
             import importlib
-            module = {"history": "history_videos", "quran": "quran_videos"}.get(_kind, f"{_kind}_shorts")
+            module = {"history": "history_videos", "quran": "quran_videos",
+                      "toons": "toon_shorts"}.get(_kind, f"{_kind}_shorts")
             importlib.import_module(module).run(_ensure_dir(args.output or "."), sys.modules[__name__])
         else:
             import cricket_shorts

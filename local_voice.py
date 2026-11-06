@@ -21,7 +21,11 @@ import tempfile
 ROOT = os.path.dirname(os.path.abspath(__file__))
 WORKER = os.path.join(ROOT, "omnivoice_worker.py")
 VOICES_DIR = os.path.join(ROOT, "state", "voices")
-OSS = r"D:\youtube\oss\OmniVoice"
+OSS = os.path.join(os.path.dirname(ROOT), "oss", "OmniVoice")      # oss/ sits next to the project folder
+# The model's Hugging Face cache, beside the tools rather than in C:\Users\...\.cache (4-nov-2026): that
+# cache was recreated on 28-oct-2026 without the 3.1 GB model, and with HF_HUB_OFFLINE=1 every line then
+# failed over to the paid Gemini voice. Used when the folder exists and HF_HOME is not set.
+HF_DIR = os.environ.get("OMNIVOICE_HF_HOME") or os.path.join(os.path.dirname(ROOT), "oss", "hf")
 STEPS = int(os.environ.get("OMNIVOICE_STEPS") or 16)
 DESIGN = {"male": "male, middle-aged, low pitch", "female": "female, young adult, moderate pitch"}
 # The one reference line each narrator is cloned from (Urdu, ~5 s): see omnivoice_worker.
@@ -83,6 +87,8 @@ def speak_many(jobs, run=subprocess.run):
             json.dump(job, f, ensure_ascii=False)
         # The model is cached: offline skips Hugging Face's checks, which are slow on this connection.
         env = {**os.environ, "HF_HUB_OFFLINE": "1", "PYTHONIOENCODING": "utf-8"}
+        if os.path.isdir(HF_DIR) and not os.environ.get("HF_HOME"):
+            env["HF_HOME"] = HF_DIR
         run([python(), "-I", WORKER, path], check=True, capture_output=True, env=env,
             timeout=LOAD_SECONDS + PER_ITEM_SECONDS * len(jobs))
         with open(path + ".out.json", encoding="utf-8") as f:

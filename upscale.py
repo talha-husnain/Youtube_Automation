@@ -14,7 +14,8 @@ import shutil
 import subprocess
 import tempfile
 
-EXE = os.environ.get("REALESRGAN_EXE") or r"D:\youtube\oss\realesrgan\bin\realesrgan-ncnn-vulkan.exe"
+EXE = os.environ.get("REALESRGAN_EXE") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                        "oss", "realesrgan", "bin", "realesrgan-ncnn-vulkan.exe")
 VIDEO_MODEL = "realesr-animevideov3"      # made for video frames; x2/x3/x4 weights ship with the build
 PHOTO_MODEL = "realesrgan-x4plus"          # stills (paintings, photos); x4 only
 GPUS = os.environ.get("REALESRGAN_GPUS") or "0,1"
@@ -25,15 +26,23 @@ def available():
     return os.path.isfile(EXE)
 
 
-def _jobs():
-    n = len(GPUS.split(","))
+def _jobs(gpus=None):
+    n = len((gpus or GPUS).split(","))
     return "2:" + ",".join(["2"] * n) + ":2"
 
 
 def _run(src_dir, dst_dir, model, scale):
-    subprocess.run([EXE, "-i", src_dir, "-o", dst_dir, "-n", model, "-s", str(scale), "-f", "png",
-                    "-g", GPUS, "-j", _jobs()], cwd=os.path.dirname(EXE), check=True,
-                   capture_output=True, timeout=TIMEOUT)
+    """Both GPUs, or the first alone when the other is not there: on 5-nov-2026 Vulkan saw only the Iris Xe (the
+    Arc A370M was gone from the device list) and "-g 0,1" answered "invalid gpu device" for every picture."""
+    for gpus in dict.fromkeys([GPUS, GPUS.split(",")[0]]):
+        try:
+            subprocess.run([EXE, "-i", src_dir, "-o", dst_dir, "-n", model, "-s", str(scale), "-f", "png",
+                            "-g", gpus, "-j", _jobs(gpus)], cwd=os.path.dirname(EXE), check=True,
+                           capture_output=True, timeout=TIMEOUT)
+            return
+        except subprocess.CalledProcessError as e:
+            if b"invalid gpu device" not in (e.stderr or b"") or gpus == GPUS.split(",")[0]:
+                raise
 
 
 def fps_of(path):

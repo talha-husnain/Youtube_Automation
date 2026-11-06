@@ -215,3 +215,22 @@ def test_the_mix_works_from_a_relative_job_folder(tmp_path, monkeypatch):
     out = qv.mix(rel, os.path.join(rel, ".q_video.mp4"), os.path.join(rel, ".q_voice.wav"),
                  os.path.join(rel, "final.mp4"), 1.0)
     assert os.path.isfile(out)
+
+
+def test_the_first_frame_shows_the_footage_and_the_title_never_black(tmp_path, monkeypatch):
+    """Frame 0 was black but for the handle (the first shot faded in, the title came at 0.2 s), and video_qa
+    refused Surah Yaseen part 2 three times as an empty opening (5-nov-2026)."""
+    import os
+    import subprocess
+    src = str(tmp_path / "clip.mp4")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x808080:s=320x180:d=6",
+                    "-pix_fmt", "yuv420p", src], check=True)
+    monkeypatch.setattr(qv, "too_dark", lambda path: False)
+    bg = qv.background(str(tmp_path), [{"id": "c", "path": src, "seconds": 6}], 4.0, log=lambda m: None)
+    frame = str(tmp_path / "f0.png")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", bg, "-frames:v", "1", "-vf", "scale=32:18,format=gray", frame],
+                   check=True)
+    from PIL import Image
+    with Image.open(frame) as im:
+        px = list(im.getdata())
+    assert sum(px) / len(px) > 40                     # the footage (darkened to about 85), not a fade from black

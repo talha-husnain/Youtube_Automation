@@ -9,7 +9,9 @@ import os
 import subprocess
 import threading
 
-MODEL = os.environ.get("FACE_MODEL") or r"D:\youtube\oss\models\yunet\face_detection_yunet_2023mar.onnx"
+# oss/ sits next to the project folder, wherever that is (it moved from F: to D: on 4-nov-2026).
+MODEL = os.environ.get("FACE_MODEL") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                     "oss", "models", "yunet", "face_detection_yunet_2023mar.onnx")
 MIN_SCORE = 0.7
 _lock = threading.Lock()      # one detector, and broll renders shots on 3 threads
 _det = None

@@ -35,6 +35,36 @@ def test_learning_keeps_views_hours_and_retention_per_format(monkeypatch):
         assert next(r for r in ya.uploads() if r["id"] == "V2")["retention"] == 90.0
 
 
+def test_formats_are_compared_on_views_at_the_same_age(monkeypatch):
+    # An old Short's lifetime views must not beat a young one's: each keeps its views at 48-72 h.
+    ch = mc.add("quiz")
+    acct = mc.account(ch["id"])
+    now = datetime.now(timezone.utc)
+    published = {"OLD": now - timedelta(hours=50), "NEW": now - timedelta(hours=50)}
+    with ya.use(acct):
+        for vid, fmt in (("OLD", "mcq"), ("NEW", "flags")):
+            ya._save_upload({"id": vid, "video_id": vid, "status": "done", "created": time.time() - 3 * 86400,
+                             "format": fmt, "genre": "quiz", "title": vid, "publish_at": published[vid].isoformat()})
+    views = {"OLD": 100, "NEW": 150}
+
+    def get(url, params):
+        return {"items": [{"id": v, "statistics": {"viewCount": views[v]}, "status": {"privacyStatus": "public"},
+                           "snippet": {"publishedAt": published[v].isoformat().replace("+00:00", "Z")}}
+                          for v in params["id"].split(",")]}
+    monkeypatch.setattr(ya, "status", lambda: {"connected": True})
+    monkeypatch.setattr(ya, "_get", get)
+    monkeypatch.setattr(ya, "video_analytics", lambda days=90: {})
+    mc.learn(mc.get(ch["id"]), log=lambda *a: None)
+    # Ten days on, the old one has piled up lifetime views; the young one was only just published.
+    published["OLD"] = now - timedelta(days=10)
+    views["OLD"] = 900
+    stats = mc.learn(mc.get(ch["id"]), log=lambda *a: None)["stats"]
+    assert stats["formats"]["mcq"]["median"] == 100 and stats["formats"]["flags"]["median"] == 150
+    assert stats["median"] == 525                                      # what Today shows stays lifetime views
+    with ya.use(acct):
+        assert next(r for r in ya.uploads() if r["id"] == "OLD")["views_48h"] == 100
+
+
 def test_learning_still_works_when_analytics_refuses(monkeypatch):
     ch = mc.add("quiz")
     acct = mc.account(ch["id"])

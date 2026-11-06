@@ -102,13 +102,16 @@ def plan(clips, post_times, slots_fn):
     """Merge the Shorts on disk with their state; ready ones get the next free
     posting times, oldest Short first."""
     state = _load()
+    now = time.time()
     out = []
     for c in clips:
         row = dict(state.get(item_id(c["job_id"], c["index"])) or {})
         out.append({**c, "id": item_id(c["job_id"], c["index"]), "status": row.get("status", "ready"),
                     "pinned_comment": row.get("pinned_comment"), "posted_at": row.get("posted_at"),
                     "views": row.get("views"), "youtube_id": row.get("youtube_id"),
-                    "telegram_sent": bool(row.get("telegram_sent")), "blocked": bool(row.get("blocked"))})
+                    "telegram_sent": bool(row.get("telegram_sent")), "blocked": bool(row.get("blocked")),
+                    # Studio's AI editor is changing the file (app._start_ai_edit): the uploads wait for it.
+                    "editing": float(row.get("editing_until") or 0) > now})
     ready = sorted((x for x in out if x["status"] == "ready"), key=lambda x: (x["created"], x["index"]))
     for x, slot in zip(ready, slots_fn(post_times, len(ready)) if ready else []):
         x["slot"] = slot.isoformat()

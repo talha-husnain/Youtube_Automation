@@ -24,7 +24,8 @@ import shutil
 import subprocess
 import tempfile
 
-EXE = os.environ.get("RIFE_EXE") or r"D:\youtube\oss\rife\rife-ncnn-vulkan-20221029-windows\rife-ncnn-vulkan.exe"
+EXE = os.environ.get("RIFE_EXE") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "oss",
+                                                  "rife", "rife-ncnn-vulkan-20221029-windows", "rife-ncnn-vulkan.exe")
 # rife-v4.x is the only family that takes ``-n`` (any target frame count, any timestep);
 # the older models in the zip only double. v4.6 is the newest one in this build.
 MODEL = os.environ.get("RIFE_MODEL") or "rife-v4.6"

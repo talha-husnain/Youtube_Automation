@@ -91,23 +91,28 @@ def _chat():
     return chat
 
 
-def send_text(text, buttons=None):
+def send_text(text, buttons=None, rows=False):
     """``buttons``: [(label, data)] shown under the message; a press comes
-    back through poll()."""
+    back through poll(). ``rows``: one button per row (long labels)."""
     data = {"chat_id": _chat(), "text": text[:TEXT_MAX], "disable_web_page_preview": "true"}
     if buttons:
-        data["reply_markup"] = json.dumps({"inline_keyboard": [[{"text": t, "callback_data": d[:64]}
-                                                                for t, d in buttons]]})
+        keys = [{"text": t[:60], "callback_data": d[:64]} for t, d in buttons]
+        data["reply_markup"] = json.dumps({"inline_keyboard": [[k] for k in keys] if rows else [keys]})
     return _call("sendMessage", data=data)
 
 
 UPDATES = json.dumps(["message", "callback_query"])
 
 
-def poll(handle):
+def poll(handle, on_text=None):
     """Button presses since the last poll: ``handle(data)`` -> the answer
     shown to the owner. Presses from any other chat are ignored. Returns how
-    many were handled."""
+    many were handled.
+
+    ``on_text(text, replied_text)``: the owner's text REPLIES to one of the
+    bot's messages (4-nov-2026: "captions peele karo" under a review note
+    edits that video); its answer goes back as a message. Other messages,
+    and anything from another chat, are ignored."""
     st = _load()
     chat = st.get("chat_id")
     if not chat or not _token():
@@ -117,6 +122,21 @@ def poll(handle):
     done = 0
     for u in updates:
         st["offset"] = max(int(st.get("offset", 0)), int(u.get("update_id", 0)) + 1)
+        m = u.get("message")
+        if on_text and m and (m.get("chat") or {}).get("id") == chat and (m.get("text") or "").strip():
+            replied = m.get("reply_to_message") or {}
+            if replied:
+                try:
+                    answer = on_text(m["text"].strip(), replied.get("text") or replied.get("caption") or "")
+                except Exception as e:  # noqa: BLE001 — a bad reply must not stop the poll
+                    answer = f"That did not work: {type(e).__name__}"
+                if answer:
+                    try:
+                        send_text(answer)
+                    except Exception:  # noqa: BLE001
+                        pass
+                done += 1
+            continue
         q = u.get("callback_query")
         if not q or (q.get("message") or {}).get("chat", {}).get("id") != chat:
             continue
@@ -136,6 +156,17 @@ def poll(handle):
         done += 1
     _save({**_load(), "offset": st.get("offset", 0)})
     return done
+
+
+def send_video(path, caption=""):
+    """One video with a caption (the AI editor's new version, sent back to the phone)."""
+    chat = _chat()
+    if os.path.getsize(path) > FILE_MAX:
+        raise RuntimeError("The video is over Telegram's 50 MB limit; watch it in Shortkaar's Studio.")
+    with open(path, "rb") as f:
+        return _call("sendVideo", timeout=300, data={"chat_id": chat, "caption": (caption or "")[:CAPTION_MAX],
+                                                     "supports_streaming": "true"},
+                     files={"video": (os.path.basename(path), f, "video/mp4")})
 
 
 def send_short(path, title, description="", pinned="", when="", tiktok=""):

@@ -47,8 +47,13 @@ UPLOAD_API = "https://www.googleapis.com/upload/youtube/v3/videos"
 ANALYTICS_API = "https://youtubeanalytics.googleapis.com/v2/reports"
 # Comedy, Sports, Film, Music, Education, Music
 CATEGORY = {"comedy": "23", "cricket": "17", "movies": "1", "songs": "10", "quiz": "27", "music": "10",
-            "controversy": "24", "history": "27", "history_teaser": "27", "quran": "27"}
-LONG_GENRES = ("history", "quran")    # 16:9 videos, not Shorts
+            "controversy": "24", "history": "27", "history_teaser": "27", "quran": "27", "money": "27",
+            # Horror stories (history_videos HISTORY_MODE=horror) are Entertainment, not Education.
+            "horror": "24", "horror_teaser": "24",
+            "toons": "23",             # the cartoon comedy series (toon_shorts.py): Comedy
+            "toons_mix": "23",         # its weekly compilation (toon_mix.py), a long video
+            "music_mix": "10"}         # the song channel's long mood mixes (mood_mix.py)
+LONG_GENRES = ("history", "quran", "horror", "music_mix", "toons_mix")    # long videos, not Shorts
 THUMB_API = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
 TITLE_MAX, DESCRIPTION_MAX, TAGS_MAX = 100, 4900, 480
 _states = {}          # OAuth state -> (time, dashboard origin, account): a callback we did not start is refused
@@ -500,6 +505,11 @@ def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
     is private until then, YouTube publishes it). ``localizations``: localize.build()
     output, translated titles/descriptions sent with the insert (no extra quota).
     Returns the uploads.json row."""
+    # An earlier try of this file whose end we never heard (the connection dropped): ask its session first,
+    # so a Short YouTube did receive is never sent twice (a duplicate public Short, research 29-oct-2026).
+    earlier = _unfinished(path)
+    if earlier:
+        return earlier
     row = {"id": secrets.token_hex(6), "file": os.path.basename(path), "title": _clean_title(title),
            "genre": genre, "publish_at": publish_at.astimezone(timezone.utc).isoformat() if publish_at else None,
            "asked": "scheduled" if publish_at else privacy, "status": "uploading",
@@ -535,17 +545,62 @@ def upload(path, title, description, tags=(), genre="comedy", publish_at=None,
                            json=body, timeout=60)
         if start.status_code != 200 or "location" not in start.headers:
             raise RuntimeError(_google_error(start))
+        row.update(session=start.headers["location"], size=size)
+        _save_upload(row)
         done = _send_resuming(start.headers["location"], path, size)
         if done.status_code not in (200, 201):
             raise RuntimeError(_google_error(done))
-        video = done.json()
-        got = (video.get("status") or {}).get("privacyStatus")
-        row.update(status="done", video_id=video["id"], privacy=got,
-                   url=(f"https://youtube.com/watch?v={video['id']}" if genre in LONG_GENRES
-                        else f"https://youtube.com/shorts/{video['id']}"),
-                   locked_private=(got == "private" and not publish_at and privacy != "private"))
+        _finished(row, done.json())
+    except (httpx.TransportError, _Busy) as e:
+        # Whether YouTube got the whole file is unknown: the next try asks the session (_unfinished).
+        row.update(status="unknown" if row.get("session") else "failed", error=str(e)[:300])
     except Exception as e:  # noqa: BLE001 — the row says what went wrong
         row.update(status="failed", error=str(e)[:300])
+    _save_upload(row)
+    return row
+
+
+def _finished(row, video):
+    got = (video.get("status") or {}).get("privacyStatus")
+    publish_at = row.get("publish_at")
+    row.update(status="done", video_id=video["id"], privacy=got, error=None,
+               url=(f"https://youtube.com/watch?v={video['id']}" if row.get("genre") in LONG_GENRES
+                    else f"https://youtube.com/shorts/{video['id']}"),
+               locked_private=(got == "private" and not publish_at and row.get("asked") != "private"))
+    return row
+
+
+SESSION_DAYS = 6          # YouTube keeps a resumable upload session about a week
+
+
+def _unfinished(path):
+    """The row of an earlier try of this file that ended without an answer, settled by asking its upload
+    session: done (YouTube has it), resumed to the end, or failed when the session is gone (a fresh upload
+    follows). Returns the row when this call settled the upload (done, or still unknown), else None."""
+    size = os.path.getsize(path)
+    name = os.path.basename(path)
+    rows = [r for r in uploads() if r.get("file") == name and r.get("status") == "unknown" and r.get("session")
+            and r.get("size") == size and time.time() - (r.get("created") or 0) < SESSION_DAYS * 86400]
+    if not rows:
+        return None
+    row = rows[-1]
+    try:
+        got, final = _received(row["session"], size)
+        if got is None:
+            _finished(row, final.json())
+        else:
+            done = _send_from(row["session"], path, size, got)
+            if done.status_code not in (200, 201):
+                done = _send_resuming(row["session"], path, size)
+            if done.status_code not in (200, 201):
+                raise RuntimeError(_google_error(done))
+            _finished(row, done.json())
+    except (httpx.TransportError, _Busy) as e:
+        row.update(error=f"still unknown: {str(e)[:250]}")      # ask again next time, never send it twice
+    except Exception as e:  # noqa: BLE001 — the session is gone or refused: a fresh upload is safe to try
+        row.update(status="failed", error=f"earlier session: {str(e)[:250]}")
+        _save_upload(row)
+        return None
     _save_upload(row)
     return row
 
@@ -605,12 +660,39 @@ def add_to_description(video_id, line):
     return True
 
 
+def update_video(video_id, title=None, description=None, tags=None):
+    """New title / description / tags for an uploaded video (the Studio, 29-oct-2026). videos.update
+    replaces the whole snippet, so every field not given goes back as it is (50 units)."""
+    if quota_used() + UPDATE_UNITS > 9000:
+        raise RuntimeError("the day's API quota is nearly used")
+    items = _get(f"{API}/videos", {"part": "snippet", "id": video_id}).get("items") or []
+    if not items:
+        raise RuntimeError("that video is not on the channel any more")
+    sn = items[0]["snippet"]
+    snippet = {k: sn[k] for k in ("title", "description", "categoryId", "tags", "defaultLanguage",
+                                  "defaultAudioLanguage") if sn.get(k)}
+    if title is not None:
+        snippet["title"] = _clean_title(title)
+    if description is not None:
+        snippet["description"] = _clean_description(description)
+    if tags is not None:
+        snippet["tags"] = _tags(tags)
+    spend(UPDATE_UNITS)
+    r = httpx.put(f"{API}/videos", params={"part": "snippet"}, json={"id": video_id, "snippet": snippet},
+                  headers={"Authorization": f"Bearer {_token()}"}, timeout=60)
+    if r.status_code != 200:
+        raise RuntimeError(_google_error(r))
+    return True
+
+
 CHANNEL_DESCRIPTION_MAX = 1000   # YouTube's limit for a channel's About text (characters)
 
 
-def add_to_channel_about(line, if_empty=None):
+def add_to_channel_about(line, if_empty=None, replace=None, backup=None):
     """Append ``line`` to the connected channel's About text (owner, 22-oct-2026: the OmniVoice credit);
-    an empty About gets ``if_empty`` before it.
+    an empty About gets ``if_empty`` before it. ``replace``: the About becomes that text and the line, whatever
+    it said (a channel handed to a card of another kind, my_channels.hand_over: a quiz About on a money channel);
+    the old text is written to ``backup`` first.
     channels.update with part=brandingSettings deletes every branding field it is not sent, so the whole
     brandingSettings object goes back with only the description changed. True when it was added."""
     if quota_used() + UPDATE_UNITS > 9000:
@@ -621,9 +703,18 @@ def add_to_channel_about(line, if_empty=None):
     cid, branding = items[0]["id"], items[0].get("brandingSettings") or {}
     chan = dict(branding.get("channel") or {})
     old = chan.get("description") or ""
-    if line in old:
+    if replace:
+        if backup:
+            os.makedirs(os.path.dirname(backup), exist_ok=True)
+            with open(backup, "w", encoding="utf-8") as f:
+                f.write(old)
+        new = f"{replace.strip()}\n\n{line}"
+        if old.strip() == new.strip():
+            return False
+    elif line in old:
         return False
-    new = f"{old.rstrip()}\n\n{line}" if old.strip() else (f"{if_empty.strip()}\n\n{line}" if if_empty else line)
+    else:
+        new = f"{old.rstrip()}\n\n{line}" if old.strip() else (f"{if_empty.strip()}\n\n{line}" if if_empty else line)
     if len(new) > CHANNEL_DESCRIPTION_MAX:
         raise RuntimeError("the channel's About text has no room left")
     chan["description"] = new
@@ -654,6 +745,26 @@ def unschedule(video_id):
     if r.status_code != 200:
         raise RuntimeError(_google_error(r))
     return not r.json().get("status", {}).get("publishAt")
+
+
+def playlist_private(playlist_id):
+    """Set one of this channel's playlists to private (51 units). playlists.update needs the snippet's title
+    back, so the snippet goes back as it is. False when the playlist is gone or not this channel's."""
+    items = _get(f"{API}/playlists", {"part": "snippet,status", "id": playlist_id}).get("items") or []
+    if not items:
+        return False
+    sn = items[0].get("snippet") or {}
+    spend(UPDATE_UNITS)
+    r = httpx.put(f"{API}/playlists", params={"part": "snippet,status"},
+                  json={"id": playlist_id, "snippet": {k: sn[k] for k in ("title", "description", "defaultLanguage")
+                                                       if sn.get(k)},
+                        "status": {"privacyStatus": "private"}},
+                  headers={"Authorization": f"Bearer {_token()}"}, timeout=60)
+    if r.status_code == 403:
+        return False                     # another channel's list
+    if r.status_code != 200:
+        raise RuntimeError(_google_error(r))
+    return True
 
 
 CAPTIONS_API = "https://www.googleapis.com/upload/youtube/v3/captions"

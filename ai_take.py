@@ -14,7 +14,15 @@ engagement more than it changes how YouTube classifies the clip.
 Voices: measured on 8-oct-2026 by transcribing each model's output with
 Whisper. gemini-2.5-flash-preview-tts and gemini-3.1-flash-tts-preview read
 Roman Urdu cleanly; gemini-3.8-flash-tts read the instruction aloud too and
-3.8-flash-lite garbled it, so neither is in the list.
+3.8-flash-lite garbled it. That was the old call writing the instruction into
+the text: 3.8 reads its text verbatim and takes the delivery as a
+speech_metadata "style" note (Interactions API). Called that way on
+29-oct-2026, 3.8-flash read a Roman Urdu take, a cricket line, an Urdu-script
+Quran translation and an English history line word for word (Gemini heard
+every word back; Whisper heard the Urdu one as Urdu, as from 2.5; 3.8-lite's
+sounded Hindi to it). The two older models shut down on 17-nov-2026
+(deprecations page), so the 3.8 ones go first and the old ones stay behind
+them until then.
 
 Env: AI_TAKE (1 default, 0 off), AI_TAKE_VOICE (Gemini voice, default Puck),
 TAKE_TTS_MODEL (tried first), CONTENT_GENRE (comedy for now).
@@ -32,7 +40,9 @@ from typing import List
 
 from pydantic import BaseModel
 
-TTS_MODELS = ["gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview"]
+TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts",
+              "gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview"]
+STYLE_NOTE_MODELS = ("gemini-3.8",)      # Interactions API: verbatim text + speech_metadata style
 DEFAULT_VOICE = "Puck"
 # A take longer than this is sped up (at most MAX_TEMPO), else read as text only.
 MAX_VOICE_SECONDS = 7.0
@@ -148,10 +158,17 @@ def speak(client, text, path, voice=DEFAULT_VOICE, style=None, language="Roman U
     pass their own); the line is Roman Urdu unless ``language`` says
     otherwise (the history channel's English videos)."""
     from google.genai import types
-    models = [m for m in (os.environ.get("TAKE_TTS_MODEL") or "").split(",") if m.strip()]
+    models = [m.strip() for m in (os.environ.get("TAKE_TTS_MODEL") or "").split(",") if m.strip()]
     for model in models + [m for m in TTS_MODELS if m not in models]:
         for attempt in range(2):
             try:
+                if model.startswith(STYLE_NOTE_MODELS):
+                    with open(path, "wb") as f:
+                        f.write(_speak_verbatim(client, model, text, voice, style or DEFAULT_STYLE, language))
+                    secs = _wav_seconds(path)
+                    if secs <= 0:
+                        raise ValueError("empty audio")
+                    return secs
                 r = client.models.generate_content(
                     model=model.strip(),
                     contents=f"Read this {language} line aloud {style or DEFAULT_STYLE}: {text}",
@@ -177,6 +194,25 @@ def speak(client, text, path, voice=DEFAULT_VOICE, style=None, language="Roman U
                     continue
                 print(f"   ⚠️ Voice {model} failed ({type(e).__name__}: {str(e)[:120]})")
     return None
+
+
+def _speak_verbatim(client, model, text, voice, style, language):
+    """A Gemini 3.8 voice: the line as it is, how to read it in the style note. Returns WAV bytes
+    (24 kHz mono 16-bit, with its header)."""
+    import base64
+    it = client.interactions.create(
+        model=model,
+        input=[{"type": "user_input", "content": [{
+            "type": "text", "text": text,
+            "annotations": [{"type": "speech_metadata", "style": f"{style.rstrip(' .')}. The words are "
+                                                                  f"{language}: say them the way a native speaker does."}],
+        }]}],
+        response_format={"type": "audio"},
+        generation_config={"speech_config": [{"voice": voice}]})
+    audio = it.output_audio
+    if not audio or not audio.data:
+        raise ValueError("empty audio")
+    return base64.b64decode(audio.data)
 
 
 def _fit(path, seconds):
@@ -211,7 +247,8 @@ def apply(clips, transcript, job_dir, clip_names, outro_seconds=0.0, source_titl
     print(f"🎙️ Writing the channel's take for {len(clips)} clip(s)...")
     try:
         from google import genai
-        client = genai.Client(api_key=key)
+        import short_kit
+        client = genai.Client(api_key=key, http_options=short_kit.http_options())
         model = os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
         texts = write_takes(client, model, clips, transcript, handle, genre, source_title)
     except Exception as e:  # noqa: BLE001 — clips go out without a take

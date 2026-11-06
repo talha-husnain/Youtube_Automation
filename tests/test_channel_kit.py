@@ -94,3 +94,20 @@ def test_the_kit_endpoints(monkeypatch):
     assert client.get(f"/api/my-channels/{ch['id']}/kit/secret.json").status_code == 404
     r = client.post(f"/api/my-channels/{ch['id']}/kit/apply")
     assert r.status_code == 400 and "Connect" in r.json()["detail"]
+
+
+def test_the_cartoon_channel_kit_uses_the_cast_artwork(monkeypatch):
+    import short_kit
+    import toon_shorts
+    from PIL import Image
+    monkeypatch.setattr(short_kit, "ask_json", lambda c, schema, prompt, model=None: _kit())
+    art = os.path.join(toon_shorts.STATE_DIR, "art")
+    os.makedirs(art, exist_ok=True)
+    Image.new("RGB", (2560, 1440), (250, 140, 40)).save(os.path.join(art, "banner.png"))
+    Image.new("RGB", (800, 800), (90, 30, 120)).save(os.path.join(art, "avatar.png"))
+    ch = mc.add("toons")
+    ck.make(ch["id"], client=object())
+    with Image.open(os.path.join(ck.folder(ch["id"]), "banner.png")) as b:
+        assert b.getpixel((10, 10)) == (250, 140, 40)
+    with Image.open(os.path.join(ck.folder(ch["id"]), "profile.png")) as p:
+        assert p.getpixel((10, 10)) == (90, 30, 120)

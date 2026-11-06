@@ -133,13 +133,15 @@ Return:
 - title: max 45 characters, Roman Urdu hook for the top of the screen, no emoji, never
   revealing an answer. The Short asks {final} of the questions (the others are spares),
   so any score in it is out of {final} ("Sirf 1% log {final}/{final} kar paate hain").
-- hook_line: the first voice line, Roman Urdu, 6-12 words, a challenge to the viewer.
+- hook_line: the first voice line, Roman Urdu, 3-7 words, a challenge to the viewer (question 1 is
+  already on screen while it is spoken: every word delays it).
 - questions: exactly {count}. Each:
   question: Roman Urdu, max {q_chars} characters.
   options: {options_text}
   answer: {answer_text}
   answer_text: the correct answer in a few words (Roman Urdu or the usual English term).
-  explain: Roman Urdu, max 70 characters, a fun one-line why.
+  explain: Roman Urdu, max 48 characters, a fun one-line why (it is read aloud after the answer:
+  short keeps the next question coming).
 - outro_line: Roman Urdu voice line, max 12 words, asking how many they got right, to
   comment.
 Everyday spoken Roman Urdu in Latin letters, the way people talk; English words where
@@ -187,7 +189,7 @@ FLAG_PROMPT = """You write the words for a flag quiz YouTube Short for Pakistani
 Return:
 - title: max 45 characters, Roman Urdu hook, no emoji, never naming a country
   ("Sirf geniuses {n}/{n} jhande pehchan paate hain").
-- hook_line: Roman Urdu voice line, 6-12 words, a challenge.
+- hook_line: Roman Urdu voice line, 3-7 words, a challenge.
 - outro_line: Roman Urdu voice line, max 12 words, asking for their score in the comments.
 - facts: one per country in the same order: a true, well-known fact about that
   country's flag (its colours, symbol or story), Roman Urdu, max 70 characters.
@@ -231,7 +233,7 @@ viewers ({handle}): a photo of a famous woman ({group}), four names, a countdown
 Return:
 - title: max 45 characters, Roman Urdu hook, no emoji, never naming a star
   ("Sirf true fans {n}/{n} pehchan paate hain").
-- hook_line: Roman Urdu voice line, 6-12 words, a challenge.
+- hook_line: Roman Urdu voice line, 3-7 words, a challenge.
 - outro_line: Roman Urdu voice line, max 12 words, asking for their score in the comments.
 - facts: one per star in the same order: her best-known film, drama or song, Roman Urdu, max 70
   characters, only what you are sure of (else ""). About her work, never her body or private life.
@@ -332,7 +334,8 @@ def write(client, fmt, topic, handle):
     f = FORMATS[fmt]
     extra = f["count"] + 2   # spares for the ones the check drops
     prompt = PROMPT.format(
-        seconds=45 if fmt in ("mcq", "islamic") else 35, handle=handle or "this channel",
+        # The niche's most viewed quizzes run 20-35 s (niche_research playbook, 28-oct-2026); ours ran ~58.
+        seconds=38 if fmt in ("mcq", "islamic") else 30, handle=handle or "this channel",
         format_text=FORMAT_TEXT[fmt],
         topic_text=f"Topic: {topic}." if topic and fmt in FACT_FORMATS else "",
         avoid="\n".join(f"  - {a}" for a in _avoid()) or "  (nothing yet)", count=extra, final=f["count"],
@@ -344,6 +347,8 @@ def write(client, fmt, topic, handle):
     if fmt == "islamic":
         prompt = prompt.replace("nothing about religion, politics, or a living person's private life.",
                                 ISLAMIC_RULE)
+    import script_craft
+    prompt += script_craft.playbook()      # what the niche's most viewed quizzes do now (niche_research)
     quiz = kit.ask_json(client, Quiz, prompt, model=quiz_model())
     good = [q for q in quiz.questions if _shape_ok(q, f)]
     good = _checked(client, fmt, good)
@@ -416,12 +421,14 @@ STYLES = [
     kit.style("QzSmall", "Montserrat ExtraBold", 34, "#FFFFFF"),
     kit.style("QzPill", "Montserrat ExtraBold", 36, "#14142B", spacing=2),
     kit.style("QzTitle", "Anton", 96, "#FFFFFF", outline=0, shadow=4),
-    kit.style("QzQ", "Montserrat ExtraBold", 56, "#FFFFFF", outline=0, shadow=2),
-    kit.style("QzOpt", "Montserrat ExtraBold", 46, "#FFFFFF", align=4),
-    kit.style("QzLetter", "Anton", 50, "#14142B"),
-    kit.style("QzNum", "Anton", 110, "#14142B"),
+    # Bigger question and options (28-oct-2026): 56 / 46 px over full-strength footage read as small,
+    # low-contrast print on a phone; the quiz channel's viewers watched 8% of a Short.
+    kit.style("QzQ", "Montserrat ExtraBold", 66, "#FFFFFF", outline=2, shadow=2),
+    kit.style("QzOpt", "Montserrat ExtraBold", 56, "#FFFFFF", align=4),
+    kit.style("QzLetter", "Anton", 56, "#14142B"),
+    kit.style("QzNum", "Anton", 120, "#14142B"),
     kit.style("QzAns", "Anton", 120, fl.GOLD, outline=6, shadow=4),
-    kit.style("QzNote", "Montserrat ExtraBold", 42, "#FFFFFF", outline=3),
+    kit.style("QzNote", "Montserrat ExtraBold", 48, "#FFFFFF", outline=3),
     kit.style("QzBig", "Anton", 300, fl.GOLD, outline=8, shadow=6),
 ]
 
@@ -457,7 +464,17 @@ def option_rows(n, picture=False):
     """Centre y of each option box (lower when a flag sits above them)."""
     if picture:
         return [820 + k * 130 for k in range(n)]
-    return [700 + k * 140 for k in range(n)] if n == 4 else [720 + k * 160 for k in range(n)]
+    return [730 + k * 146 for k in range(n)] if n == 4 else [740 + k * 168 for k in range(n)]
+
+
+OPT_H = 128     # option pill height (was 118)
+BAR_X, BAR_Y, BAR_W = 90, 622, 900   # the countdown bar, inside the question card's foot (card y 250-650)
+
+
+def _opt_fs(text):
+    """Option text size: 56 px fits 16 letters in the pill, longer options step down (22 max)."""
+    n = len(text)
+    return 56 if n <= 16 else 50 if n <= 19 else 44
 
 
 # What people type into YouTube for each format (seeds for its autocomplete); a quiz has no named subject.
@@ -494,35 +511,43 @@ def question_events(k, n, label, q, q0, timer0, reveal0, end, picture=False):
         ev.append(kit.dialogue(4, q0 if first else q0 + 0.2, end, "QzNote",
                                rf"{{\an5\pos({CX},735)\fad({fin},200)}}{_t(q.question, 60)}"))
     else:
-        ev.append(_shape(2, q0, end, fl._round_rect(980, 360, 40), "&H2B140E&", (50, 250), alpha="40",
+        ev.append(_shape(2, q0, end, fl._round_rect(980, 400, 40), "&H2B140E&", (50, 250), alpha="30",
                          extra=rf"\fad({fin},200)"))
-        ev.append(kit.dialogue(4, q0, end, "QzQ", rf"{{\an5\pos({CX},430)\fad({fin},200)\fscx90\fscy90"
+        ev.append(kit.dialogue(4, q0, end, "QzQ", rf"{{\an5\pos({CX},450)\fad({fin},200)\fscx90\fscy90"
                                                    rf"\t(0,220,\fscx100\fscy100)}}{_t(q.question, 140)}"))
     rows = option_rows(len(q.options), picture)
-    timer_y = 1340 if picture else 1290
+    timer_y = 1340 if picture else 1320
+    h = 118 if picture else OPT_H      # picture rows are 130 px apart: a 128 px pill would touch the next
+    r = h // 2
     for i, (opt, y) in enumerate(zip(q.options, rows)):
-        a = q0 + 0.5 + 0.15 * i
-        swipe = (90 + 1100, y - 59, 90, y - 59, 0, 280)
-        ev.append(_shape(2, a, end, fl._round_rect(900, 118, 59), "&H3A2418&", None, alpha="30",
-                         move=swipe, extra=r"\fad(0,200)"))
-        ev.append(_shape(3, a, end, fl._circle(44), _c(fl.GOLD), None,
-                         move=(110 + 1100, y - 44, 110, y - 44, 0, 280), extra=r"\fad(0,200)"))
-        ev.append(kit.dialogue(4, a, end, "QzLetter",
-                               rf"{{\an5\move({154 + 1100},{y},154,{y},0,280)\fad(0,200)}}{'ABCD'[i]}"))
-        ev.append(kit.dialogue(4, a, end, "QzOpt",
-                               rf"{{\an4\move({225 + 1100},{y},225,{y},0,280)\fad(0,200)}}{_t(opt, 24)}"))
+        # The options swipe in one by one, except on a question that opens the Short: there they
+        # are on frame 0 with the question (29-oct-2026: the lower half was empty for 0.5-1 s).
+        a = q0 if first else q0 + 0.5 + 0.15 * i
+        text = _t(opt, 24)
+        fs = rf"\fs{_opt_fs(text)}"
+
+        def at(x, top):
+            return dict(at=(x, top)) if first else dict(at=None, move=(x + 1100, top, x, top, 0, 280))
+
+        def where(x):
+            return rf"\pos({x},{y})" if first else rf"\move({x + 1100},{y},{x},{y},0,280)"
+        ev.append(_shape(2, a, end, fl._round_rect(940, h, r), "&H3A2418&", alpha="20", extra=r"\fad(0,200)",
+                         **at(70, y - r)))
+        ev.append(_shape(3, a, end, fl._circle(48), _c(fl.GOLD), extra=r"\fad(0,200)", **at(90, y - 48)))
+        ev.append(kit.dialogue(4, a, end, "QzLetter", rf"{{\an5{where(138)}\fad(0,200)}}{'ABCD'[i]}"))
+        ev.append(kit.dialogue(4, a, end, "QzOpt", rf"{{\an4{where(215)}{fs}\fad(0,200)}}{text}"))
         if i == q.answer:
             # The right one turns green at the reveal, with a little pop.
-            ev.append(_shape(3, reveal0, end, fl._round_rect(900, 118, 59), _c(GREEN), (90, y - 59),
+            ev.append(_shape(3, reveal0, end, fl._round_rect(940, h, r), _c(GREEN), (70, y - r),
                              extra=r"\fad(120,200)"))
             ev.append(kit.dialogue(5, reveal0, end, "QzOpt",
-                                   rf"{{\an4\pos(225,{y})\fad(0,200)\t(0,150,\fscx108\fscy108)"
-                                   rf"\t(150,300,\fscx100\fscy100)}}{_t(opt, 24)}"))
-            ev.append(_shape(4, reveal0, end, fl._circle(44), "&HFFFFFF&", (110, y - 44), extra=r"\fad(0,200)"))
-            ev.append(kit.dialogue(5, reveal0, end, "QzLetter", rf"{{\an5\pos(154,{y})\1c{_c(GREEN)}\fad(0,200)}}"
+                                   rf"{{\an4\pos(215,{y}){fs}\fad(0,200)\t(0,150,\fscx108\fscy108)"
+                                   rf"\t(150,300,\fscx100\fscy100)}}{text}"))
+            ev.append(_shape(4, reveal0, end, fl._circle(48), "&HFFFFFF&", (90, y - 48), extra=r"\fad(0,200)"))
+            ev.append(kit.dialogue(5, reveal0, end, "QzLetter", rf"{{\an5\pos(138,{y})\1c{_c(GREEN)}\fad(0,200)}}"
                                                                 rf"{'ABCD'[i]}"))
         else:
-            ev.append(_shape(5, reveal0, end, fl._round_rect(900, 118, 59), "&H000000&", (90, y - 59),
+            ev.append(_shape(5, reveal0, end, fl._round_rect(940, h, r), "&H000000&", (70, y - r),
                              alpha="70", extra=r"\fad(150,200)"))
     if not q.options:
         # A riddle: a big ? while they think, the answer in its place after.
@@ -540,6 +565,16 @@ def question_events(k, n, label, q, q0, timer0, reveal0, end, picture=False):
         ev.append(_shape(5, a, b, fl._circle(70), _c(fl.GOLD), (CX - 70, timer_y - 70)))
         ev.append(kit.dialogue(6, a, b, "QzNum", rf"{{\an5\pos({CX},{timer_y + 2})\fscx140\fscy140"
                                                  rf"\t(0,180,\fscx100\fscy100)}}{secs - s}"))
+    if not picture:
+        # A bar along the card's foot drains over the countdown, gold turning red: time running
+        # out moves on screen between the numbers. Picture quizzes have no room under the card.
+        dur = max(1, round((reveal0 - timer0) * 1000))
+        x0, y0, bw, bh = BAR_X, BAR_Y, BAR_W, 14
+        ev.append(_shape(3, timer0, reveal0, fl._round_rect(bw, bh, bh // 2), "&HFFFFFF&", (x0, y0), alpha="B4"))
+        ev.append(_shape(4, timer0, reveal0, fl._round_rect(bw, bh, bh // 2), _c(fl.GOLD), (x0, y0),
+                         extra=rf"\clip({x0},{y0 - 4},{x0 + bw},{y0 + bh + 4})"
+                               rf"\t(0,{dur},\clip({x0},{y0 - 4},{x0},{y0 + bh + 4}))"
+                               rf"\t({round(dur * 0.6)},{dur},\1c{_c('#EF4444')})"))
     if q.explain.strip():
         ev.append(kit.dialogue(4, reveal0 + 0.2, end, "QzNote",
                                rf"{{\an5\pos({CX},{timer_y + 10})\fad(200,200)}}{_t(q.explain, 80)}"))
@@ -654,8 +689,10 @@ def run(output_dir, pipeline):
     bg, footage = broll.background_for(quiz.title, transcript["segments"], total, output_dir, client, rule)
     print(f"🎬 Rendering the quiz short ({total:.0f}s"
           + (f", music: {os.path.basename(track)}" if track else "") + ")...")
+    # Footage under a 50% dark veil: at full strength the text over a bright sky or a desert was hard to read.
+    veil = [_shape(0, 0, total, fl._round_rect(kit.OUT_W, kit.OUT_H, 0), "&H000000&", (0, 0), alpha="80")]
     kit.render(final, total, [cfg["bg"], kit.blend("#4C1D95", cfg["bg"], 0.35), kit.blend("#1E3A8A", cfg["bg"], 0.3)],
-               ([] if bg else kit.ambient_events(total)) + frame + events + card_ev, STYLES, voices=voices,
+               (veil if bg else kit.ambient_events(total)) + frame + events + card_ev, STYLES, voices=voices,
                sfx=sfx + card_sfx, bed=(track, body_end) if track else None, images=images, bg_video=bg)
     clip = {"start": 0.0, "end": round(total, 3), "seconds": round(total, 3), "file": final,
             "video_title_for_youtube_short": quiz.title, "viral_hook_text": quiz.hook_line,
@@ -711,9 +748,10 @@ SEO_CONTEXT = ("IMPORTANT: this short is NOT comedy. It is a quiz Short ({kind},
 def _bed():
     if os.environ.get("BG_MUSIC", "0") != "1":
         return None
+    import music_beds
+    music_beds.grow("quiz")         # a new bed about once a day, up to TARGET (one bed under every Short before)
     track = kit.music_track("quiz")
     if not track:
-        import music_beds
         music_beds.ensure("quiz", 1)
         track = kit.music_track("quiz")
     return track

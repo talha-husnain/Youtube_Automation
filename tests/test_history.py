@@ -146,6 +146,40 @@ def _research(facts="REPORTED: Rome fell in 476 AD", n=4):
     return lambda client, topic, minutes: (facts, "Surprising: x", [(f"s{k}", f"https://s{k}") for k in range(n)])
 
 
+def test_a_try_stopped_by_an_outage_starts_again_at_the_voice(monkeypatch):
+    # The first try researched, wrote and titled the video, then the network went: the next try of the same
+    # video (same settings) reuses all of it; another length or the owner's notes write a new one.
+    monkeypatch.setattr(hv, "series_env", lambda: None)
+    monkeypatch.setattr(hv.kit, "gemini", lambda: object())
+    monkeypatch.setattr(hv.fl, "settings", lambda: {"handle": "@h"})
+    wrote = []
+
+    def write(client, topic, handle, minutes, lang, series_note="", mode="history"):
+        wrote.append(topic)
+        return _script(), "FACTS", [("dawn.com", "u1"), ("bbc.com", "u2"), ("britannica.com", "u3")]
+    monkeypatch.setattr(hv, "write", write)
+    monkeypatch.setattr(hv.craft, "pick_title", lambda client, title, facts, **kw: "Rome kaise gira?")
+
+    def outage(*a, **k):
+        raise RuntimeError("httpx.ConnectError: getaddrinfo failed")
+    monkeypatch.setattr(hv, "voice_all", outage)
+    monkeypatch.setattr(hv, "pictures", outage)
+    monkeypatch.setenv("HISTORY_TOPIC", "The fall of Rome")
+    monkeypatch.setenv("HISTORY_MINUTES", "10")
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="getaddrinfo"):
+            hv.run("unused", None)
+    assert wrote == ["The fall of Rome"]                          # researched and written once
+    path = hv._resume_path("The fall of Rome", 10, "urdu", "history", None, "")
+    script, facts, sources = hv.load_resume(path)
+    assert script.title == "Rome kaise gira?" and facts == "FACTS" and sources[0] == ("dawn.com", "u1")
+    assert hv.load_resume(path, now=__import__("time").time() + 49 * 3600) is None      # two days on: a new script
+    monkeypatch.setenv("HISTORY_MINUTES", "14")
+    with pytest.raises(RuntimeError, match="getaddrinfo"):
+        hv.run("unused", None)
+    assert len(wrote) == 2
+
+
 def test_thin_research_and_refused_topics_make_no_video(monkeypatch):
     with pytest.raises(RuntimeError, match="reliable sources"):
         hv.write(None, "t", "@h", research_fn=_research("NOT FOUND"))

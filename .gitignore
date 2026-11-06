@@ -56,3 +56,6 @@ music/*
 
 # Channel tokens, upload logs and engagement state (my_channels.CHANNELS_DIR)
 state/
+
+# Test runner cache
+.pytest_cache/

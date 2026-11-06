@@ -407,10 +407,13 @@ async def run_now(submit, reason="schedule"):
         if not picked:
             log("No new reuse-allowed comedy video found today.")
         import learning
+        import niche_research
+        # Title and hook shapes of the most viewed comedy Shorts now (niche_research) for seo_copy.
+        book = niche_research.playbook_text("comedy")
         for video, n in picked:
             test = learning.next_arm()
             payload = {**look("comedy"), **test["overrides"], "url": video["url"], "genre": "comedy",
-                       "acknowledged": True, "target_clips": n}
+                       "acknowledged": True, "target_clips": n, **({"niche_playbook": book} if book else {})}
             try:
                 job_id = await submit(payload)
                 run["jobs"].append({"job_id": job_id, "kind": "comedy", "label": video["title"],
@@ -607,12 +610,17 @@ def phone_finished(plan_items, send, log=print):
     return sent
 
 
+last_tick = None     # time.time() at the start of the loop's latest tick (heartbeat.py)
+
+
 async def loop_forever(submit, job_clips, is_active=lambda: True, build_weekly=None, to_phone=None,
                        post_ready=None, check_claims=None):
+    global last_tick
     while True:
         await asyncio.sleep(TICK_SECONDS)
         if not is_active():
             continue
+        last_tick = time.time()
         try:
             if due(settings()):
                 print("🤖 Autopilot: making today's Shorts.")

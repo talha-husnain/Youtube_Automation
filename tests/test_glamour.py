@@ -35,8 +35,16 @@ def test_song_footage_welcomes_a_woman_but_never_anything_suggestive():
 
 
 def test_the_music_channel_plans_love_themes(monkeypatch):
+    import music_moods
     import music_shorts as ms
-    m = mc.add("music")
+    m = mc.update(mc.add("music")["id"], {"moods": {"mixes": 0}})      # songs: no weekly mix due
+    # Since 5-nov-2026 a song is made for a mood; sad and romantic start at "more often" (music_moods.DEFAULT_OFTEN).
+    mc.update(m["id"], {"next_mood": "sad"})
+    payload, meta = mc.next_payload(mc.get(m["id"]), lambda: None)
+    assert payload["music_theme"] in music_moods.MOODS["sad"]["themes"] and meta["topic"] == payload["music_theme"]
+    assert music_moods.DEFAULT_OFTEN == {"sad": 4, "romantic": 4}
+    # With every mood off, the love-theme share (pick_theme) works as before.
+    mc.update(m["id"], {"moods": {"off": list(music_moods.MOODS)}, "next_mood": ""})
     monkeypatch.setattr(ms, "pick_theme", lambda rnd=None: "she left without a goodbye")
     payload, meta = mc.next_payload(mc.get(m["id"]), lambda: None)
     assert payload["music_theme"] == "she left without a goodbye" and meta["topic"] == payload["music_theme"]

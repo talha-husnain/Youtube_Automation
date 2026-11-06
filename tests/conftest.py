@@ -12,6 +12,11 @@ os.environ["BILLING_ENABLED"] = "0"
 # No test, and no app a test starts as a subprocess (test_mcp_stdio), may run
 # the local Autopilot loop: it acts on the real output/ files and YouTube token.
 os.environ["AUTOPILOT_LOCAL"] = "0"
+# The owner's .env has KEEP_AWAKE=charger; tests pin the code default.
+os.environ["KEEP_AWAKE"] = "1"
+# Nothing a test does may toast the owner's desktop or text their phone.
+os.environ["SHORTKAAR_NOTIFY"] = "0"
+os.environ.pop("SHORTKAAR_RESTART", None)
 # No test searches Pexels/Pixabay for real once the owner's keys are in .env
 # (broll.background_for); footage tests turn it back on with fakes.
 os.environ["STOCK_FOOTAGE"] = "0"
@@ -35,6 +40,11 @@ os.environ["STICKERS"] = "0"            # sticker picks are a Gemini call
 os.environ["HISTORY_MAPS"] = "0"        # history_maps reads the real Cliopatria cache
 os.environ["LOCALIZE"] = "0"            # translated titles are a Gemini call per upload
 os.environ["VIRAL_REMIX"] = "0"         # studies a real viral Short with yt-dlp + Gemini
+os.environ["RESEARCH"] = "0"            # niche_research searches the Data API and has Gemini watch videos
+os.environ["TEARDOWN"] = "0"            # teardown.py fetches the winners' files with yt-dlp and runs Whisper
+os.environ["VIRAL_WATCH"] = "0"         # viral_remix.study watching a real video by its link
+os.environ["AUDIENCE_RESEARCH"] = "0"   # viral_remix.study reading a studied video's comments (Data API)
+os.environ["CREATIVE_QA"] = "0"         # creative_qa: a Gemini look at every video before upload
 
 import pytest
 
@@ -81,8 +91,23 @@ def _private_channel_files(tmp_path, monkeypatch):
     monkeypatch.setattr(stock_media, "CACHE_DIR", str(tmp_path / "stock_cache"))
     monkeypatch.setattr(stock_media, "OPENVERSE_FILE", str(tmp_path / "openverse_calls.json"))
     monkeypatch.setattr(stock_media, "LIMITS_FILE", str(tmp_path / "stock_limits.json"))
+    monkeypatch.setattr(stock_media, "POOL_FILE", str(tmp_path / "stock_pool.json"))
     import free_voice
     monkeypatch.setattr(free_voice, "STATE_FILE", str(tmp_path / "free_voice.json"))
     import viral_remix
     monkeypatch.setattr(viral_remix, "STATE_DIR", str(tmp_path / "remix"))
+    import niche_research
+    monkeypatch.setattr(niche_research, "STATE_DIR", str(tmp_path / "research"))
     monkeypatch.setattr(free_voice, "PAUSE", 0)
+    import creative_qa
+    monkeypatch.setattr(creative_qa, "LOG", str(tmp_path / "creative_qa.jsonl"))
+    import short_kit
+    monkeypatch.setattr(short_kit, "MUSIC_DIR", str(tmp_path / "music"))   # music_track records what it used
+    import studio
+    monkeypatch.setattr(studio, "OUTPUT_DIR", str(tmp_path / "studio_output"))
+    import ai_editor
+    monkeypatch.setattr(ai_editor, "UPLOADS_FILE", str(tmp_path / "studio_uploads.json"))
+    import history_videos
+    monkeypatch.setattr(history_videos, "RESUME_DIR", str(tmp_path / "resume"))
+    import toon_shorts
+    monkeypatch.setattr(toon_shorts, "STATE_DIR", str(tmp_path / "toons"))

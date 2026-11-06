@@ -298,9 +298,16 @@ def apply(clips, transcript, source_title="", context="", text_limit=1200):
     learned = what_works.guidance()
     if learned:
         note += f"\n{learned}\n"
+    # Title and hook shapes of the niche's most viewed videos now (niche_research, NICHE_PLAYBOOK).
+    niche = [l for l in (os.environ.get("NICHE_PLAYBOOK") or "").splitlines()
+             if l.startswith(("- Titles", "- Hooks", "- Avoid"))]
+    if niche:
+        note += "\nIn this niche the most viewed videos now use (shapes only, write your own words):\n" + \
+                "\n".join(niche) + "\n"
     try:
         from google import genai
-        client = genai.Client(api_key=key)
+        import short_kit
+        client = genai.Client(api_key=key, http_options=short_kit.http_options())
         model = os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
         got = _ask(client, model, items, handle, source, style, latin, note)
     except Exception as e:  # noqa: BLE001 — the old copy stays

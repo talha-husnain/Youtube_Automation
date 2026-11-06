@@ -200,12 +200,15 @@ def test_a_dropped_upload_resumes_where_youtube_stopped(tmp_path, monkeypatch):
     assert sent == [video.read_bytes()[400:]] and waits == [ya.RESUME_WAITS[0]]
 
 
-def test_an_upload_that_stays_offline_fails_after_the_waits(tmp_path, monkeypatch):
+def test_an_upload_that_stays_offline_is_unknown_and_never_sent_twice(tmp_path, monkeypatch):
+    # Whether YouTube got the file is unknown after the waits: the next try asks the old session instead of
+    # sending a second copy (a duplicate public Short), and only a session YouTube no longer knows starts afresh.
     import httpx
     video = tmp_path / "v.mp4"
     video.write_bytes(b"x" * 100)
     ya._write(ya.TOKEN_FILE, {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12})
-    monkeypatch.setattr(ya.httpx, "post", lambda *a, **k: _Resp(200, {}, {"location": "https://up/session"}))
+    posts = []
+    monkeypatch.setattr(ya.httpx, "post", lambda *a, **k: posts.append(1) or _Resp(200, {}, {"location": f"https://up/s{len(posts)}"}))
 
     def put(url, content=None, headers=None, timeout=None, **kw):
         raise httpx.ConnectError("offline")
@@ -213,7 +216,37 @@ def test_an_upload_that_stays_offline_fails_after_the_waits(tmp_path, monkeypatc
     waits = []
     monkeypatch.setattr(ya.time, "sleep", waits.append)
     row = ya.upload(str(video), "T", "D")
-    assert row["status"] == "failed" and "offline" in row["error"] and waits == list(ya.RESUME_WAITS)
+    assert row["status"] == "unknown" and "offline" in row["error"] and waits == list(ya.RESUME_WAITS)
+    # Still offline: still unknown, nothing new started.
+    again = ya.upload(str(video), "T", "D")
+    assert again["id"] == row["id"] and again["status"] == "unknown" and len(posts) == 1
+    # Back online and YouTube had the whole file: that row is done, with no second upload.
+    monkeypatch.setattr(ya.httpx, "put", lambda url, content=None, headers=None, timeout=None, **kw:
+                        _Resp(200, {"id": "OnCe0000001", "status": {"privacyStatus": "public"}}))
+    done = ya.upload(str(video), "T", "D")
+    assert done["id"] == row["id"] and done["status"] == "done" and done["video_id"] == "OnCe0000001" and len(posts) == 1
+
+
+def test_an_upload_whose_old_session_expired_starts_afresh(tmp_path, monkeypatch):
+    import httpx
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"y" * 100)
+    ya._write(ya.TOKEN_FILE, {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12})
+    posts = []
+    monkeypatch.setattr(ya.httpx, "post", lambda *a, **k: posts.append(1) or _Resp(200, {}, {"location": "https://up/s"}))
+    monkeypatch.setattr(ya.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ya.httpx, "put", lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError("offline")))
+    first = ya.upload(str(video), "T", "D")
+    assert first["status"] == "unknown"
+
+    def put(url, content=None, headers=None, timeout=None, **kw):
+        if headers.get("Content-Range", "").startswith("bytes */"):
+            return _Resp(404, {"error": {"message": "session not found"}})
+        return _Resp(200, {"id": "FrEsH000001", "status": {"privacyStatus": "public"}})
+    monkeypatch.setattr(ya.httpx, "put", put)
+    second = ya.upload(str(video), "T", "D")
+    assert second["id"] != first["id"] and second["video_id"] == "FrEsH000001" and len(posts) == 2
+    assert next(r for r in ya.uploads() if r["id"] == first["id"])["status"] == "failed"
 
 
 def test_a_damaged_state_file_comes_back_from_its_backup(tmp_path, monkeypatch):

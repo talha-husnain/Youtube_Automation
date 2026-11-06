@@ -148,6 +148,35 @@ def test_a_quota_or_network_failure_pauses_the_channel_without_using_a_try():
     assert not mc.TRANSIENT.search("Not enough reliable sources for this topic (2).")
 
 
+def test_an_idea_whose_job_died_of_an_outage_goes_back_in_the_queue():
+    ch = mc.add("controversy")
+    part = {"kind": "topic", "text": "Fatah-e-Andalus", "series": "Andalus", "part": 2, "parts": 3}
+    mc._change(ch["id"], lambda c: c.update(ideas=[{"kind": "match", "text": "PAK vs IND, final", "urgent": True},
+                                                   {"kind": "topic", "text": "Next one"}],
+                                            jobs=[{"job_id": "a", "status": "running", "at": time.time(),
+                                                   "day": mc.today(), "topic": part["text"], "idea": part}]))
+    mc.failure_reason = lambda job_id: "httpx.ConnectError: [Errno 11001] getaddrinfo failed"
+    try:
+        mc.refresh_jobs(mc.get(ch["id"]), lambda job: ("failed", []), "out")
+    finally:
+        mc.failure_reason = None
+    c = mc.get(ch["id"])
+    assert [i["text"] for i in c["ideas"]] == ["PAK vs IND, final", "Fatah-e-Andalus", "Next one"]   # after the urgent one
+    assert c["ideas"][1]["part"] == 2 and c["ideas"][1]["requeued"] == 1 and c["jobs"][0]["requeued"]
+    # A topic that failed for its own reasons is not tried again, and an idea comes back at most twice.
+    mc._change(ch["id"], lambda c: c.update(ideas=[], jobs=[
+        {"job_id": "b", "status": "running", "at": time.time(), "day": mc.today(), "idea": {"text": "Thin story"}},
+        {"job_id": "d", "status": "running", "at": time.time(), "day": mc.today(),
+         "idea": {"text": "Twice already", "requeued": 2}}]))
+    mc.failure_reason = lambda job_id: ("Not enough reliable sources for this one (2)." if job_id == "b"
+                                        else "503 UNAVAILABLE")
+    try:
+        mc.refresh_jobs(mc.get(ch["id"]), lambda job: ("failed", []), "out")
+    finally:
+        mc.failure_reason = None
+    assert mc.get(ch["id"])["ideas"] == []
+
+
 def test_history_videos_stay_under_15_minutes_until_the_channel_is_verified(monkeypatch):
     ch = mc.add("history")
     mc.update(ch["id"], {"minutes": 25})

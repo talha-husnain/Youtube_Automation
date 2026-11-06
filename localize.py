@@ -22,7 +22,7 @@ import short_kit as kit
 
 LANGS = {"hi": "Hindi in Devanagari script", "ur": "Urdu in Urdu (Nastaliq/Arabic) script"}
 DEFAULT_LANGUAGE = "en"
-KINDS = ("cricket", "quiz", "controversy", "history")   # not songs (English) or the Quran channel
+KINDS = ("cricket", "quiz", "controversy", "history", "money", "toons")   # not songs (English) or the Quran channel
 MAX_BYTES = 4900                                        # YouTube's description limit is 5,000 bytes
 
 

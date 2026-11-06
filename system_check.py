@@ -207,14 +207,43 @@ def stay_awake():
         return _row("Stay awake", "warn", "On battery: the laptop may sleep in the middle of a video.",
                     "Keep the charger in while the channels work.")
     st = keep_awake.state()
-    return _row("Stay awake", "ok", "Working now: the laptop stays awake until it is done." if st["awake"] else
-                "On the charger: while a video is made or uploaded the laptop does not go to sleep "
+    if st["awake"] and str(st.get("why", "")).startswith("working"):
+        return _row("Stay awake", "ok", "Working now: the laptop stays awake until it is done.")
+    if os.environ.get("KEEP_AWAKE", "1").strip().lower() in ("charger", "always"):
+        return _row("Stay awake", "ok", "On the charger the laptop stays awake all the time, so Autopilot never "
+                    "freezes between videos (KEEP_AWAKE=charger; the screen still turns off, closing the lid still sleeps).")
+    return _row("Stay awake", "ok", "On the charger: while a video is made or uploaded the laptop does not go to sleep "
                 "(closing the lid still does).")
+
+
+def encoder():
+    """Which video encoder renders use (ffmpeg_utils: x264, Intel Quick Sync or NVENC)."""
+    import ffmpeg_utils
+    mode = os.environ.get("FFMPEG_ENCODER", "x264").strip().lower()
+    name = ffmpeg_utils.encoder_name()
+    label = {"h264_qsv": "Intel Quick Sync (the laptop's graphics chip)", "h264_nvenc": "NVIDIA NVENC",
+             "libx264": "x264 on the CPU"}[name]
+    if mode in ("qsv", "nvenc") and name == "libx264":
+        return _row("Video encoder", "warn", f"FFMPEG_ENCODER={mode} but it does not work here; x264 on the CPU instead.",
+                    "Update the graphics driver, or set FFMPEG_ENCODER=x264 in .env.")
+    return _row("Video encoder", "ok", f"{label} (FFMPEG_ENCODER={mode}).")
+
+
+def heartbeat():
+    """The outside heartbeat (heartbeat.py): something off the laptop that notices when it stops."""
+    import heartbeat as hb
+    st = hb.state()
+    if not st["on"]:
+        return _row("Outside heartbeat", "warn", "Off: nobody hears about it when the laptop is off, asleep or offline.",
+                    "Make a free check at healthchecks.io (period 5 min, grace 20 min, add Telegram), put its ping URL "
+                    "in .env as HEALTHCHECK_URL and restart Shortkaar.")
+    last = st["last"] or "no ping yet (the first goes 5 minutes after the start)"
+    return _row("Outside heartbeat", "ok" if st["last"] in (None, "ok") else "warn", f"On. Last ping: {last}.")
 
 
 def run_all(output_dir, cap_gb, retention_seconds):
     rows = [gemini(), *downloader(), ffmpeg(), disk(output_dir, cap_gb), *channel(), autopilot(),
-            free_voice(), stock(), quota(), watchdog(), stay_awake()]
+            free_voice(), stock(), quota(), watchdog(), stay_awake(), encoder(), heartbeat()]
     import short_kit
     n = len(short_kit.music_tracks())
     rows.append(_row("Background music", "ok" if n else "warn", f"{n} track(s) in the music folder.",

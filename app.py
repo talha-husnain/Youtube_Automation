@@ -844,12 +844,12 @@ def _unmark_local_job(job_id, clip_index, clean_filename):
         ready[clip_index] = clean_filename
     for meta_path in glob.glob(os.path.join(job_dir, "*_metadata.json")):
         try:
-            with open(meta_path, 'r') as f:
+            with open(meta_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             shorts = data.get('shorts', [])
             if clip_index < len(shorts):
                 shorts[clip_index]['video_url'] = url
-                with open(meta_path, 'w') as f:
+                with open(meta_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=4)
         except Exception as e:
             print(f"⚠️ Could not unmark metadata of {job_id}: {e}")
@@ -877,7 +877,7 @@ def _reapply_captions(job_id, clip_index, video_path):
         meta_files = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
         if not meta_files:
             return None
-        with open(meta_files[0], 'r') as f:
+        with open(meta_files[0], 'r', encoding='utf-8') as f:
             data = json.load(f)
         transcript = data.get('transcript')
         clips = data.get('shorts', [])
@@ -924,7 +924,7 @@ def _recover_jobs_from_disk():
         if not json_files:
             continue
         try:
-            with open(json_files[0], 'r') as f:
+            with open(json_files[0], 'r', encoding='utf-8') as f:
                 data = json.load(f)
             base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
             clips = data.get('shorts', [])
@@ -936,7 +936,7 @@ def _recover_jobs_from_disk():
             owner = None
             owner_path = os.path.join(job_path, ".owner")
             if os.path.exists(owner_path):
-                with open(owner_path) as f:
+                with open(owner_path, 'r', encoding='utf-8') as f:
                     raw = f.read().strip()
                 owner = int(raw) if raw.isdigit() else (raw or None)
             jobs[job_id] = {
@@ -963,9 +963,10 @@ def _recover_jobs_from_disk():
 _RESUME_FILE = ".resume.json"
 # Video types (CONTENT_GENRE): comedy is the main pipeline; the others are
 # song_shorts.py, movie_dub.py and cricket_shorts.py.
-CONTENT_GENRES = ("comedy", "songs", "movies", "cricket", "quiz", "music", "controversy", "history", "quran")
+CONTENT_GENRES = ("comedy", "songs", "movies", "cricket", "quiz", "music", "controversy", "history", "quran", "money",
+                  "toons")
 # Made from nothing but a prompt (main.py --generate): no link, no upload.
-GENERATED_GENRES = ("cricket", "quiz", "music", "controversy", "history", "quran")
+GENERATED_GENRES = ("cricket", "quiz", "music", "controversy", "history", "quran", "money", "toons")
 MAX_RESUME_ATTEMPTS = 2
 
 # --- Deploy handover (two instances, one disk) -------------------------------
@@ -1245,7 +1246,9 @@ def _install_drain_signal_handler():
     try:
         loop.add_signal_handler(signal.SIGTERM, on_sigterm)
     except (NotImplementedError, RuntimeError, ValueError) as e:
-        print(f"⚠️ Drain-on-SIGTERM unavailable ({e}); jobs will resume on restart instead.")
+        # Windows event loops have no signal handlers (a bare NotImplementedError: the line read "()").
+        print(f"ℹ️ Drain-on-SIGTERM unavailable ({type(e).__name__}{': ' + str(e) if str(e) else ''}); "
+              f"jobs will resume on restart instead.")
 
 
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
@@ -1321,7 +1324,7 @@ def _resume_interrupted_jobs() -> set:
         # at every terminal state), so a metadata file next to it means the job
         # was stopped mid-render, not that it finished: resume it too.
         try:
-            with open(manifest_path) as f:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
                 m = json.load(f)
         except Exception as e:
             print(f"⚠️ Bad resume manifest for {job_id}: {e}")
@@ -1395,7 +1398,7 @@ def _resume_interrupted_jobs() -> set:
 
         m["attempts"] = attempts
         try:
-            with open(manifest_path, "w") as f:
+            with open(manifest_path, "w", encoding='utf-8') as f:
                 json.dump(m, f)
         except Exception:
             pass
@@ -1505,6 +1508,8 @@ def _waiting_to_post(job_id, job_path, now):
         if not metas:
             return False
         src = _job_source(job_path)
+        if src.get("genre") == "studio_upload":          # the owner's own video in the Studio (ai_editor.py)
+            return now < float(src.get("keep_until") or 0)
         if src.get("genre") == "long":
             return now - os.path.getmtime(job_path) < post_queue.KEEP_DAYS * 86400
         if src.get("channel") not in (None, "", "main"):
@@ -1610,7 +1615,7 @@ def _sweep_retained_sources(now=None):
             metas = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
             if not metas:
                 continue
-            with open(metas[0]) as f:
+            with open(metas[0], 'r', encoding='utf-8') as f:
                 name = json.load(f).get('source_video')
             if not name:
                 continue
@@ -2379,6 +2384,11 @@ async def lifespan(app: FastAPI):
         import my_channels
         import short_kit
         my_channels.failure_reason = _job_reason
+        my_channels.cancel_job = _cancel_job
+        # Telegram replies become AI edits (my_channels.telegram_reply); the poll runs in a thread.
+        global _main_loop
+        _main_loop = asyncio.get_running_loop()
+        my_channels.start_ai_edit = _phone_ai_edit
         import reminders
         import youtube_account as _ya
         _ya.on_dead = reminders.connection_lost
@@ -2390,6 +2400,12 @@ async def lifespan(app: FastAPI):
             _autopilot_submit, _job_clips, OUTPUT_DIR, short_kit.gemini, is_active=lambda: not _draining,
             today_fn=_today))
         asyncio.create_task(_stay_awake_loop())
+        asyncio.create_task(_restart_notice())
+        # Outside heartbeat (HEALTHCHECK_URL, off when unset): the alert for a laptop that is off,
+        # asleep or offline has to come from somewhere else.
+        import heartbeat
+        asyncio.create_task(heartbeat.loop_forever(
+            lambda: {"Autopilot": autopilot_local.last_tick, "Channels": my_channels.last_tick}))
     yield
     # Cleanup (optional: cancel worker)
 
@@ -2576,6 +2592,38 @@ def enqueue_output(out, job_id):
     finally:
         out.close()
 
+# job id -> its Popen while it runs, so a job someone gave up on can be stopped (_cancel_job).
+_procs = {}
+
+
+def _kill_tree(process):
+    """Stop a job's process and its children. On Windows the venv's python.exe is a launcher whose
+    child runs main.py, and kill() stops only the launcher."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, timeout=30)
+        else:
+            process.kill()
+    except Exception:  # noqa: BLE001
+        try:
+            process.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _cancel_job(job_id, why="stopped"):
+    """Stop a running job; True when a process was stopped. my_channels calls it for a job past
+    its time: a history job hung 4.5 h on a dead connection while marked "took too long" after 3 h,
+    its process still holding a job slot (29-oct-2026)."""
+    process = _procs.get(job_id)
+    if process is None or process.poll() is not None:
+        return False
+    _kill_tree(process)
+    if job_id in jobs:
+        jobs[job_id]['logs'].append(f"⏹️ Job {why}.")
+    return True
+
+
 async def run_job(job_id, job_data):
     """Executes the subprocess for a specific job."""
     
@@ -2595,7 +2643,8 @@ async def run_job(job_id, job_data):
             env=env,
             cwd=os.getcwd()
         )
-        
+        _procs[job_id] = process
+
         # We need to capture logs in a thread because Popen isn't async
         t_log = threading.Thread(target=enqueue_output, args=(process.stdout, job_id))
         t_log.daemon = True
@@ -2610,10 +2659,7 @@ async def run_job(job_id, job_data):
             except asyncio.CancelledError:
                 # Shutting down: stop the child so it cannot keep writing into
                 # the job dir while the next instance resumes the same job.
-                try:
-                    process.kill()
-                except Exception:
-                    pass
+                _kill_tree(process)
                 raise
             if time.time() - last_heartbeat >= HEARTBEAT_EVERY:
                 _touch_manifest(job_id)
@@ -2629,7 +2675,7 @@ async def run_job(job_id, job_data):
                     # Use a lock or just robust read? json.load might fail if file is partial.
                     # Usually main.py writes it once at start (based on my review).
                     if os.path.getsize(target_json) > 0:
-                        with open(target_json, 'r') as f:
+                        with open(target_json, 'r', encoding='utf-8') as f:
                             data = json.load(f)
                             
                         base_name = os.path.basename(target_json).replace('_metadata.json', '')
@@ -2681,7 +2727,7 @@ async def run_job(job_id, job_data):
                     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
             if json_files:
                 target_json = json_files[0] 
-                with open(target_json, 'r') as f:
+                with open(target_json, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
                 # Enhance result with video URLs
@@ -2715,6 +2761,8 @@ async def run_job(job_id, job_data):
         # Exception text can embed URLs with credentials (e.g. the proxy URL
         # inside a yt-dlp/httpx error) — scrub before it reaches client logs.
         jobs[job_id]['logs'].append(_scrub_secrets(f"Execution error: {str(e)}"))
+    finally:
+        _procs.pop(job_id, None)
 
 @app.get("/health")
 async def health():
@@ -2825,6 +2873,19 @@ async def finder_channel(url: str):
         raise HTTPException(status_code=502, detail=channel_tools.why_not(e))
 
 
+async def _restart_notice():
+    """When autostart.bat's watchdog had to start the server again, tell the
+    owner once it is up (restart_notice.py; a silent crash loop looked healthy)."""
+    await asyncio.sleep(30)
+    try:
+        import restart_notice
+        sent = await asyncio.get_running_loop().run_in_executor(None, restart_notice.announce_restart)
+        if sent is not None:
+            print(f"📣 Restart notice sent ({', '.join(sent) or 'nothing connected'})")
+    except Exception as e:  # noqa: BLE001 — a notice never stops the server
+        print(f"⚠️ Restart notice failed: {type(e).__name__}: {e}")
+
+
 async def _stay_awake_loop():
     """keep_awake.refresh each minute on the event loop's own thread (Windows
     ties the stay-awake request to the thread that made it)."""
@@ -2867,7 +2928,8 @@ def _job_clips(job_id):
                     "opening": c.get("viral_hook_text") or "",
                     "tiktok": c.get("video_description_for_tiktok") or "",
                     "instagram": c.get("video_description_for_instagram") or "",
-                    "seconds": round(float(c.get("end", 0)) - float(c.get("start", 0)), 1),
+                    # An AI-edited clip keeps its place in the source (start/end) and its new length here.
+                    "seconds": round(float(c.get("seconds") or (float(c.get("end", 0)) - float(c.get("start", 0)))), 1),
                     # The Short's own question for the first comment (engage.py),
                     # and a quiz's answers so replies can say who got it right.
                     "question": (c.get("comment_question") or (c.get("cricket_topic") or {}).get("question")
@@ -2964,7 +3026,7 @@ async def meta_status():
     import meta_publish
     st = meta_publish.status()
     st["redirect"] = meta_publish.redirect_uri()
-    st["queue"] = [{k: q.get(k) for k in ("id", "channel", "page", "caption", "at", "seconds", "fb", "ig")}
+    st["queue"] = [{k: q.get(k) for k in ("id", "channel", "page", "ig_page", "caption", "at", "seconds", "fb", "ig")}
                    for q in meta_publish.queue()][-50:]
     return st
 
@@ -2996,7 +3058,62 @@ async def meta_callback(code: str = "", state: str = "", error: str = "", error_
     except Exception as e:  # noqa: BLE001
         return RedirectResponse(youtube_account.back_url(origin, "meta_error=" + urllib.parse.quote(str(e)[:200]),
                                                          "channels"))
+    import my_channels
+    try:
+        await _in_thread(my_channels.auto_link)       # each channel to the Page named like it
+    except Exception:  # noqa: BLE001 — the owner can still pick the Pages by hand
+        pass
     return RedirectResponse(youtube_account.back_url(origin, "meta_connected=1", "channels"))
+
+
+@app.post("/api/meta/keys")
+async def meta_keys(request: Request):
+    """{"app_id", "app_secret", "config_id"?}: the Meta app's keys from the dashboard, checked with Meta and
+    saved to .env (meta_publish.save_keys); no restart."""
+    _local_only()
+    import meta_publish
+    body = await request.json()
+    try:
+        return await _in_thread(meta_publish.save_keys, body.get("app_id"), body.get("app_secret"),
+                                body.get("config_id") or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/meta/redirect")
+async def meta_redirect(request: Request):
+    """{"host": "localhost" | "127.0.0.1"}: the address Facebook sends the sign-in back to."""
+    _local_only()
+    import meta_publish
+    try:
+        url = meta_publish.use_redirect_host(str((await request.json()).get("host") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"redirect": url}
+
+
+@app.post("/api/meta/refresh")
+async def meta_refresh():
+    """Read the Pages and their Instagram links again, then link the channels (one linked later shows up)."""
+    _local_only()
+    import meta_publish
+    import my_channels
+    try:
+        st = await _in_thread(meta_publish.refresh_pages)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {**st, "links": await _in_thread(my_channels.auto_link)}
+
+
+@app.get("/api/meta/check")
+async def meta_check():
+    """Each Page's token and whether its Instagram may publish, posting nothing (meta_publish.check), and
+    where every channel's Reels go."""
+    _local_only()
+    import meta_publish
+    import my_channels
+    rows = await _in_thread(meta_publish.check)
+    return {"pages": rows, "links": await _in_thread(my_channels.auto_link)}
 
 
 @app.post("/api/meta/disconnect")
@@ -3237,7 +3354,9 @@ def _check_claims(log=print):
 def _auto_post_ready():
     """Autopilot's auto upload: the same run as the "post all" button, in the
     calling thread. None when a run is already going or nothing waits."""
-    items = sorted((x for x in _plan_items() if x["status"] == "ready"), key=lambda x: x.get("slot") or "")
+    # A clip Studio's AI editor is changing waits for the next run (post_queue.plan "editing").
+    items = sorted((x for x in _plan_items() if x["status"] == "ready" and not x.get("editing")),
+                   key=lambda x: x.get("slot") or "")
     if not items:
         return None
     with _post_all_lock:
@@ -3262,7 +3381,7 @@ async def youtube_post_all(request: Request):
         body = {}
     ids = set(body.get("ids") or []) if isinstance(body, dict) else set()
     items = [x for x in await _in_thread(_plan_items)
-             if x["status"] == "ready" and (not ids or x["id"] in ids)]
+             if x["status"] == "ready" and not x.get("editing") and (not ids or x["id"] in ids)]
     items.sort(key=lambda x: x.get("slot") or "")
     if not items:
         raise HTTPException(status_code=400, detail="Nothing is waiting to be posted.")
@@ -3443,6 +3562,8 @@ def _today():
         rows[-1]["fail_reason"] = (sorted(failed_jobs, key=lambda j: j.get("at", 0))[-1].get("error") or ""
                                    )[:160] if failed_jobs else ""
         rows[-1]["asked"] = __import__("engage").requests(my_channels.account(ch["id"]), limit=3)
+        # Comments saying a video got a fact wrong: no auto reply went to them, the owner looks.
+        rows[-1]["corrections"] = __import__("engage").corrections(my_channels.account(ch["id"]), limit=3)
         rows[-1]["elsewhere"] = my_channels.elsewhere(ch["id"], now)
     connected = [r for r in rows if r["connected"]]
     expiring = [r["expires"] for r in connected if r.get("expires")]
@@ -3588,6 +3709,20 @@ async def my_channels_disconnect(cid: str):
     return {"ok": True}
 
 
+@app.post("/api/my-channels/{cid}/take-over")
+async def my_channels_take_over(cid: str, request: Request):
+    """{"from": other card}: this card takes that card's YouTube channel and the other card is retired
+    (my_channels.hand_over: its files kept in state/retired, its videos stay on YouTube)."""
+    _local_only()
+    import my_channels
+    body = await request.json()
+    try:
+        out = my_channels.hand_over(re.sub(r"[^a-z0-9]", "", str(body.get("from") or ""))[:30], cid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {**out, "card": await _in_thread(_channel_view, my_channels.get(cid))}
+
+
 @app.post("/api/my-channels/samples")
 async def my_channels_samples():
     """One sample video for every channel, made one after another (connected or not)."""
@@ -3598,14 +3733,51 @@ async def my_channels_samples():
 
 
 @app.post("/api/my-channels/{cid}/make")
-async def my_channels_make(cid: str):
-    """Make this channel's next Short now (also before it is connected, to see one)."""
+async def my_channels_make(cid: str, request: Request):
+    """Make this channel's next Short now (also before it is connected, to see one). A song channel takes
+    {"mood": key}: that mood's song next (now, or right after the one being made)."""
     _local_only()
     import my_channels
     import short_kit
     ch = my_channels.get(cid)
     if not ch:
         raise HTTPException(status_code=404, detail="Unknown channel.")
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    mood = str((body or {}).get("mood") or "") if isinstance(body, dict) else ""
+    mix = str((body or {}).get("mix") or "") if isinstance(body, dict) else ""
+    if mix:
+        import mood_mix
+        import music_moods
+        settings = music_moods.settings_of(ch.get("moods"))
+        moods = music_moods.active(settings)
+        if ch["kind"] != "music" or mix not in moods:
+            raise HTTPException(status_code=400, detail="That mood is switched off or unknown.")
+        if moods[mix].get("mix_only") and music_moods.mix_setting(settings, "mix_budget") <= 0:
+            raise HTTPException(status_code=400, detail="Study and sleep mixes are off: set a budget for their tracks.")
+        if not moods[mix].get("mix_only"):
+            uploaded = {j.get("job_id") for j in ch.get("jobs") or [] if j.get("status") == "uploaded"}
+            songs = music_moods.mix_songs(mix, uploaded)
+            secs = sum(float(s.get("seconds") or 0) for s in songs)
+            if secs < mood_mix.MIX_MIN_SECONDS:
+                raise HTTPException(status_code=400, detail=(
+                    f"{len(songs)} new {moods[mix]['name'].lower()} so far ({mood_mix.clock(secs)}); a mix needs "
+                    f"{mood_mix.MIX_MIN_SECONDS // 60} minutes of songs that went up and were in no mix yet."))
+        ch = my_channels.update(cid, {"next_mix": mix})
+        if my_channels.running(ch):
+            return {"ok": True, "queued": True,
+                    "message": f"A video is being made now; the {moods[mix]['name']} mix comes right after it."}
+    if mood:
+        import music_moods
+        moods = music_moods.active(music_moods.settings_of(ch.get("moods")))
+        if ch["kind"] != "music" or mood not in moods:
+            raise HTTPException(status_code=400, detail="That mood is switched off or unknown.")
+        ch = my_channels.update(cid, {"next_mood": mood})
+        if my_channels.running(ch):
+            return {"ok": True, "queued": True,
+                    "message": f"A song is being made now; the next one is for {moods[mood]['name']}."}
     if my_channels.running(ch):
         raise HTTPException(status_code=409, detail="A Short for this channel is being made. Wait for it.")
     notes = []
@@ -3698,6 +3870,405 @@ async def my_channels_ideas(cid: str, request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return await _in_thread(_channel_view, my_channels.get(cid))
+
+
+@app.get("/api/research/{cid}")
+async def research_view(cid: str):
+    """The research agent of a channel's niche (niche_research): playbook, today's viral finds,
+    the videos studied and the creators on the watchlist. ``cid`` "main" is the comedy channel."""
+    _local_only()
+    import my_channels
+    import niche_research
+    ch = my_channels.get(cid) if cid != "main" else {"id": "main"}
+    niche = my_channels.niche_of(ch) if ch else None
+    if niche not in niche_research.NICHES:
+        raise HTTPException(status_code=404, detail="No research for this channel.")
+    return await _in_thread(niche_research.summary, niche)
+
+
+@app.post("/api/research/{cid}/run")
+async def research_run(cid: str):
+    """Run the channel's research pass now (~1 minute: searches, then Gemini watches 2 videos)."""
+    _local_only()
+    import my_channels
+    import niche_research
+    import short_kit
+    ch = my_channels.get(cid) if cid != "main" else {"id": "main"}
+    niche = my_channels.niche_of(ch) if ch else None
+    if niche not in niche_research.NICHES:
+        raise HTTPException(status_code=404, detail="No research for this channel.")
+    notes = []
+    await _in_thread(niche_research.run, niche, short_kit.gemini(), notes.append,
+                     ours_files=my_channels.recent_files(niche))      # our videos measured against the winners
+    return {**(await _in_thread(niche_research.summary, niche)), "notes": notes}
+
+
+# ---- Studio: edit a channel's finished video before (or after) it goes up (studio.py) --------------------
+
+def _studio_call(fn, *args, **kwargs):
+    """A studio.py call with its StudioError as a 400 the dashboard shows as it is."""
+    import studio
+    try:
+        return fn(*args, **kwargs)
+    except studio.StudioError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:          # YouTube refused an update (quota, video gone)
+        raise HTTPException(status_code=502, detail=str(e)[:300])
+
+
+def _mix_env(mood, extra):
+    """The env of a mood-mix job (mood_mix.py). Song folders outside the song archive are dropped: the mix reads
+    the audio files it is given."""
+    import music_moods
+    root = os.path.realpath(music_moods.ARCHIVE_DIR)
+    songs = extra.get("music_mix_songs") or []
+    songs = [s for s in (songs if isinstance(songs, list) else [])
+             if isinstance(s, str) and os.path.realpath(s).startswith(root + os.sep)][:music_moods.MIX_MAX_SONGS]
+    mood_data = extra.get("music_mix_mood") if isinstance(extra.get("music_mix_mood"), dict) else {}
+
+    def num(key, lo, hi, default, cast):
+        try:
+            return str(max(lo, min(hi, cast(extra.get(key)))))
+        except (TypeError, ValueError):
+            return str(default)
+    return {"MUSIC_MIX": mood, "MUSIC_MIX_SONGS": json.dumps(songs),
+            "MUSIC_MIX_MOOD": json.dumps(mood_data, ensure_ascii=False)[:4000],
+            "MUSIC_MIX_MINUTES": num("music_mix_minutes", 20, 60, music_moods.MIX_MINUTES, int),
+            "MUSIC_MIX_BUDGET": num("music_mix_budget", 0.0, 5.0, music_moods.MIX_BUDGET, float),
+            "MUSIC_MIX_VOL": num("music_mix_vol", 1, 999, 1, int)}
+
+
+def _main_name():
+    import youtube_account
+    return ((youtube_account.status().get("channel") or {}).get("title") or "Main channel").strip()
+
+
+@app.get("/api/studio/videos")
+async def studio_videos():
+    _local_only()
+    import my_channels
+    import studio
+    # The main channel's clips too (4-nov-2026): its comedy jobs hold 3 Shorts, each its own Studio video.
+    return {"videos": await _in_thread(lambda: studio.videos(my_channels.channels(), main=_queue_clips(),
+                                                              main_name=_main_name()))}
+
+
+@app.get("/api/studio/video/{job_id}")
+async def studio_video(job_id: str):
+    _local_only()
+    import my_channels
+    import studio
+    return await _in_thread(functools.partial(_studio_call, studio.detail, job_id, my_channels.channels(),
+                                              main_name=_main_name()))
+
+
+@app.get("/api/studio/poster/{job_id}")
+async def studio_poster(job_id: str):
+    _local_only()
+    import studio
+    path = await _in_thread(_studio_call, studio.poster, job_id)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
+
+@app.put("/api/studio/video/{job_id}/details")
+async def studio_details(job_id: str, request: Request):
+    _local_only()
+    import my_channels
+    import studio
+    body = await request.json()
+    tags = body.get("tags")
+    if isinstance(tags, str):
+        tags = [t for t in re.split(r"[,\n]", tags)]
+    return await _in_thread(functools.partial(
+        _studio_call, studio.save_details, job_id, my_channels.channels(), title=body.get("title"),
+        description=body.get("description"), tags=tags, push=bool(body.get("push"))))
+
+
+@app.post("/api/studio/video/{job_id}/captions")
+async def studio_captions(job_id: str, request: Request):
+    _local_only()
+    import my_channels
+    import studio
+    body = await request.json()
+    segments = [{"text": str((s or {}).get("text") or "")} for s in body.get("captions") or []]
+    url = await _in_thread(_studio_call, studio.save_captions, job_id, my_channels.channels(), segments)
+    return {"url": url}
+
+
+@app.post("/api/studio/video/{job_id}/trim")
+async def studio_trim(job_id: str, request: Request):
+    _local_only()
+    import my_channels
+    import studio
+    body = await request.json()
+    try:
+        start, end = float(body.get("start")), float(body.get("end"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Give the start and end in seconds.")
+    url = await _in_thread(_studio_call, studio.trim, job_id, my_channels.channels(), start, end)
+    return {"url": url}
+
+
+@app.get("/api/studio/video/{job_id}/insights")
+async def studio_insights(job_id: str):
+    """An uploaded video's retention curve, where viewers left (with the words said there) and the search terms
+    that found it (yt_insights; Analytics quota, not the Data API's)."""
+    _local_only()
+    import my_channels
+    import studio
+    return await _in_thread(_studio_call, studio.insights, job_id, my_channels.channels())
+
+
+@app.post("/api/studio/video/{job_id}/titles")
+async def studio_titles(job_id: str):
+    """Other title ideas and YouTube search phrases for the video (one Gemini call); nothing is saved.
+    Declared before studio_action, whose {action} would take "titles"."""
+    _local_only()
+    import my_channels
+    import studio
+    return await _in_thread(_studio_call, studio.title_options, job_id, my_channels.channels())
+
+
+@app.post("/api/studio/video/{job_id}/{action}")
+async def studio_action(job_id: str, action: str):
+    _local_only()
+    import my_channels
+    import studio
+    if action not in ("approve", "skip", "remake"):
+        raise HTTPException(status_code=404, detail="Unknown action.")
+    message = await _in_thread(_studio_call, studio.act, job_id, my_channels.channels(), action)
+    return {"message": message}
+
+
+# ---- Studio's AI editor: the owner types what to change (ai_editor.py, in a subprocess) ----------------
+
+_ai_edits = {}          # job id -> {"proc", "started", "log"}
+
+
+def _ai_running(job_id):
+    t = _ai_edits.get(job_id)
+    return bool(t and t["proc"].poll() is None)
+
+
+def _start_ai_edit(job_id, prompt, phone=False):
+    """Start an AI edit (on the event loop's thread: it schedules the follow-up task). ``phone``: the
+    request came as a Telegram reply, so the result and the new video go back there."""
+    import ai_editor
+    import my_channels
+    import studio
+    prompt = " ".join(str(prompt or "").split())[:1000]
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Say what to change.")
+    path = _studio_call(studio.job_dir, job_id)
+    jid, index = studio.split_ref(job_id)
+    job_id = studio.ref_of(jid, index)              # "<id>.1" is the job id itself
+    if _ai_running(job_id):
+        raise HTTPException(status_code=409, detail="An edit of this video is still running.")
+    ai_editor.write_request(job_id, prompt)
+    ch, j = studio._find_job(job_id, my_channels.channels())
+    if ch and j and j.get("status") == "done":
+        # Held while the file changes: the upload loop must not send a half-edited video.
+        my_channels._set_job(ch["id"], job_id, editing_until=int(time.time()) + 3600)
+    elif not ch and (studio.main_clip(jid, index, path) or {}).get("status") == "ready":
+        import post_queue                           # the main channel's poster skips it meanwhile
+        post_queue.update(post_queue.item_id(jid, index), editing_until=int(time.time()) + 3600)
+    log = open(os.path.join(ai_editor.edits_dir(job_id), "edit.log"), "a", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_editor.py"),
+                             "apply", job_id], cwd=os.path.dirname(os.path.abspath(__file__)), stdout=log,
+                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"})
+    _ai_edits[job_id] = {"proc": proc, "started": time.time(), "log": log, "phone": phone}
+    asyncio.create_task(_ai_edit_done(job_id))
+    return {"started": True}
+
+
+@app.post("/api/studio/ai/{job_id}")
+async def studio_ai_edit(job_id: str, request: Request):
+    """Start an AI edit of the video; GET the same path for its progress and result."""
+    _local_only()
+    body = await request.json()
+    return _start_ai_edit(job_id, body.get("prompt"))
+
+
+_main_loop = None       # the server's event loop (lifespan), for calls from executor threads
+
+
+async def _start_ai_edit_async(job_id, prompt):
+    return _start_ai_edit(job_id, prompt, phone=True)
+
+
+def _phone_ai_edit(job_id, prompt):
+    """my_channels.start_ai_edit: called from the Telegram poll's executor thread, so the start runs on
+    the event loop and this waits for it (an HTTPException comes back with the reason)."""
+    if _main_loop is None:
+        raise RuntimeError("the server is still starting")
+    asyncio.run_coroutine_threadsafe(_start_ai_edit_async(job_id, prompt), _main_loop).result(timeout=60)
+
+
+def _tell_phone_edit(job_id, result):
+    """The AI edit's outcome back to Telegram: the new video (reply to it to change more), or why not."""
+    import my_channels
+    import studio
+    import telegram_notify
+    if not telegram_notify.status().get("connected"):
+        return
+    ref = f"\n{my_channels.PHONE_EDIT_HINT}\nref {job_id}"
+    lines = [x for x in [result.get("summary")] + list(result.get("notes") or [])[:3]
+             + [", ".join(result.get("actions") or [])] if x]
+    problems = (result.get("check") or {}).get("problems") or []
+    if problems:
+        lines.append("The check saw: " + "; ".join(problems[:2]))
+    try:
+        if result.get("ok") and result.get("file_changed"):
+            path = studio.job_dir(job_id)
+            try:
+                telegram_notify.send_video(studio.served(path, studio.split_ref(job_id)[1]),
+                                           "Done: " + "\n".join(lines)[:850] + ref)
+                return
+            except RuntimeError as e:                      # over 50 MB: words only
+                lines.append(str(e))
+        if result.get("ok"):
+            telegram_notify.send_text("Done: " + "\n".join(lines) + ref)
+        else:
+            telegram_notify.send_text("Could not do that: " + (result.get("message") or "the edit stopped") + ref)
+    except Exception as e:  # noqa: BLE001 — the edit stands; the phone just did not hear
+        print(f"⚠️ Phone edit note failed: {type(e).__name__}: {e}")
+
+
+async def _ai_edit_done(job_id):
+    """After the edit: the job's checks run again, a details change goes to YouTube for an uploaded video,
+    a remake goes back to the channel with the owner's notes."""
+    import ai_editor
+    import my_channels
+    import studio
+    t = _ai_edits.get(job_id) or {}
+    proc = t.get("proc")
+    try:
+        await _in_thread(proc.wait, 3 * 3600)
+    except Exception:  # noqa: BLE001 — a stuck edit is ended, its folder kept
+        _kill_tree(proc)
+    finally:
+        try:
+            t["log"].close()
+        except Exception:  # noqa: BLE001
+            pass
+    jid, index = studio.split_ref(job_id)
+    path = os.path.join(OUTPUT_DIR, jid)
+    result_path = os.path.join(path, ai_editor.edits_name(index), "result.json")
+    result = ai_editor._read_json(result_path, None) or {"ok": False, "message": "The edit stopped without a result."}
+    chans = my_channels.channels()
+    ch, j = studio._find_job(job_id, chans)
+    main = None if ch else studio.main_clip(jid, index, path)
+    done = []
+    try:
+        if ch and j:
+            my_channels._set_job(ch["id"], job_id, editing_until=0)
+        if main is not None and main.get("editing_until"):
+            import post_queue
+            post_queue.update(post_queue.item_id(jid, index), editing_until=0)
+        if result.get("ok") and result.get("file_changed") and ch and j:
+            studio._recheck(job_id, chans)
+        video_id = (j or {}).get("video_id") or ((main or {}).get("youtube_id") if (main or {}).get("status") == "posted" else None)
+        if result.get("ok") and result.get("push") and (ch and j or main is not None) and video_id:
+            import youtube_account as ya
+            short = studio.clip_of(studio._read(path), index)
+
+            def push():
+                with ya.use(my_channels.account(ch["id"]) if ch else None):
+                    ya.update_video(video_id, title=short.get("seo_title"),
+                                    description=short.get("seo_description"), tags=short.get("seo_tags"))
+            await _in_thread(push)
+            done.append("updated on YouTube")
+        if result.get("ok") and result.get("remake") and ch and j:
+            if my_channels.skip(ch["id"], job_id):
+                my_channels._remake(ch["id"], j, result["remake"])
+                done.append("sent back to the channel to be made again with your notes")
+    except Exception as e:  # noqa: BLE001 — the edit itself stands
+        done.append(f"a follow-up step failed ({type(e).__name__}: {str(e)[:120]})")
+    if done:
+        result["actions"] = done
+        ai_editor._write_json(result_path, result)
+    if t.get("phone"):
+        await _in_thread(_tell_phone_edit, job_id, result)
+
+
+@app.post("/api/studio/ai/{job_id}/suggest")
+async def studio_ai_suggest(job_id: str):
+    """Edits the AI proposes for this video (ai_editor.suggest; cached until the video changes)."""
+    _local_only()
+    import ai_editor
+    try:
+        return await _in_thread(_studio_call, ai_editor.suggest, job_id)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — the owner sees one plain line
+        raise HTTPException(status_code=502, detail=f"No suggestions right now ({type(e).__name__}).")
+
+
+@app.get("/api/studio/ai/{job_id}")
+async def studio_ai_status(job_id: str):
+    _local_only()
+    import ai_editor
+    st = await _in_thread(_studio_call, ai_editor.status, job_id)
+    st["running"] = _ai_running(job_id)
+    return st
+
+
+@app.post("/api/studio/ai/{job_id}/restore")
+async def studio_ai_restore(job_id: str, request: Request):
+    """Undo: publish an earlier version (n = 0 is the video before any AI edit)."""
+    _local_only()
+    import ai_editor
+    import my_channels
+    import studio
+    body = await request.json()
+    if _ai_running(job_id):
+        raise HTTPException(status_code=409, detail="Wait for the running edit to finish.")
+    try:
+        n = int(body.get("n", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Which version?")
+    st = await _in_thread(_studio_call, ai_editor.restore, job_id, n)
+    await _in_thread(studio._recheck, job_id, my_channels.channels())
+    st["running"] = False
+    return st
+
+
+@app.post("/api/studio/upload")
+async def studio_upload(file: UploadFile = File(...)):
+    """The owner's own video into the Studio, to edit by saying what to change. Kept 7 days."""
+    _local_only()
+    import ai_editor
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    tmp = os.path.join(UPLOAD_DIR, f"studio_{uuid.uuid4().hex}.upload")
+
+    def save():
+        with open(tmp, "wb") as f:
+            shutil.copyfileobj(file.file, f, 8 * 1024 * 1024)
+    try:
+        await _in_thread(save)
+        job_id = await _in_thread(_studio_call, ai_editor.create_upload, tmp, file.filename or "video")
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    root = os.path.dirname(os.path.abspath(__file__))
+    log = open(os.path.join(OUTPUT_DIR, job_id, "transcribe.log"), "a", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, os.path.join(root, "ai_editor.py"), "transcribe", job_id], cwd=root,
+                            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    asyncio.create_task(_close_when_done(proc, log))
+    return {"job_id": job_id}
+
+
+async def _close_when_done(proc, log):
+    try:
+        await _in_thread(proc.wait, 3600)
+    except Exception:  # noqa: BLE001
+        _kill_tree(proc)
+    finally:
+        log.close()
 
 
 @app.post("/api/my-channels/{cid}/learn")
@@ -3805,8 +4376,8 @@ def _queue_clips():
         if state != "completed" or not clips:
             continue
         src = _job_source(job_path)
-        if src.get("genre") == "long" or src.get("channel") not in (None, "", "main"):
-            continue   # another channel's Short (my_channels.py) never posts here
+        if src.get("genre") in ("long", "studio_upload") or src.get("channel") not in (None, "", "main"):
+            continue   # another channel's Short (my_channels.py), or the owner's own Studio upload, never posts here
         created = os.path.getmtime(glob.glob(os.path.join(job_path, "*_metadata.json"))[0])
         if created < start:
             continue
@@ -4715,18 +5286,33 @@ async def process_endpoint(
     take_voice: Optional[str] = Form(None),
     quiz_format: Optional[str] = Form(None),
     quiz_timer_add: Optional[str] = Form(None),
+    broll_cut: Optional[str] = Form(None),
     hook_lessons: Optional[str] = Form(None),
+    niche_playbook: Optional[str] = Form(None),
+    owner_notes: Optional[str] = Form(None),
     quiz_topic: Optional[str] = Form(None),
     quiz_avoid: Optional[str] = Form(None),
     quiz_number: Optional[str] = Form(None),
     music_style: Optional[str] = Form(None),
     music_theme: Optional[str] = Form(None),
+    music_mood: Optional[str] = Form(None),
+    music_brief: Optional[str] = Form(None),
+    music_mix: Optional[str] = Form(None),
     music_avoid: Optional[str] = Form(None),
     controversy_topic: Optional[str] = Form(None),
+    money_topic: Optional[str] = Form(None),
+    toon_premise: Optional[str] = Form(None),
+    toon_shape: Optional[str] = Form(None),
+    toon_mix: Optional[str] = Form(None),
+    toon_series: Optional[str] = Form(None),
+    toon_part: Optional[str] = Form(None),
+    toon_parts: Optional[str] = Form(None),
+    toon_length: Optional[str] = Form(None),
     history_topic: Optional[str] = Form(None),
     history_minutes: Optional[str] = Form(None),
     history_lang: Optional[str] = Form(None),
     history_mode: Optional[str] = Form(None),
+    history_thumb: Optional[str] = Form(None),
     history_teaser_of: Optional[str] = Form(None),
     history_video_id: Optional[str] = Form(None),
     history_teaser_part: Optional[str] = Form(None),
@@ -4757,6 +5343,7 @@ async def process_endpoint(
     # Handle JSON body manually for URL payload
     content_type = request.headers.get("content-type", "")
     body_json = None
+    mix_extra = {}           # a mood mix's settings (JSON bodies only: Autopilot's my_channels jobs)
     if "application/json" in content_type:
         body = await request.json()
         body_json = body
@@ -4796,18 +5383,35 @@ async def process_endpoint(
         take_voice = body.get("take_voice")
         quiz_format = body.get("quiz_format")
         quiz_timer_add = body.get("quiz_timer_add")
+        broll_cut = body.get("broll_cut")
         hook_lessons = body.get("hook_lessons")
+        niche_playbook = body.get("niche_playbook")
+        owner_notes = body.get("owner_notes")
         quiz_topic = body.get("quiz_topic")
         quiz_avoid = body.get("quiz_avoid")
         quiz_number = body.get("quiz_number")
         music_style = body.get("music_style")
         music_theme = body.get("music_theme")
+        music_mood = body.get("music_mood")
+        music_brief = body.get("music_brief")
+        music_mix = body.get("music_mix")
+        mix_extra = {k: body.get(k) for k in ("music_mix_mood", "music_mix_songs", "music_mix_minutes",
+                                               "music_mix_budget", "music_mix_vol")}
         music_avoid = body.get("music_avoid")
         controversy_topic = body.get("controversy_topic")
+        money_topic = body.get("money_topic")
+        toon_premise = body.get("toon_premise")
+        toon_shape = body.get("toon_shape")
+        toon_mix = body.get("toon_mix")
+        toon_series = body.get("toon_series")
+        toon_part = body.get("toon_part")
+        toon_parts = body.get("toon_parts")
+        toon_length = body.get("toon_length")
         history_topic = body.get("history_topic")
         history_minutes = body.get("history_minutes")
         history_lang = body.get("history_lang")
         history_mode = body.get("history_mode")
+        history_thumb = body.get("history_thumb")
         history_teaser_of = body.get("history_teaser_of")
         history_video_id = body.get("history_video_id")
         history_teaser_part = body.get("history_teaser_part")
@@ -4861,7 +5465,7 @@ async def process_endpoint(
     song_urls = []
     owned_music = str(song_owned).lower() in ("1", "true", "yes")
     cricket_mode = str(cricket_mode or "").strip().lower()
-    cricket_mode = cricket_mode if cricket_mode in ("topic", "versus") else "match"
+    cricket_mode = cricket_mode if cricket_mode in ("topic", "versus", "ranking") else "match"
     if genre_val != "comedy":
         output_format = "framed"
         if genre_val == "cricket":
@@ -5058,10 +5662,25 @@ async def process_endpoint(
     if genre_val == "cricket":
         env["CRICKET_MATCH"] = cricket_match
         env["CRICKET_MODE"] = cricket_mode
-    if genre_val in ("cricket", "quiz", "controversy", "history") and str(bg_music).lower() in ("1", "true", "yes"):
+    if genre_val in ("cricket", "quiz", "controversy", "history", "money", "toons") and str(bg_music).lower() in ("1", "true", "yes"):
         env["BG_MUSIC"] = "1"
     if genre_val == "controversy":
         env["CONTROVERSY_TOPIC"] = re.sub(r"\s+", " ", str(controversy_topic or ""))[:200]
+    if genre_val == "money":
+        env["MONEY_TOPIC"] = re.sub(r"\s+", " ", str(money_topic or ""))[:200]
+    if genre_val == "toons":
+        # The cartoon series (toon_shorts.py): the planner's premise and comic shape; none = it plans one.
+        env["TOON_PREMISE"] = re.sub(r"\s+", " ", str(toon_premise or ""))[:240]
+        env["TOON_SHAPE"] = re.sub(r"[^a-z]", "", str(toon_shape or "").lower())[:20]
+        if str(toon_length or "").lower() in ("short", "long"):
+            env["TOON_LENGTH"] = str(toon_length).lower()      # the episode-length A/B side (toon_shorts.LENGTHS)
+        if toon_series:
+            # One part of a two-part cartoon story (toon_shorts.series_part).
+            env["TOON_SERIES"] = re.sub(r"[^A-Za-z0-9 ]", "", str(toon_series))[:40]
+            env["TOON_PART"] = re.sub(r"[^0-9]", "", str(toon_part or "1"))[:1] or "1"
+            env["TOON_PARTS"] = re.sub(r"[^0-9]", "", str(toon_parts or "2"))[:1] or "2"
+        if str(toon_mix or "").lower() in ("1", "true", "yes"):
+            env["TOON_MIX_JOB"] = "1"          # the weekly compilation of kept episodes (toon_mix.py)
     if genre_val == "history":
         # A long 16:9 documentary (history_videos.py): 2-30 minutes, Urdu or English.
         env["HISTORY_TOPIC"] = re.sub(r"\s+", " ", str(history_topic or ""))[:200]
@@ -5071,7 +5690,12 @@ async def process_endpoint(
             env["HISTORY_MINUTES"] = "10"
         env["HISTORY_LANG"] = "english" if str(history_lang or "").lower() == "english" else "urdu"
         # "explainer": trending topics explained (trend_explainer.py) instead of history.
-        env["HISTORY_MODE"] = "explainer" if str(history_mode or "").lower() == "explainer" else "history"
+        # "horror": original horror stories (horror_stories.py).
+        mode_in = str(history_mode or "").lower()
+        env["HISTORY_MODE"] = mode_in if mode_in in ("explainer", "horror") else "history"
+        # The thumbnail A/B test's side (my_channels EXPERIMENTS["thumb"]): where the thumbnail's text sits.
+        if str(history_thumb or "").lower() in ("left", "right"):
+            env["HISTORY_THUMB"] = str(history_thumb).lower()
         if str(history_today or "").lower() in ("1", "true", "yes"):
             # The daily "on this day" Short (history_today.py), with the events already made.
             env["HISTORY_TODAY"] = "1"
@@ -5112,6 +5736,19 @@ async def process_endpoint(
     # The channel's own openings ranked by viewers who stayed (my_channels.hook_lessons).
     if hook_lessons:
         env["HOOK_LESSONS"] = " ".join(str(hook_lessons).split())[:1500]
+    # What wins in the channel's niche now (niche_research.playbook_text); line breaks kept.
+    if niche_playbook:
+        # 2700: since 5-nov-2026 the measured gaps (teardown.py) come first, the playbook after them.
+        env["NICHE_PLAYBOOK"] = "\n".join(" ".join(l.split()) for l in str(niche_playbook).splitlines())[:2700]
+    # The "pace" test's side (my_channels.EXPERIMENTS): the footage cut length of the niche's winners.
+    try:
+        if broll_cut and 1.0 <= float(broll_cut) <= 6.0:
+            env["BROLL_CUT"] = f"{float(broll_cut):.1f}"
+    except (TypeError, ValueError):
+        pass
+    # A remake the owner asked for from Studio's AI editor, with what to change (script_craft.owner_notes).
+    if owner_notes:
+        env["OWNER_NOTES"] = " ".join(str(owner_notes).split())[:600]
     # The channel kinds of my_channels.py; avoid lists keep a channel from
     # asking a question or making a song title twice.
     if genre_val == "quiz":
@@ -5125,6 +5762,12 @@ async def process_endpoint(
     if genre_val == "music":
         env["MUSIC_STYLE"] = re.sub(r"\s+", " ", str(music_style or ""))[:60]
         env["MUSIC_THEME"] = re.sub(r"\s+", " ", str(music_theme or ""))[:60]
+        # The playlist mood the song is made for (music_moods.py) and its brief for the song writer.
+        env["MUSIC_MOOD"] = re.sub(r"[^a-z0-9_]", "", str(music_mood or "").lower())[:30]
+        env["MUSIC_BRIEF"] = re.sub(r"\s+", " ", str(music_brief or ""))[:300]
+        mix = re.sub(r"[^a-z0-9_]", "", str(music_mix or "").lower())[:30]
+        if mix:
+            env.update(_mix_env(mix, mix_extra))
         if str(music_dance or "").lower() in ("1", "true", "yes"):
             env["MUSIC_DANCE"] = "1"       # the channel's AI singer dances (ai_influencer.py)
     if genre_val == "quran":
@@ -5526,7 +6169,7 @@ def _locate_source(job_id: str):
     try:
         meta_files = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
         if meta_files:
-            with open(meta_files[0], 'r') as f:
+            with open(meta_files[0], 'r', encoding='utf-8') as f:
                 name = json.load(f).get('source_video')
             if name:
                 candidate = os.path.join(OUTPUT_DIR, job_id, os.path.basename(name))
@@ -5789,7 +6432,7 @@ async def _restore_job_files(job_id: str, proj, user_id: str) -> bool:
         json_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
         if not json_files:
             raise HTTPException(status_code=502, detail="Project metadata missing")
-        with open(json_files[0], 'r') as f:
+        with open(json_files[0], 'r', encoding='utf-8') as f:
             data = json.load(f)
         base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
         clips = data.get('shorts', [])
@@ -5973,7 +6616,7 @@ async def edit_clip(
                 try:
                     meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
                     if meta_files:
-                        with open(meta_files[0], 'r') as f:
+                        with open(meta_files[0], 'r', encoding='utf-8') as f:
                             data = json.load(f)
                             transcript = data.get('transcript')
                 except Exception as e:
@@ -6027,13 +6670,13 @@ async def edit_clip(
         try:
             meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
             if meta_files:
-                with open(meta_files[0], 'r') as f:
+                with open(meta_files[0], 'r', encoding='utf-8') as f:
                     meta = json.load(f)
                 shorts = meta.get('shorts', [])
                 if req.clip_index < len(shorts):
                     shorts[req.clip_index]['video_url'] = new_video_url
                     meta['shorts'] = shorts
-                    with open(meta_files[0], 'w') as f:
+                    with open(meta_files[0], 'w', encoding='utf-8') as f:
                         json.dump(meta, f, indent=4)
         except Exception as e:
             print(f"⚠️ Failed to update metadata.json: {e}")
@@ -6147,13 +6790,13 @@ async def custom_edit_clip(req: CustomEditRequest, request: Request):
     try:
         meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
         if meta_files:
-            with open(meta_files[0], 'r') as f:
+            with open(meta_files[0], 'r', encoding='utf-8') as f:
                 meta = json.load(f)
             shorts = meta.get('shorts', [])
             if req.clip_index < len(shorts):
                 shorts[req.clip_index]['video_url'] = new_video_url
                 meta['shorts'] = shorts
-                with open(meta_files[0], 'w') as f:
+                with open(meta_files[0], 'w', encoding='utf-8') as f:
                     json.dump(meta, f, indent=4)
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
@@ -6221,7 +6864,7 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
 
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     transcript = data.get('transcript')
@@ -6315,7 +6958,7 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -6441,7 +7084,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -6555,7 +7198,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             updates['crop_overrides'] = None
         clip.update(updates)
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
+        with open(json_files[0], 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         mem_clips = (job.get('result') or {}).get('clips') or []
         if req.clip_index < len(mem_clips):
@@ -6639,7 +7282,7 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -6832,7 +7475,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -6912,7 +7555,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
         }
         clip.update(updates)
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
+        with open(json_files[0], 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         mem_clips = (job.get('result') or {}).get('clips') or []
         if req.clip_index < len(mem_clips):
@@ -7074,7 +7717,7 @@ async def generate_effects_config(
                 try:
                     meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
                     if meta_files:
-                        with open(meta_files[0], 'r') as f:
+                        with open(meta_files[0], 'r', encoding='utf-8') as f:
                             data = json.load(f)
                             transcript = data.get('transcript')
                 except Exception as e:
@@ -7137,7 +7780,7 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
         
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
         
     transcript = data.get('transcript')
@@ -7321,7 +7964,7 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
             data['shorts'] = clips
             
             # Write back
-            with open(json_files[0], 'w') as f:
+            with open(json_files[0], 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
                 print(f"✅ Metadata updated with subtitled video for clip {req.clip_index}")
     except Exception as e:
@@ -7361,7 +8004,7 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
     clips = data.get('shorts', [])
     if req.clip_index >= len(clips):
@@ -7389,7 +8032,7 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     try:
         clips[req.clip_index]['video_url'] = new_url
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
+        with open(json_files[0], 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
@@ -7425,7 +8068,7 @@ async def add_hook(req: HookRequest, request: Request):
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
         
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
         
     clips = data.get('shorts', [])
@@ -7531,7 +8174,7 @@ async def add_hook(req: HookRequest, request: Request):
         if req.clip_index < len(clips):
             clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
             data['shorts'] = clips
-            with open(json_files[0], 'w') as f:
+            with open(json_files[0], 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
                 print(f"✅ Metadata updated with hook video for clip {req.clip_index}")
     except Exception as e:
@@ -7579,7 +8222,7 @@ async def translate_clip(
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
 
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -7642,7 +8285,7 @@ async def translate_clip(
         if req.clip_index < len(clips):
             clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
             data['shorts'] = clips
-            with open(json_files[0], 'w') as f:
+            with open(json_files[0], 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
                 print(f"✅ Metadata updated with translated video for clip {req.clip_index}")
     except Exception as e:

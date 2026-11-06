@@ -124,7 +124,7 @@ def test_a_dance_short_is_the_chorus_as_long_as_the_dance():
 
 def test_the_songs_channel_asks_for_a_dance_only_when_she_can_dance(monkeypatch):
     import my_channels as mc
-    ch = mc.add("music")
+    ch = mc.update(mc.add("music")["id"], {"moods": {"mixes": 0}})     # songs: no weekly mix due
     monkeypatch.setattr(ai, "available", lambda now=None: False)
     payload, meta = mc.next_payload(mc.get(ch["id"]), lambda: None)
     assert "music_dance" not in payload and meta["format"] != "dance"

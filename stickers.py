@@ -24,13 +24,15 @@ How ffmpeg 9.0.1 plays them (measured 22-oct-2026, scratch proof scripts):
   colour exactly (43,14,61 on #2B0F3D) and the footage's own pixels over footage.
 """
 import enum
+import functools
 import os
+import subprocess
 
 from pydantic import BaseModel, field_validator
 
 import short_kit
 
-DEFAULT_DIR = r"D:\youtube\oss\noto-emoji-animation"
+DEFAULT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "oss", "noto-emoji-animation")
 DIR = os.environ.get("STICKER_DIR") or DEFAULT_DIR
 
 # name -> Unicode codepoint (the file name and the gstatic path). Every one is in the
@@ -98,11 +100,14 @@ _BLOCK = {
     "allegation", "allegations", "alleged", "allegedly", "accused", "ilzaam", "ilzam", "ilzamat",
     "arrest", "arrested", "giraftar", "rape", "harassment", "fraud", "scandal", "fixing",
 }
-# Default spots on the 1080x1920 canvas: just above the captions (short_kit.CAPTION_TOP_PX
-# 1430) and clear of the Shorts buttons on the right edge, alternating sides.
-SIZE = 260
-Y = 1290
-X_SPOTS = (780, 300)
+# Default spot on the 1080x1920 canvas: the top-left corner, beside the kicker pill and above
+# the title. Until 29-oct-2026 stickers sat just above the captions at y 1290, x 780 / 300; the
+# captions moved up out of YouTube's overlay into that band (subtitles.SAFE_BOX, x 48-888), the
+# cards above it draw over anything under them (stickers sit under the text layer), and the
+# right side is YouTube's button column below and the player's badge above.
+SIZE = 180
+Y = 250
+X_SPOTS = (150,)
 LEAD = 0.15   # the sticker lands a beat after its line starts
 HOLD = 2.2    # and stays at most this long
 POP = 0.32    # seconds of the pop-in (grow to 120%, settle at 100%)
@@ -249,6 +254,42 @@ def animated(sticker_path):
             and head[12:16] == b"VP8X" and bool(head[20] & 0x02))
 
 
+@functools.lru_cache(maxsize=1)
+def _reads_webp_anim():
+    """True when this ffmpeg has the webp_anim demuxer. Chocolatey's ffmpeg 8.0 (the F: laptop,
+    28-oct-2026) has not: every Short with a sticker failed "Unknown input format: 'webp_anim'"."""
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-demuxers"], capture_output=True, text=True,
+                             timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return any(line.split()[1:2] == ["webp_anim"] for line in out.splitlines() if line.strip())
+
+
+def as_apng(sticker_path):
+    """The animated WebP as an animated PNG next to it (made once), which ffmpeg 8 reads with the
+    apng demuxer and loops with the same -ignore_loop 0; None when it cannot be made."""
+    out = os.path.splitext(sticker_path)[0] + ".apng"
+    try:
+        if os.path.isfile(out) and os.path.getmtime(out) >= os.path.getmtime(sticker_path):
+            return out
+        from PIL import Image, ImageSequence
+        frames, durations = [], []
+        with Image.open(sticker_path) as im:
+            for frame in ImageSequence.Iterator(im):
+                frames.append(frame.convert("RGBA"))
+                durations.append(max(10, int(frame.info.get("duration") or 33)))
+        if not frames:
+            return None
+        # Every frame whole (dispose to background, blend source): the WebP's frames are full frames.
+        frames[0].save(out + ".tmp", "PNG", save_all=True, append_images=frames[1:], duration=durations,
+                       loop=0, disposal=1, blend=0)
+        os.replace(out + ".tmp", out)
+        return out
+    except Exception:  # noqa: BLE001 — the sticker is skipped, the Short is not
+        return None
+
+
 def overlay_args(sticker_path, idx, t0, t1, x, y, size=SIZE, src="[0:v]", label="stk0",
                  alive_until=None, fps=short_kit.FPS):
     """ffmpeg pieces for one sticker shown from t0 to t1, centred at (x, y), ``size`` px wide.
@@ -274,7 +315,10 @@ def overlay_args(sticker_path, idx, t0, t1, x, y, size=SIZE, src="[0:v]", label=
     length = t1 - t0
     if alive_until is not None:
         length = max(length, float(alive_until) - t0 + 0.5)
-    if animated(sticker_path):
+    apng = None if not animated(sticker_path) or _reads_webp_anim() else as_apng(str(sticker_path))
+    if apng:
+        inputs = ["-f", "apng", "-ignore_loop", "0", "-t", f"{length:.3f}", "-i", apng]
+    elif animated(sticker_path):
         # -f names the demuxer: probed as webp_pipe, -ignore_loop is "Option not found".
         inputs = ["-f", "webp_anim", "-ignore_loop", "0", "-t", f"{length:.3f}", "-i", str(sticker_path)]
     else:

@@ -98,7 +98,7 @@ match, the top 3 performers with exact figures (runs and balls, or wickets-runs)
 4 key moments (with the over when known). If the match has not been played, is
 ambiguous, or you cannot find it, say NOT FOUND and why."""
 
-STORY_PROMPT = """You make a 30-35 second animated YouTube Short about a cricket match for
+STORY_PROMPT = """You make a 25-30 second animated YouTube Short about a cricket match for
 Pakistani and Indian fans, voiced by the channel {handle}. Use ONLY the facts below:
 never invent a score, figure, over or name. If the facts say NOT FOUND or do not
 describe a finished match, return found=false and empty lists.
@@ -244,7 +244,7 @@ format and the records that stand out. Say NOT FOUND if nothing reliable comes u
 
 # The rule-steps line is there because "LBW rule explained simply" first came
 # back as LBW trivia (Sachin's 63, Kumble's 156) with no rule in it (8-oct-2026).
-TOPIC_STORY_PROMPT = """You make a 25-30 second YouTube Short for Pakistani and Indian cricket
+TOPIC_STORY_PROMPT = """You make an 18-25 second YouTube Short for Pakistani and Indian cricket
 fans, voiced by the channel {handle}, about: {topic}
 Use ONLY the facts below; never invent a number, date or name. If they say NOT FOUND,
 return found=false and empty lists.
@@ -259,7 +259,7 @@ Return:
   "RECORDS", "DID YOU KNOW", "HISTORY".
 - hook_line: the first voice line, Roman Urdu, 8-14 words, a surprising fact or a
   question that stops the scroll.
-- facts: 3 to 4 (5 only for a rule). When the topic asks how a RULE works, the facts ARE the rule, step
+- facts: 3 (4-5 only for a rule). When the topic asks how a RULE works, the facts ARE the rule, step
   by step in order (each condition the umpire checks, then a simple example), and at
   most the last one may be trivia. Otherwise the most surprising first (or a
   countdown). Each: headline (max 30
@@ -333,7 +333,7 @@ def ideas(client):
 def _idea_lines(text):
     out = []
     for line in (text or "").splitlines():
-        m = re.match(r"\W*(match|topic|versus)\s*:\s*(.+)", line.strip(), re.I)
+        m = re.match(r"\W*(match|topic|versus|ranking)\s*:\s*(.+)", line.strip(), re.I)
         if m:
             out.append({"kind": m.group(1).lower(), "text": _txt(m.group(2).strip(" *"), 120)})
     return out
@@ -345,7 +345,9 @@ happening in cricket right now.
 Mix: about a quarter are matches finished in the last 3 days (exact "Team vs Team,
 tournament, stage" so they can be looked up); one or two are "who is better" fights
 fans argue about, two players of the same role by numbers ("Babar Azam vs Virat Kohli
-ODI", "Shaheen Afridi vs Jasprit Bumrah T20I"); the rest are catchy facts that promise
+ODI", "Shaheen Afridi vs Jasprit Bumrah T20I"); one is a "top 5" countdown with one exact,
+countable measure ("Fastest ODI centuries by Pakistanis, by balls", "Most T20I sixes by Indian
+batters"); the rest are catchy facts that promise
 a surprise: one star player's stats or records (name the player), a crazy record, a
 "did you know", a rule people argue about, history on this date.
 Most fact ideas should be about ONE named player people love or argue about.
@@ -354,7 +356,7 @@ one idea about them, written like "Shoaib Akhtar's birthday today: his fastest r
 with Google Search; no birthday idea when nobody well known was born today).
 {learn}Never repeat any of these, already made:
 {avoid}
-One per line, each starting with "match: ", "versus: " or "topic: ". Nothing else."""
+One per line, each starting with "match: ", "versus: ", "ranking: " or "topic: ". Nothing else."""
 
 
 def channel_ideas(client, count=8, avoid=(), best=(), worst=(), requests=()):
@@ -415,6 +417,10 @@ STYLES = [
     kit.style("CkNote", "Montserrat ExtraBold", 42, "#FFFFFF", outline=3),
     kit.style("CkBadgeDark", "Anton", 70, "#14142B"),
     kit.style("CkBigC", "Anton", 170, fl.GOLD, outline=6, shadow=5, align=5),
+    # The opening line as a poster (28-oct-2026): it was 60 px of Montserrat mid-screen over an
+    # empty gradient, on the frame that decides the swipe. The niche's most viewed Shorts put the
+    # core number on frame one, big (niche_research playbook, 28-oct-2026).
+    kit.style("CkHook", "Anton", 104, "#FFFFFF", outline=7, shadow=5, align=5),
 ]
 CX = kit.OUT_W // 2
 
@@ -425,8 +431,21 @@ def _c(hex_color):
 
 def _txt(text, limit):
     """On-screen text the fonts can draw: Montserrat here has no "·" or dashes."""
-    text = re.sub(r"\s*[·•–—]\s*", " | ", text or "")
-    return fl.clean_title(text)[:limit]
+    text = fl.clean_title(re.sub(r"\s*[·•–—]\s*", " | ", text or ""))
+    if len(text) <= limit:
+        return text
+    # Cut between words, never inside one: "7 SEPT 2018" showed as "7 SEPT 201" and a closing
+    # question as "... COMMENT MEIN BAT" (29-oct-2026).
+    head = text[:limit + 1]
+    cut = head.rsplit(" ", 1)[0].rstrip(" ,;:|") if " " in head else ""
+    return cut if len(cut) >= limit * 0.5 else text[:limit]
+
+
+def stat_size(stat):
+    """Font size for a fact card's big stat: as large as fits the 980 px card (Anton is about
+    0.42 em a character)."""
+    n = len(stat)
+    return STAT_PX if n <= 6 else 180 if n <= 9 else 140 if n <= 12 else 110
 
 
 def _shape(layer, t0, t1, drawing, colour, at=None, move=None, alpha="00", extra="", an=7):
@@ -519,10 +538,11 @@ def scene_events(beat, t0, t1, story, with_photo=False):
         ev.append(kit.dialogue(4, t0 + 0.15, t1, "CkStar",
                                rf"{{\an5\pos({CX},1010){fs}\fscx80\fscy80\t(0,220,\fscx100\fscy100){out}}}"
                                rf"{name}"))
+        # Figures and note end above the captions (BOARD_END; they sat at 1170 and 1300).
         ev.append(kit.dialogue(5, t0 + 0.4, t1, "CkBig",
-                               rf"{{\an5\pos({CX},1170)\fs120\fscx250\fscy250\alpha&HFF&"
+                               rf"{{\an5\pos({CX},1105)\fs120\fscx250\fscy250\alpha&HFF&"
                                rf"\t(0,220,\fscx100\fscy100\alpha&H00&){out}}}{_txt(star.figures, 12)}"))
-        ev.append(kit.dialogue(4, t0 + 0.7, t1, "CkNote", rf"{{\an5\pos({CX},1300){out}}}{_txt(star.note, 44)}"))
+        ev.append(kit.dialogue(4, t0 + 0.7, t1, "CkNote", rf"{{\an5\pos({CX},1200){out}}}{_txt(star.note, 44)}"))
     elif beat.scene == "star" and story.stars:
         star = story.stars[min(max(beat.ref, 0), len(story.stars) - 1)]
         ev += _pill(t0, t1, 640, "STAR OF THE MATCH" if beat.ref == 0 else "STAR PERFORMER")
@@ -534,7 +554,7 @@ def scene_events(beat, t0, t1, story, with_photo=False):
         ev.append(kit.dialogue(5, t0 + 0.4, t1, "CkBig",
                                rf"{{\an5\pos({CX},1040)\fscx250\fscy250\alpha&HFF&"
                                rf"\t(0,220,\fscx100\fscy100\alpha&H00&){out}}}{_txt(star.figures, 12)}"))
-        ev.append(kit.dialogue(4, t0 + 0.7, t1, "CkNote", rf"{{\an5\pos({CX},1220){out}}}{_txt(star.note, 44)}"))
+        ev.append(kit.dialogue(4, t0 + 0.7, t1, "CkNote", rf"{{\an5\pos({CX},1190){out}}}{_txt(star.note, 44)}"))
     elif beat.scene == "moment" and story.moments:
         mo = story.moments[min(max(beat.ref, 0), len(story.moments) - 1)]
         ev += _pill(t0, t1, 660, _txt(mo.label, 14).upper())
@@ -553,7 +573,7 @@ def scene_events(beat, t0, t1, story, with_photo=False):
                                    rf"{_txt(win, 12).upper()}"))
         ev.append(kit.dialogue(4, t0 + 0.4, t1, "CkText", rf"{{\an5\pos({CX},1000){out}}}{_txt(story.result_line, 44)}"))
         ev.append(kit.dialogue(4, t0 + 0.9, t1, "CkNote",
-                               rf"{{\an5\pos({CX},1180)\1c{_c(fl.GOLD)}{out}}}{_txt(story.question, 72)}"))
+                               rf"{{\an5\pos({CX},1150)\1c{_c(fl.GOLD)}{out}}}{_txt(story.question, 120)}"))
     return ev
 
 
@@ -588,36 +608,119 @@ def _flash(t0):
                   at=(0, 0), alpha="C8", extra=r"\t(0,220,\1a&HFF&)")
 
 
+_NUMBER = re.compile(r"(\d[\d,./:%x+-]*\d|\d)")
+
+
+def gold_numbers(text):
+    """Numbers in gold, the rest in the style's colour: the eye lands on the number first."""
+    return _NUMBER.sub(lambda m: rf"{{\1c{_c(fl.GOLD)}}}{m.group(1)}{{\1c&HFFFFFF&}}", text)
+
+
+def hook_card(text, t0, t1, y=860, size=None):
+    """The opening line as a poster: Anton capitals, numbers in gold, on frame 0 at full strength
+    with a short punch-in (no fade from nothing: the first frame is what the feed shows)."""
+    line = _txt(text, 90).upper()
+    # Anton is narrow (~0.42 em a letter): 116 px puts a 60-letter hook on 3 lines of the 960 px width.
+    fs = size or (150 if len(line) <= 30 else 130 if len(line) <= 48 else 116 if len(line) <= 70 else 100)
+    return [kit.dialogue(5, t0, t1, "CkHook",
+                         rf"{{\an5\pos({CX},{y})\fs{fs}\fscx112\fscy112\t(0,220,\fscx100\fscy100)\fad(0,180)}}"
+                         + gold_numbers(line))]
+
+
+# Fact card geometry (28-oct-2026, bigger): the 920x680 card held a 74 px headline, a 170 px stat
+# and a 42 px line that read as small print on a phone, with the lower 40% of the screen empty.
+# 29-oct-2026: 790 -> 672 tall, ending at 1232 (BOARD_END): the captions moved up out of YouTube's
+# overlay (short_kit.CAPTION_TOP_PX 1206, glyphs from ~1248). The parts inside moved up with it.
+CARD_X, CARD_Y, CARD_W, CARD_H = 50, 560, 980, 672
+HEAD_DY, STAT_DY, NOTE_DY, DOTS_DY = 160, 360, 535, 642    # below the card's top
+STAT_PX, NOTE_PX = 230, 52
+BOARD_END = 1232          # nothing on a generated Short's board goes lower: the captions hang below
+# The opening photo card (player_photo: 780x840 with its shadow) at 88% and a little higher, its name
+# pill across its bottom edge: at full size, centred at 850, it reached the caption band by the end of
+# its 6% zoom, and the pill sat at 1290, under the captions now.
+PHOTO_SCALE, PHOTO_Y, LABEL_Y = 0.88, 800, 1160
+# Over footage a card's panel is glass (29-oct-2026): 54% opaque instead of 81%, with the footage
+# under it blurred (broll.frost), so the clip shows through and around the card while its text stays
+# readable. The panel event is named "frost x y w h"; on the gradient the name changes nothing.
+GLASS_ALPHA = "75"
+
+
 def fact_events(k, n, fact, t0, t1, count=True):
     """One numbered fact card: badge, headline, big stat, what it means, progress.
     The whole card swipes in from the right with a flash, then fades out."""
     out = r"\fad(0,200)"
+    head = _txt(fact.headline, 44)
     ev = [
         _flash(t0),
-        _shape(2, t0, t1, fl._round_rect(920, 680, 44), "&H2B140E&", alpha="40",
-               move=(80 + SWIPE, 600, 80, 600, 0, SWIPE_MS), extra=out),
-        _shape(3, t0, t1, fl._circle(64), _c(fl.GOLD), move=(CX - 64 + SWIPE, 536, CX - 64, 536, 0, SWIPE_MS),
-               extra=out),
-        kit.dialogue(4, t0, t1, "CkBadgeDark", rf"{{\an5{_swipe(CX, 600)}{out}}}{k}"),
+        panel(2, t0, t1, CARD_X, CARD_Y, CARD_W, CARD_H, 48, alpha="30",
+              move=(CARD_X + SWIPE, CARD_Y, CARD_X, CARD_Y, 0, SWIPE_MS), extra=out),
+        _shape(3, t0, t1, fl._circle(72), _c(fl.GOLD),
+               move=(CX - 72 + SWIPE, CARD_Y - 72, CX - 72, CARD_Y - 72, 0, SWIPE_MS), extra=out),
+        kit.dialogue(4, t0, t1, "CkBadgeDark", rf"{{\an5{_swipe(CX, CARD_Y)}\fs80{out}}}{k}"),
         # Long headlines shrink instead of being cut ("...Sabse Ziada Centur", first render).
         kit.dialogue(4, t0, t1, "CkStar",
-                     rf"{{\an5{_swipe(CX, 760, 60)}\fs{74 if len(fact.headline) <= 22 else 54}\fscx85\fscy85"
-                     rf"\t(150,370,\fscx100\fscy100){out}}}{_txt(fact.headline, 44)}"),
-        kit.dialogue(4, t0 + 0.6, t1, "CkNote", rf"{{\an5\pos({CX},1130)\fad(180,200)}}{_txt(fact.detail, 130)}"),
+                     rf"{{\an5{_swipe(CX, CARD_Y + HEAD_DY, 60)}\fs{88 if len(head) <= 20 else 72 if len(head) <= 28 else 58}"
+                     rf"\fscx85\fscy85\t(150,370,\fscx100\fscy100){out}}}{head}"),
+        kit.dialogue(4, t0 + 0.5, t1, "CkNote",
+                     rf"{{\an5\pos({CX},{CARD_Y + NOTE_DY})\fs{NOTE_PX}\fad(160,200)}}{gold_numbers(_txt(fact.detail, 130))}"),
     ]
     if fact.stat.strip():
-        if count and re.fullmatch(r"\d{1,6}", fact.stat.strip()):
-            ev += _count_up(t0 + 0.35, t1, CX, 950, fact.stat.strip(), style_name="CkBigC")
+        stat = _txt(fact.stat.strip(), 16)
+        size = stat_size(stat)
+        if count and re.fullmatch(r"\d{1,6}", stat):
+            ev += [e.replace(r"{\pos(", rf"{{\fs{size}\pos(") for e in
+                   _count_up(t0 + 0.3, t1, CX, CARD_Y + STAT_DY, stat, style_name="CkBigC")]
         else:
-            ev.append(kit.dialogue(5, t0 + 0.35, t1, "CkBigC",
-                                   rf"{{\an5\pos({CX},950)\fscx250\fscy250\alpha&HFF&"
-                                   rf"\t(0,220,\fscx100\fscy100\alpha&H00&){out}}}{_txt(fact.stat, 10)}"))
+            ev.append(kit.dialogue(5, t0 + 0.3, t1, "CkBigC",
+                                   rf"{{\an5\pos({CX},{CARD_Y + STAT_DY})\fs{size}\fscx250\fscy250\alpha&HFF&"
+                                   rf"\t(0,220,\fscx100\fscy100\alpha&H00&){out}}}{stat}"))
     for j in range(n):  # progress dots
-        x = CX - (n - 1) * 22 + j * 44
-        ev.append(_shape(4, t0, t1, fl._circle(9 if j == k - 1 else 6),
-                         _c(fl.GOLD if j < k else "#FFFFFF"), at=(x, 1290), an=5,
+        x = CX - (n - 1) * 26 + j * 52
+        ev.append(_shape(4, t0, t1, fl._circle(11 if j == k - 1 else 7),
+                         _c(fl.GOLD if j < k else "#FFFFFF"), at=(x, CARD_Y + DOTS_DY), an=5,
                          alpha="00" if j < k else "80", extra=out))
     return ev
+
+
+def panel(layer, t0, t1, x, y, w, h, radius, alpha="30", move=None, extra="", colour="&H2B140E&"):
+    """A card's dark panel at (x, y), named "frost x y w h" for _finish: over footage its alpha becomes
+    GLASS_ALPHA and broll blurs the footage under it. ``move`` (from off-screen) as for _shape."""
+    ev = _shape(layer, t0, t1, fl._round_rect(w, h, radius), colour, alpha=alpha, move=move,
+                at=None if move else (x, y), extra=extra)
+    return ev.replace(",Shape,,", f",Shape,frost {x} {y} {w} {h} {radius},", 1)
+
+
+_FROST = re.compile(r"^Dialogue: \d+,(\d+):(\d\d):(\d\d\.\d+),(\d+):(\d\d):(\d\d\.\d+),Shape,"
+                    r"frost (\d+) (\d+) (\d+) (\d+) (\d+),")
+
+
+def frost_boxes(events):
+    """[(x, y, w, h, radius, start, end)] of every glass panel in ``events`` (see panel)."""
+    out = []
+    for e in events:
+        m = _FROST.match(e)
+        if m:
+            g = [float(v) for v in m.groups()]
+            out.append((*(int(v) for v in g[6:11]), g[0] * 3600 + g[1] * 60 + g[2], g[3] * 3600 + g[4] * 60 + g[5]))
+    return out
+
+
+def glass(events):
+    """``events`` with each glass panel see-through (GLASS_ALPHA), for a Short over footage."""
+    return [re.sub(r"\\1a&H[0-9A-Fa-f]{2}&", rf"\\1a&H{GLASS_ALPHA}&", e, count=1) if _FROST.match(e) else e
+            for e in events]
+
+
+# The title and the small labels (handle, team) have no outline, only a soft shadow: over a bright clip
+# (a white trophy photo, 29-oct-2026) the title nearly vanished. Over footage they get a dark one.
+_OUTLINE = r"\bord3\3c&H000000&"
+_BARE = re.compile(r"^(Dialogue: [^,]*,[^,]*,[^,]*,(?:CkTitle|CkSmall),[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,)(\{?)")
+
+
+def outlined(events):
+    """``events`` with the title and small labels outlined, for a Short over footage."""
+    return [_BARE.sub(lambda m: m.group(1) + "{" + _OUTLINE + ("" if m.group(2) else "}"), e, count=1)
+            for e in events]
 
 
 def topic_frame_events(story, total, handle):
@@ -643,9 +746,15 @@ def reveal_at(lines, windows, name, n_facts):
 # Stadium pictures of other sports passed as "a stadium at night": a hockey
 # arena under a World Cup line and an American-football ground under Afridi
 # (15-oct-2026, Wikipedia pictures).
-CRICKET_FOOTAGE = ("This is a cricket channel: only cricket grounds, cricket players, bats, balls, stumps and "
-                   "cricket crowds; never another sport's ground, game or gear (football, baseball, ice hockey, "
-                   "American football, basketball, tennis). ")
+# Cricket-only kept 40 of 46 cricket renders on the gradient (server.log, 29-oct-2026): the libraries
+# hold little cricket, so 43 candidates for 8 lines gave 0 picks. Neutral atmosphere now passes too,
+# and the daily cricket pool (stock_media.pool) fills the lines whose own search finds nothing.
+CRICKET_FOOTAGE = ("This is a cricket channel: cricket grounds, cricket players far off, bats, balls, stumps and "
+                   "cricket crowds fit best; neutral atmosphere that shows no other sport also fits any line as "
+                   "its setting or mood (fit 6-7): stadium lights at night, a cheering crowd, a green grass field "
+                   "or pitch, a trophy, a scoreboard without readable text. Never another sport's ground, game or "
+                   "gear (football, baseball, ice hockey, American football, basketball, tennis, golf, goal posts, "
+                   "a court or a diamond). ")
 
 
 def _voice_timeline(client, lines, output_dir, stem, voice=None, style=None, broll_rule=None):
@@ -674,9 +783,10 @@ def _bed(kind="cricket"):
     """A background track for the voice, or None (BG_MUSIC off)."""
     if os.environ.get("BG_MUSIC", "0") != "1":
         return None
+    import music_beds
+    music_beds.grow(kind)           # a new bed about once a day, up to TARGET (one bed under every Short before)
     track = kit.music_track(kind)
     if not track:
-        import music_beds
         music_beds.ensure(kind, 1)
         track = kit.music_track(kind)
     if not track:
@@ -741,7 +851,7 @@ def _stickers(clip, seconds):
 
 
 def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_end, clip, seo,
-            images=(), photos=(), genre="cricket", after_seo=None, broll_rule=None):
+            images=(), photos=(), genre="cricket", after_seo=None, broll_rule=None, stickers=True):
     import broll
     if broll_rule is None:
         broll_rule = CRICKET_FOOTAGE if genre == "cricket" else ""
@@ -751,11 +861,17 @@ def _finish(output_dir, stem, pipeline, cfg, events, colors, voices, sfx, body_e
     total = body_end + (outro_s if card_ev else 0.0)
     track = _bed(genre)
     # Free stock footage behind the cards, one clip per voice line (broll.py);
-    # without keys or results the gradient stays.
+    # without keys or results the gradient stays. Over footage the card panels
+    # turn to glass: the clip blurred under them, the panel see-through.
     bg, footage = broll.background_for(seo.get("source_title") or clip.get("video_title_for_youtube_short") or genre,
-                                       clip["captions"]["segments"], total, output_dir, rule=broll_rule)
+                                       clip["captions"]["segments"], total, output_dir, rule=broll_rule,
+                                       frost=frost_boxes(events))
+    if bg:
+        events = outlined(glass(events))
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
-    stuck = _stickers(clip, body_end)
+    # Not on the boards (ranking, versus): stickers sit just above the captions, where a board's last
+    # row ends (a 👇 covered row 5 on the first live ranking, 29-oct-2026).
+    stuck = _stickers(clip, body_end) if stickers else []
     print(f"🎬 Rendering the {genre} short ({total:.0f}s"
           + (f", music: {os.path.basename(track)}" if track else "")
           + (f", stickers: {' '.join(s['name'] for s in stuck)}" if stuck else "") + ")...")
@@ -816,15 +932,17 @@ def run_topic(topic, output_dir, pipeline):
     for k, a, b in windows:
         sfx.append((kit.WHOOSH, 0.3, max(0.0, a - 0.15)))
         if hidden and k == reveal and k:
-            events += _pill(a, min(b, a + 2.5), 1385, _txt(name, 26).upper())
+            # On the card's bottom edge, over its progress dots (it sat at 1385, between the old card and
+            # the captions, which are there now).
+            events += _pill(a, min(b, a + 2.5), CARD_Y + CARD_H - 39, _txt(name, 26).upper(), layer=6)
         if k == 0 and photo:
             # The player opens the Short (or his silhouette does), on frame 0.
             import player_photo
             card, label = photo["card"], _txt(name, 26).upper()
             if hidden:
                 card, label = player_photo.mystery(photo["card"], os.path.join(output_dir, ".mystery_card.png")), "KAUN?"
-            images.append({"path": card, "t0": 0.0, "t1": b, "y": 850, "zoom": 0.06, "fade_in": 0})
-            events += _pill(0.0, b, 1290, label, fade_in=0)
+            images.append({"path": photo_card(card), "t0": 0.0, "t1": b, "y": PHOTO_Y, "zoom": 0.06, "fade_in": 0})
+            events += _pill(0.0, b, LABEL_Y, label, fade_in=0)
             # Then a round badge of him next to the label for the rest ("?" until he is named).
             if hidden and reveal_t > b:
                 images.append({"path": player_photo.mystery(photo["badge"], os.path.join(output_dir, ".mystery_badge.png")),
@@ -832,15 +950,14 @@ def run_topic(topic, output_dir, pipeline):
             images.append({"path": photo["badge"], "t0": max(b, reveal_t), "t1": body_end, "y": 200, "zoom": 0.0,
                            "x": kit.OUT_W - 150})
         elif k == 0:
-            events.append(kit.dialogue(4, 0.0, b, "CkText",
-                                       rf"{{\an5\pos({CX},900)\fad(0,200)\fscx90\fscy90"
-                                       rf"\t(0,250,\fscx100\fscy100)}}{_txt(story.hook_line, 90)}"))
+            events += hook_card(story.hook_line, 0.0, b)
         elif k <= n:
             events += fact_events(k, n, story.facts[k - 1], a, b)
         else:
-            events.append(kit.dialogue(4, a, b, "CkText",
-                                       rf"{{\an5\pos({CX},900)\1c{_c(fl.GOLD)}\fad(200,200)}}"
-                                       rf"{_txt(story.question, 72)}"))
+            q = _txt(story.question, 120).upper()
+            events.append(kit.dialogue(4, a, b, "CkHook",
+                                       rf"{{\an5\pos({CX},900)\fs{110 if len(q) <= 48 else 96 if len(q) <= 80 else 84}"
+                                       rf"\1c{_c(fl.GOLD)}\fscx90\fscy90\t(0,200,\fscx100\fscy100)\fad(120,200)}}{q}"))
     transcript = kit.timed_transcript(caps)
     clip = {"start": 0.0, "video_title_for_youtube_short": story.title,
             "viral_hook_text": story.hook_line, "why": f"{story.kicker}: {topic}",
@@ -885,7 +1002,7 @@ economy, hundreds and fifties (or 5-wicket hauls), highest score or best figures
 ICC titles won. Exact numbers only. Say NOT FOUND if either player or the numbers are
 unclear."""
 
-VERSUS_PROMPT = """You make a 30-40 second "who is better?" YouTube Short comparing two
+VERSUS_PROMPT = """You make a 20-30 second "who is better?" YouTube Short comparing two
 cricketers by numbers, for Pakistani and Indian fans, voiced by the channel {handle}.
 Topic: {topic}. Use ONLY the facts below; never invent a number. If they say NOT FOUND,
 return found=false and empty lists.
@@ -898,20 +1015,22 @@ Return:
 - title: max 45 characters, Roman Urdu hook ("Babar ya Kohli: ODI mein kaun aage?"), no emoji.
 - format_label: 1-3 words like "ODI CAREER", "T20I CAREER", "TEST CAREER".
 - players: exactly 2: name (full name as the Wikipedia article title), team (2-4 capital letters).
-- hook_line: first voice line, Roman Urdu, 8-14 words, sets up the fight.
-- rows: 4 to 6 stats that fit both players' roles (two batters: never wickets; two
+- hook_line: first voice line, Roman Urdu, 6-10 words, sets up the fight.
+- rows: exactly 3 stats that fit both players' roles (two batters: never wickets; two
   bowlers: never runs scored; never matches or innings played, they are not a win),
   mostly rates and per-innings numbers (average, strike
   rate, 100s per innings, economy) so a longer career does not win by length alone,
-  plus one or two totals; the most telling first. Each: label (max 12 characters, English
+  plus at most one total; the most telling first. Each: label (max 12 characters, English
   cricket term in capitals: "RUNS", "AVERAGE", "STRIKE RATE", "100s", "WICKETS",
   "ECONOMY"), a (first player's value, max 8 characters), b (second player's value),
   better (0 first, 1 second, -1 level; for economy and bowling average lower is
-  better), line (Roman Urdu voice line, 8-16 words, numbers exactly as in the facts).
-- verdict_line: Roman Urdu, 10-18 words: who leads on these numbers and by how many
+  better), line (Roman Urdu voice line, 5-9 words: who wins this stat, with at most ONE
+  number, exactly as in the facts; the screen shows both values, so never read both).
+- verdict_line: Roman Urdu, 8-12 words: who leads on these numbers and by how many
   stats, respectful to both, no insults.
-- question: Roman Urdu, max 70 characters, asking fans who is better, ending with
+- question: Roman Urdu, max 50 characters, asking fans who is better, ending with
   "comment mein batao" or similar.
+The whole voice-over is 45-55 words (about 20-25 seconds): every extra word loses viewers.
 Everyday spoken Roman Urdu in Latin letters, never Devanagari or Arabic script."""
 
 VERSUS_SEO_CONTEXT = ("IMPORTANT: this short is NOT comedy. It is a cricket 'who is better' Short "
@@ -1000,14 +1119,17 @@ def find_versus(client, topic, handle):
     remix_guard(topic, story)
     if not story.found or len(story.players) != 2 or len(story.rows) < 3:
         raise RuntimeError("The comparison came back too thin for a video; try two better-known players.")
-    story.rows = story.rows[:6]
+    # Three stats: the Dhoni vs Kohli Short (29-oct-2026) had four rows that each read both
+    # decimals aloud, 99 words in 45 s against a 20-30 s target.
+    trimmed = len(story.rows) > VS_ROWS
+    story.rows = story.rows[:VS_ROWS]
     ctx = context(story.rows)
     said = _score(story.rows, lambda r: r.better)
     for r in story.rows:
         r.better = fix_better(r, bowling=ctx == "bowling", mixed=ctx == "mixed")
     shown = _score(story.rows, lambda r: r.better)
-    if shown != said:
-        # The voice must say what the screen shows.
+    if shown != said or trimmed:
+        # The voice must say what the screen shows (a trimmed table changes the count too).
         a, b = story.players[0].name, story.players[1].name
         lead, other = ((a, b) if shown[0] > shown[1] else (b, a))
         hi, lo = max(shown), min(shown)
@@ -1019,73 +1141,79 @@ def find_versus(client, topic, handle):
 
 VS_X = (270, 810)
 VS_Y = 640
-ROW_Y0, ROW_GAP = 965, 86
+VS_ROWS = 3
+ROW_Y0, ROW_GAP, ROW_H = 970, 104, 92      # the last row ends at 1224 (was 1270: the captions start ~1248)
 
 
 def versus_events(story, windows, body_end, handle, photos):
-    """Two players face each other; each stat row slides in and its winner
-    lights up; a running score, then the verdict."""
+    """Two players face each other over a table of stats whose values are "?"; each row's
+    values pop in as its line is spoken and the winner lights up; a running score, then the
+    verdict. Everything but the values is on frame 0 (29-oct-2026: the first frame was an empty
+    gradient, the title and players faded in from 0.2-0.5 s and the rows slid in one by one)."""
     ev = []
     if handle:
         ev.append(kit.dialogue(1, 0, body_end, "CkSmall", rf"{{\an5\pos({CX},70)\alpha&H40&}}{handle}"))
-    ev += _pill(0.1, body_end, 190, _txt(story.format_label.upper(), 24))
-    ev.append(kit.dialogue(1, 0, body_end, "CkTitle",
-                           rf"{{\an5\pos({CX},380)\fad(150,0)\fscx70\fscy70\t(0,260,\fscx106\fscy106)"
-                           rf"\t(260,400,\fscx100\fscy100)}}{fl.clean_title(story.title)}"))
+    ev += _pill(0, body_end, 190, _txt(story.format_label.upper(), 24), fade_in=0)
+    ev.append(kit.dialogue(1, 0, body_end, "CkTitle", rf"{{\an5\pos({CX},380){TITLE_POP}}}{fl.clean_title(story.title)}"))
+    punch = r"\fscx85\fscy85\t(0,220,\fscx100\fscy100)"
     for k, (side, x) in enumerate(zip(story.players, VS_X)):
         if not photos[k]:
-            ev.append(_shape(3, 0.2, body_end, fl._circle(130), _c(fl.GOLD if k == 0 else "#38BDF8"),
-                             move=(x + (-600 if k == 0 else 600), VS_Y, x, VS_Y, 0, 350), an=5))
+            ev.append(_shape(3, 0, body_end, fl._circle(130), _c(fl.GOLD if k == 0 else "#38BDF8"),
+                             at=(x, VS_Y), an=5, extra=punch))
             initials = "".join(w[0] for w in side.name.split()[:2]).upper()
-            ev.append(kit.dialogue(4, 0.2, body_end, "CkBadgeDark",
-                                   rf"{{\an5\move({x + (-600 if k == 0 else 600)},{VS_Y},{x},{VS_Y},0,350)}}{initials}"))
+            ev.append(kit.dialogue(4, 0, body_end, "CkBadgeDark", rf"{{\an5\pos({x},{VS_Y}){punch}}}{initials}"))
         name = _txt(side.name, 34)
         # Two names side by side: each has about 500 px.
         fs = "" if len(name) <= 14 else r"\fs38" if len(name) <= 20 else r"\fs30"
-        ev.append(kit.dialogue(4, 0.4, body_end, "CkName", rf"{{\an5\pos({x},{VS_Y + 200}){fs}\fad(200,0)}}{name}"))
-        ev.append(kit.dialogue(4, 0.5, body_end, "CkSmall", rf"{{\an5\pos({x},{VS_Y + 250})\fad(200,0)}}{_txt(side.team, 6)}"))
-    ev.append(kit.dialogue(5, 0.45, body_end, "CkVs",
-                           rf"{{\an5\pos({CX},{VS_Y})\fs110\fscx300\fscy300\alpha&HFF&"
-                           rf"\t(0,200,\fscx100\fscy100\alpha&H00&)}}VS"))
+        ev.append(kit.dialogue(4, 0, body_end, "CkName", rf"{{\an5\pos({x},{VS_Y + 200}){fs}}}{name}"))
+        ev.append(kit.dialogue(4, 0, body_end, "CkSmall", rf"{{\an5\pos({x},{VS_Y + 250})}}{_txt(side.team, 6)}"))
+    ev.append(kit.dialogue(5, 0, body_end, "CkVs",
+                           rf"{{\an5\pos({CX},{VS_Y})\fs110\fscx150\fscy150\t(0,240,\fscx100\fscy100)}}VS"))
     score = [0, 0]
     n = len(story.rows)
+    # The scoreboard reads 0 - 0 until the first row is won.
+    ev.append(kit.dialogue(5, 0, windows[1][1] + 0.6 if n else body_end, "CkStar",
+                           rf"{{\an5\pos({CX},{VS_Y + 110})\fs56}}0 - 0"))
     for k, row in enumerate(story.rows):
         _k, a, b = windows[1 + k]
         y = ROW_Y0 + k * ROW_GAP
-        slide = r"\fad(0,0)"
-        ev.append(_shape(2, a, body_end, fl._round_rect(960, 74, 37), "&H2B140E&", alpha="40",
-                         move=(60 + 1100, y - 37, 60, y - 37, 0, 280)))
-        ev.append(kit.dialogue(4, a, body_end, "CkSmall",
-                               rf"{{\an5\move({CX + 1100},{y},{CX},{y},0,280)\1c{_c(fl.GOLD)}}}{_txt(row.label, 14).upper()}"))
+        ev.append(_shape(2, 0, body_end, fl._round_rect(960, ROW_H, ROW_H // 2), "&H2B140E&", alpha="40",
+                         at=(60, y - ROW_H // 2)))
+        # The row being spoken flashes gold as its values arrive.
+        ev.append(_shape(3, a, a + 0.45, fl._round_rect(960, ROW_H, ROW_H // 2), _c(fl.GOLD), alpha="A0",
+                         at=(60, y - ROW_H // 2), extra=r"\t(0,420,\1a&HFF&)"))
+        ev.append(kit.dialogue(4, 0, body_end, "CkSmall",
+                               rf"{{\an5\pos({CX},{y})\fs38\1c{_c(fl.GOLD)}}}{_txt(row.label, 14).upper()}"))
         for side, x in ((0, VS_X[0]), (1, VS_X[1])):
             val = _txt(row.a if side == 0 else row.b, 10)
             win = row.better == side
-            # White with an outline while it slides in; the winner then turns
-            # dark on a gold pill with no outline (dark + black outline on
-            # gold smudged, first render 15-oct-2026).
+            ev.append(kit.dialogue(5, 0, a + 0.15, "CkNote", rf"{{\an5\pos({x},{y})\fs56\alpha&H70&}}?"))
+            # White with an outline as it pops in; the winner then turns dark on a gold pill
+            # with no outline (dark + black outline on gold smudged, first render 15-oct-2026).
             ev.append(kit.dialogue(5, a + 0.15, a + 0.6 if win else body_end, "CkNote",
-                                   rf"{{\an5\move({x + 1100},{y},{x},{y},0,280)\fs50}}{val}"))
+                                   rf"{{\an5\pos({x},{y})\fs56\fscx135\fscy135\t(0,160,\fscx100\fscy100)}}{val}"))
             if win:
-                ev.append(_shape(3, a + 0.6, body_end, fl._round_rect(220, 62, 31), _c(fl.GOLD),
-                                 at=(x - 110, y - 31), extra=r"\fad(120,0)"))
+                ev.append(_shape(3, a + 0.6, body_end, fl._round_rect(230, 70, 35), _c(fl.GOLD),
+                                 at=(x - 115, y - 35), extra=r"\fad(120,0)"))
                 ev.append(kit.dialogue(5, a + 0.6, body_end, "CkNote",
-                                       rf"{{\an5\pos({x},{y})\fs50\bord0\shad0\1c{_c('#14142B')}"
+                                       rf"{{\an5\pos({x},{y})\fs56\bord0\shad0\1c{_c('#14142B')}"
                                        rf"\fscx125\fscy125\t(0,180,\fscx100\fscy100)}}{val}"))
         if row.better in (0, 1):
             score[row.better] += 1
         # The running score under VS, changing as each row is won.
-        nxt = windows[2 + k][1] if k < n - 1 else body_end
+        nxt = windows[2 + k][1] + 0.6 if k < n - 1 else body_end
         ev.append(kit.dialogue(5, a + 0.6, nxt, "CkStar",
                                rf"{{\an5\pos({CX},{VS_Y + 110})\fs56}}{score[0]} - {score[1]}"))
     # The verdict covers the table: who leads, and by how much.
     _k, va, vb = windows[1 + n]
     lead = 0 if score[0] > score[1] else 1 if score[1] > score[0] else -1
-    ev.append(_shape(6, va, body_end, fl._round_rect(980, 330, 40), "&H1A0E08&", at=(50, 1015), alpha="08",
+    top = ROW_Y0 - ROW_H // 2 - 20
+    ev.append(_shape(6, va, body_end, fl._round_rect(980, BOARD_END - top, 40), "&H1A0E08&", at=(50, top), alpha="08",
                      extra=r"\fad(200,0)"))
-    ev += _pill(va + 0.1, body_end, 1090, "AAGE: " + (_txt(story.players[lead].name.split()[-1], 14).upper()
-                                                       if lead >= 0 else "BARABAR"), layer=7)
+    ev += _pill(va + 0.1, body_end, top + 95, "AAGE: " + (_txt(story.players[lead].name.split()[-1], 14).upper()
+                                                           if lead >= 0 else "BARABAR"), layer=7)
     ev.append(kit.dialogue(8, va + 0.2, body_end, "CkBigC",
-                           rf"{{\an5\pos({CX},1240)\fs130\fscx40\fscy40\t(0,260,\fscx100\fscy100)}}"
+                           rf"{{\an5\pos({CX},{top + 260})\fs130\fscx40\fscy40\t(0,260,\fscx100\fscy100)}}"
                            rf"{score[0]} - {score[1]}"))
     return ev
 
@@ -1102,7 +1230,7 @@ def run_versus(topic, output_dir, pipeline):
     print(f"🎙️ Voicing {len(lines)} lines...")
     windows, voices, caps, body_end = _voice_timeline(client, lines, output_dir, stem)
     events = versus_events(story, windows, body_end, cfg["handle"], photos)
-    images = [{"path": p["avatar"], "t0": 0.2, "t1": body_end, "x": x, "y": VS_Y, "zoom": 0.04}
+    images = [{"path": p["avatar"], "t0": 0.0, "t1": body_end, "x": x, "y": VS_Y, "zoom": 0.04, "fade_in": 0}
               for p, x in zip(photos, VS_X) if p]
     sfx = [(kit.WHOOSH, 0.3, max(0.0, a - 0.15)) for _k, a, _b in windows]
     sfx += [(POP, 0.4, windows[1 + k][1] + 0.6) for k, r in enumerate(story.rows) if r.better in (0, 1)]
@@ -1113,7 +1241,238 @@ def run_versus(topic, output_dir, pipeline):
     _finish(output_dir, stem, pipeline, cfg, events, [cfg["bg"], kit.blend("#1E3A8A", cfg["bg"], 0.3)],
             voices, sfx, body_end, clip,
             {"source_title": topic, "context": VERSUS_SEO_CONTEXT.format(topic=topic), "text_limit": 4000},
-            images=images, photos=[p["info"] for p in photos if p])
+            images=images, photos=[p["info"] for p in photos if p], stickers=False)
+
+
+# ---------------------------------------------------------------- ranking (top 5)
+# A countdown board (29-oct-2026, after Hypit's ranking/listicle notes, studied not copied): the board
+# keeps every verdict while the next one is spoken, its empty "?" slots are on frame 0, #5 is revealed
+# first and #1, the payoff, last; a sound is driven by each reveal.
+
+class RankItem(BaseModel):
+    rank: int
+    name: str
+    team: str
+    value: str
+    line: str
+
+
+class Ranking(BaseModel):
+    found: bool
+    title: str
+    label: str
+    unit: str
+    hook_line: str
+    items: List[RankItem]
+    question: str
+
+
+RANKING_FACTS_PROMPT = """Today is {today}. Ranking asked for: {topic}
+Use Google Search. List the top 5 by exactly the measure the ranking names (all formats only
+when it says so), as of today: for each, the rank, the player's full name, team, the number with
+its unit, and where or when it happened when it is a single record. Exact numbers only. Say
+NOT FOUND if the ranking is unclear, disputed or not about cricketers."""
+
+RANKING_PROMPT = """You make a 20-25 second "top 5" countdown YouTube Short for Pakistani and Indian cricket
+fans, voiced by the channel {handle}. Ranking: {topic}. Use ONLY the facts below; never invent a
+number. If they say NOT FOUND, return found=false and empty lists.
+
+Facts:
+{facts}
+
+Return:
+- found
+- title: max 45 characters, Roman Urdu, promises the countdown and withholds number 1 ("Pakistan ke 5 sabse
+  tez ODI centuries: No. 1 kaun?"), no emoji, no "#".
+- label: what is ranked, in English capitals, max 18 characters ("FASTEST ODI 100", "MOST T20I SIXES").
+- unit: the unit of the numbers in English capitals, max 8 characters ("BALLS", "SIXES", "WICKETS"), or "".
+- hook_line: first voice line, Roman Urdu, 6-10 words, sets up the countdown, never names #1.
+- items: exactly 5, rank 1 = the best. Each: rank, name (full name as the Wikipedia article title),
+  team (2-4 capital letters), value (the number only, max 8 characters, exactly as in the facts),
+  line (Roman Urdu voice line, 5-9 words, revealed from #5 up to #1: the name and at most one number;
+  #1's line lands the payoff).
+- question: Roman Urdu, max 50 characters, asking fans who is missing or who their #1 is, ending with
+  "comment mein batao" or similar.
+The whole voice-over is 45-55 words (about 20-25 seconds): every extra word loses viewers.
+Everyday spoken Roman Urdu in Latin letters, never Devanagari or Arabic script."""
+
+RANKING_SEO_CONTEXT = ("IMPORTANT: this short is NOT comedy. It is a cricket 'top 5' countdown Short: {topic}. "
+                       "Ignore the comedy phrases and hashtags above: use the ranking's measure, 'top 5', "
+                       "'record', and the players' names. Never insult anyone. creator is \"\".")
+RANK_DING = "0.35*sin(2*PI*1046*t)*exp(-5*t)+0.25*sin(2*PI*1568*t)*exp(-6*t)"   # #1 is revealed
+# Rows #1..#5 top to bottom; the last ends at 1232 (was 1296 under captions at 1430; they start ~1248 now).
+RANK_Y0, RANK_GAP, RANK_H = 613, 140, 118
+RANK_ASK_Y = 500          # the closing "AAPKA #1 KAUN?" pill, above row #1
+# Rank and photo sit left of the row's bar: short_kit.render draws pictures UNDER the text layer, and a
+# bar over the photo dimmed it (first render, 29-oct-2026).
+# The values end at x 876 (was 996, the bars at 1020): on a phone everything right of ~888 below the
+# first rows is under YouTube's like and dislike buttons, and the numbers are the board's point.
+RANK_NUM_X, RANK_PHOTO_X, RANK_BAR_X, RANK_BAR_W = 96, 208, 280, 610
+RANK_NAME_X, RANK_VALUE_X = 312, 876
+
+
+def find_ranking(client, topic, handle):
+    import time
+    for attempt in range(2):
+        facts, sources = grounded(client, RANKING_FACTS_PROMPT.format(topic=topic, today=time.strftime("%d %B %Y")))
+        if facts and "NOT FOUND" not in facts[:200].upper():
+            break
+    if not facts or "NOT FOUND" in facts[:200].upper():
+        raise RuntimeError(f"Could not find that ranking ({facts[:160] or 'no answer'}).")
+    story = kit.ask_json(client, Ranking, RANKING_PROMPT.format(handle=handle, topic=topic, facts=facts)
+                         + remix_note(topic) + "\n\n" + craft.short_rules(craft.FIXED_ORDER), model=craft.writer_model())
+    # The rows carry the numbers: only the hook and the question are polished.
+    writer_hook = story.hook_line
+    craft.polish(client, story, facts, what="cricket top 5 countdown YouTube Short", fields=("hook_line", "question"))
+    top = min((i for i in story.items if i.rank >= 1), key=lambda i: i.rank, default=None)
+    if top and _spoils(story.hook_line, top):
+        # The polish rewards "the most surprising number first", which for a countdown is its #1: the first
+        # live run opened "Afridi ke 351 ODI chhakke..." (29-oct-2026). The writer's hook, else a neutral one.
+        story.hook_line = (writer_hook if not _spoils(writer_hook, top) else
+                           f"Top {len(story.items)} {story.label.lower()}: number 1 aakhir mein, pehchan sakte ho?")
+    remix_guard(topic, story)
+    if not story.found:
+        raise RuntimeError("The ranking came back empty; try a ranking with a clear measure.")
+    # "#1" in a title reads as a hashtag: the title cleaner dropped it ("...: kaun?") and YouTube links it.
+    story.title = re.sub(r"#\s*(\d)", r"No. \1", story.title)
+    if top and _spoils(story.title, top):
+        story.title = f"Top {len(story.items)} {story.label.title()}: No. 1 kaun?"
+    by_rank = {}
+    for item in story.items:
+        if 1 <= item.rank <= 5 and item.rank not in by_rank and item.name.strip() and item.value.strip():
+            by_rank[item.rank] = item
+    ranks = sorted(by_rank)
+    if len(ranks) < 3 or ranks != list(range(1, len(ranks) + 1)):
+        raise RuntimeError("The ranking came back too thin for a video; try a better-known record.")
+    story.items = [by_rank[r] for r in ranks]
+    return story, facts, sources
+
+
+_COMMON_NAMES = {"mohammad", "muhammad", "khan", "singh", "kumar", "sharma", "ahmed", "ahmad", "shah"}
+
+
+def _spoils(text, top):
+    """True when ``text`` gives the countdown's #1 away: a word of its name (common ones aside) or its number."""
+    t = (text or "").lower().replace(",", "")
+    words = [w for w in re.findall(r"[a-z]{4,}", (top.name or "").lower()) if w not in _COMMON_NAMES]
+    if any(re.search(rf"\b{re.escape(w)}\b", t) for w in words):
+        return True
+    value = re.sub(r"[^\d.]", "", top.value or "").strip(".")
+    return bool(value) and re.search(rf"(?<![\d.]){re.escape(value)}(?![\d.])", t) is not None
+
+
+def _small_badge(path, px):
+    """A copy of a round photo badge ``px`` wide (short_kit.render shows pictures at their own size)."""
+    from PIL import Image
+    out = os.path.splitext(path)[0] + f"_{px}.png"
+    with Image.open(path) as im:
+        im.resize((px, round(im.height * px / im.width)), Image.LANCZOS).save(out)
+    return out
+
+
+def photo_card(path):
+    """The opening photo card at PHOTO_SCALE (a copy next to it), or the card itself on any failure."""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return _small_badge(path, round(im.width * PHOTO_SCALE))
+    except Exception:  # noqa: BLE001 — the full-size card is still a card
+        return path
+
+
+def ranking_events(story, windows, body_end, handle, photos):
+    """The board: a row per rank, "?" until its line is spoken (#5 first), then the photo, name and
+    number; #1 gets a gold frame. Windows: hook, the items from the last rank up, the question."""
+    ev = []
+    if handle:
+        ev.append(kit.dialogue(1, 0, body_end, "CkSmall", rf"{{\an5\pos({CX},70)\alpha&H40&}}{handle}"))
+    n = len(story.items)
+    ev += _pill(0, body_end, 190, _txt(f"TOP {n} | {story.label.upper()}", 30), fade_in=0)
+    ev.append(kit.dialogue(1, 0, body_end, "CkTitle", rf"{{\an5\pos({CX},380){TITLE_POP}}}{fl.clean_title(story.title)}"))
+    for item in story.items:
+        k = n - item.rank                     # #5 is spoken first
+        _k, a, _b = windows[1 + k]
+        y = RANK_Y0 + (item.rank - 1) * RANK_GAP
+        top = y - RANK_H // 2
+        bar = fl._round_rect(RANK_BAR_W, RANK_H, RANK_H // 2)
+        if item.rank == 1:
+            ev.append(_shape(1, a, body_end, fl._round_rect(RANK_BAR_W + 12, RANK_H + 12, (RANK_H + 12) // 2),
+                             _c(fl.GOLD), at=(RANK_BAR_X - 6, top - 6), extra=r"\fad(150,0)"))
+        ev.append(_shape(2, 0, body_end, bar, "&H2B140E&", alpha="30", at=(RANK_BAR_X, top)))
+        ev.append(_shape(3, a, a + 0.45, bar, _c(fl.GOLD), alpha="A0", at=(RANK_BAR_X, top),
+                         extra=r"\t(0,420,\1a&HFF&)"))
+        ev.append(_shape(3, 0, body_end, fl._circle(40), _c(fl.GOLD), at=(RANK_NUM_X, y), an=5))
+        ev.append(kit.dialogue(4, 0, body_end, "CkBadgeDark", rf"{{\an5\pos({RANK_NUM_X},{y})\fs60}}{item.rank}"))
+        # The empty slot: a faint ring where the photo lands and a "?" in the bar.
+        ev.append(_shape(2, 0, a + 0.1, fl._circle(54), "&HFFFFFF&", at=(RANK_PHOTO_X, y), an=5, alpha="C8"))
+        ev.append(kit.dialogue(4, 0, a + 0.1, "CkNote",
+                               rf"{{\an5\pos({RANK_BAR_X + RANK_BAR_W // 2},{y})\fs64\alpha&H70&}}?"))
+        if not photos[item.rank - 1]:
+            initials = "".join(w[0] for w in item.name.split()[:2]).upper()
+            ev.append(_shape(3, a + 0.1, body_end, fl._circle(52), "&HFFFFFF&", at=(RANK_PHOTO_X, y), an=5,
+                             extra=r"\fscx60\fscy60\t(0,200,\fscx100\fscy100)"))
+            ev.append(kit.dialogue(4, a + 0.1, body_end, "CkBadgeDark",
+                                   rf"{{\an5\pos({RANK_PHOTO_X},{y})\fs48}}{initials}"))
+        name = _txt(item.name, 22)
+        fs = "" if len(name) <= 15 else r"\fs38"
+        pop = r"\fscx70\fscy70\t(0,200,\fscx100\fscy100)"
+        ev.append(kit.dialogue(4, a + 0.1, body_end, "CkName", rf"{{\an4\pos({RANK_NAME_X},{y - 16}){fs}{pop}}}{name}"))
+        ev.append(kit.dialogue(4, a + 0.2, body_end, "CkSmall", rf"{{\an4\pos({RANK_NAME_X},{y + 30})\fad(150,0)}}"
+                                                              rf"{_txt(item.team, 6)}"))
+        value = _txt(item.value, 10)
+        big = r"\fscx150\fscy150\t(0,240,\fscx100\fscy100)" if item.rank == 1 else pop
+        ev.append(kit.dialogue(5, a + 0.25, body_end, "CkBigC",
+                               rf"{{\an6\pos({RANK_VALUE_X},{y - (12 if story.unit else 0)})"
+                               rf"\fs{84 if len(value) <= 5 else 64}{big}}}{value}"))
+        if story.unit.strip():
+            ev.append(kit.dialogue(4, a + 0.35, body_end, "CkSmall", rf"{{\an6\pos({RANK_VALUE_X},{y + 40})\fs26"
+                                                                   rf"\fad(150,0)}}{_txt(story.unit.upper(), 8)}"))
+    # The question: the board stays, a pill asks for the viewer's own #1.
+    _k, qa, _qb = windows[1 + n]
+    ev += _pill(qa, body_end, RANK_ASK_Y, "AAPKA #1 KAUN?", layer=6)
+    return ev
+
+
+def run_ranking(topic, output_dir, pipeline):
+    cfg = fl.settings()
+    client = kit.gemini()
+    print(f"🏏 Top 5 short: researching \"{topic}\"...")
+    story, facts, sources = find_ranking(client, topic, cfg["handle"] or "this channel")
+    print(f"   ✅ {story.label}: " + ", ".join(f"#{i.rank} {i.name} {i.value}" for i in story.items)
+          + f" ({len(sources)} sources)")
+    stem = kit.neutral_stem("Cricket")
+    found = [_photo(item.name, output_dir) for item in story.items]
+    photos = [_small_badge(got["badge"], 112) if got and got.get("badge") else None for got in found]
+    countdown = sorted(story.items, key=lambda i: -i.rank)
+    lines = [story.hook_line] + [i.line for i in countdown] + [story.question]
+    print(f"🎙️ Voicing {len(lines)} lines...")
+    windows, voices, caps, body_end = _voice_timeline(client, lines, output_dir, stem)
+    events = ranking_events(story, windows, body_end, cfg["handle"], photos)
+    n = len(story.items)
+    images = []
+    for item in story.items:
+        if photos[item.rank - 1]:
+            a = windows[1 + n - item.rank][1]
+            images.append({"path": photos[item.rank - 1], "t0": a + 0.1, "t1": body_end, "x": RANK_PHOTO_X,
+                           "y": RANK_Y0 + (item.rank - 1) * RANK_GAP, "zoom": 0.0, "fade_in": 0.15})
+    # One sound per reveal (the board's own event), a bell for #1; nothing on the hook or question lines.
+    sfx = [(RANK_DING if i.rank == 1 else kit.WHOOSH, 0.6 if i.rank == 1 else 0.3,
+            windows[1 + n - i.rank][1] + (0.2 if i.rank == 1 else 0.0)) for i in story.items]
+    clip = {"start": 0.0, "video_title_for_youtube_short": story.title, "viral_hook_text": story.hook_line,
+            "why": f"Top {n}: {topic}", "predicted_score": 92, "captions": kit.timed_transcript(caps),
+            "genre": "cricket", "ai_voice": "AI voice", "sources": sources[:8], "cricket_ranking": story.model_dump(),
+            "comment_question": story.question}
+    def keep_secret(c):
+        # The title tournament favours the most surprising number, i.e. #1 ("Shahid Afridi 351 sixes par
+        # hain...", first live run): the countdown's own title goes back, its hashtags kept.
+        if _spoils(c.get("seo_title"), story.items[0]):
+            _head, tail = craft._title_tail(c.get("seo_title") or "")
+            c["seo_title"] = f"{story.title} {tail}".strip()
+
+    _finish(output_dir, stem, pipeline, cfg, events, [cfg["bg"], kit.blend("#1E3A8A", cfg["bg"], 0.3)],
+            voices, sfx, body_end, clip,
+            {"source_title": topic, "context": RANKING_SEO_CONTEXT.format(topic=topic), "text_limit": 4000},
+            images=images, photos=[got["info"] for got in found if got], after_seo=keep_secret, stickers=False)
 
 
 def run(match, output_dir, pipeline):
@@ -1126,6 +1485,8 @@ def run(match, output_dir, pipeline):
         return run_topic(match, output_dir, pipeline)
     if mode == "versus":
         return run_versus(match, output_dir, pipeline)
+    if mode == "ranking":
+        return run_ranking(match, output_dir, pipeline)
     return run_match(match, output_dir, pipeline)
 
 

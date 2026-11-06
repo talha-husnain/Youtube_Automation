@@ -49,3 +49,27 @@ def test_frames_left_out_fail_the_video(monkeypatch, tmp_path):
         raise AssertionError("should have failed")
     except RuntimeError as e:
         assert "left frames out" in str(e)
+
+
+def test_one_gpu_is_used_when_the_second_is_gone(monkeypatch, tmp_path):
+    """5-nov-2026: Vulkan saw only the Iris Xe; "-g 0,1" answered "invalid gpu device" for every picture."""
+    import subprocess
+    import upscale
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd[cmd.index("-g") + 1])
+        if cmd[cmd.index("-g") + 1] == "0,1":
+            raise subprocess.CalledProcessError(4294967295, cmd, stderr=b"invalid gpu device\r\n")
+        return subprocess.CompletedProcess(cmd, 0)
+    monkeypatch.setattr(upscale, "GPUS", "0,1")
+    monkeypatch.setattr(upscale.subprocess, "run", run)
+    upscale._run(str(tmp_path), str(tmp_path), "realesr-animevideov3", 2)
+    assert calls == ["0,1", "0"]
+
+    def broken(cmd, **kw):
+        raise subprocess.CalledProcessError(1, cmd, stderr=b"out of memory")
+    monkeypatch.setattr(upscale.subprocess, "run", broken)
+    import pytest
+    with pytest.raises(subprocess.CalledProcessError):
+        upscale._run(str(tmp_path), str(tmp_path), "realesr-animevideov3", 2)

@@ -96,6 +96,33 @@ LANG_RULE = {
 VOICE_STYLE = {
     "urdu": "like a calm, captivating history documentary narrator, natural Urdu accent, warm, clear, steady pace",
     "english": "like a captivating history documentary narrator, warm, clear and steady"}
+MODES = ("history", "explainer", "horror")
+MODE_NAME = {"history": "History", "explainer": "Explainer", "horror": "Horror story"}
+# Uploads of the long channel: "horror" ones go up as Entertainment (youtube_account.CATEGORY), the rest as history.
+LONG_GENRES = ("history", "horror")
+
+
+def mode_now():
+    """The long video's subject (HISTORY_MODE): history documentaries, news explainers (trend_explainer.py) or
+    horror stories (horror_stories.py)."""
+    m = (os.environ.get("HISTORY_MODE") or "").lower()
+    return m if m in MODES else "history"
+
+
+def voice_for(mode):
+    if mode == "horror":
+        import horror_stories
+        return horror_stories.VOICE
+    return "Charon"
+
+
+def words_for(lang, mode="history"):
+    if mode == "horror":
+        import horror_stories
+        return dict(horror_stories.WORDS.get(lang, horror_stories.WORDS["urdu"]))
+    return dict(WORDS.get(lang, WORDS["urdu"]))
+
+
 WORDS = {"urdu": {"intro": "Shuruaat", "full": "POORI KAHANI", "chapter": "CHAPTER",
                   "next": "Agli kahani jald aa rahi hai", "follow": "Nayi tareekhi kahaniyon ke liye subscribe karein 🔔"},
          "english": {"intro": "Intro", "full": "THE FULL STORY", "chapter": "CHAPTER",
@@ -119,6 +146,11 @@ NO_PEOPLE = f"For anything about {SACRED}: show NO people at all, only places, l
 # Stock libraries are mostly today's world: a car or a phone in a scene about 476 AD breaks the story.
 FOOTAGE_RULE = ("This is a history documentary: never modern things (cars, phones, screens, modern buildings, "
                 "power lines, people in modern clothes) unless the scene is about today. ")
+# A long video that dies of an outage is queued again (my_channels._requeue) and used to start from nothing:
+# the grounded research, the script, its fact check and the title tournament are paid again (~$0.3-0.5 and
+# 5-15 minutes). They are kept here for RESUME_HOURS, by the video's settings, and the next try starts at the voice.
+RESUME_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state", "resume")
+RESUME_HOURS = 48
 
 
 class Scene(BaseModel):
@@ -257,7 +289,11 @@ Return exactly {n} picks, one per scene, by number."""
 
 AI_STYLE = ("Cinematic digital painting for a history documentary: realistic, era-accurate clothing, architecture "
             "and objects, dramatic natural light, rich but muted colours, wide 16:9 shot. No text, letters, "
-            "numbers, captions, logos or watermarks anywhere. No modern objects.")
+            "numbers, captions, logos or watermarks anywhere. No modern objects. Clearly a painting, never a "
+            "photograph; no blood, wounds, bodies or people dying: show war and disaster through places, "
+            "distant armies and objects.")
+# The last sentence (29-oct-2026): YouTube does not monetize realistic synthetic visuals that imply a
+# death or a disaster (support.google.com/youtube/answer/1311392, clarified July 2026).
 
 IDEAS_PROMPT = """Today is {today}. Plan the next {count} long YouTube videos ({minutes}-minute documentaries, in
 {lang}) for a history and stories channel for Pakistani and Indian viewers. Topics like: the rise and fall of
@@ -329,6 +365,9 @@ def channel_ideas(client, count=2, avoid=(), best=(), worst=(), notes="", lang="
     if mode == "explainer":
         import trend_explainer
         return trend_explainer.channel_ideas(client, count, avoid, best, worst, notes, lang, minutes, requests)
+    if mode == "horror":
+        import horror_stories
+        return horror_stories.channel_ideas(client, count, avoid, best, worst, notes, lang, minutes, requests)
     import cricket_shorts as cs
     import engage
     learn = engage.request_hint(requests)
@@ -549,6 +588,10 @@ def write(client, topic, handle, minutes=DEFAULT_MINUTES, lang="urdu", research_
     ``mode`` "explainer": trend_explainer's research, script and rules, the
     top videos on the topic studied and YouTube's search phrases."""
     from quiz_shorts import quiz_model
+    if mode == "horror":
+        # Original fiction (horror_stories.py): no web research and no fact check, a story check instead.
+        import horror_stories
+        return horror_stories.write(client, topic, handle, minutes, lang, series_note)
     explainer = mode == "explainer"
     import trend_explainer as te
     if explainer:
@@ -772,14 +815,15 @@ def download(url, out):
     return None
 
 
-def ai_picture(client, prompt, out, sacred):
-    """One AI picture (16:9) for a scene; returns the path or raises."""
+def ai_picture(client, prompt, out, sacred, style=None):
+    """One AI picture (16:9) for a scene; returns the path or raises. ``style``: another look (the horror
+    channel's dark paintings) instead of the history painting style."""
     from google.genai import types
     from PIL import Image
     import thumbnail
     rule = (NO_PEOPLE + " ") if sacred else "Never show any prophet or revered religious figure. "
     r = client.models.generate_content(
-        model=thumbnail.IMAGE_MODEL, contents=[f"{AI_STYLE} {rule}Scene: {prompt}"],
+        model=thumbnail.IMAGE_MODEL, contents=[f"{style or AI_STYLE} {rule}Scene: {prompt}"],
         config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"],
                                            image_config=types.ImageConfig(aspect_ratio="16:9",
                                                                           image_size=AI_IMAGE_SIZE)))
@@ -796,7 +840,7 @@ def canvas(src, out, close=False, dark=0.0, blur=0):
     (a portrait or a small map stretched to fill looks broken). ``close`` is
     a tighter crop of the same picture: a second shot for a long scene."""
     from PIL import Image, ImageEnhance, ImageFilter
-    im = Image.open(src).convert("RGB")
+    im = kit.opaque(Image.open(src))
     cw, ch = CANVAS_W, CANVAS_H
     ratio = im.width / max(1, im.height)
     fills = 1.45 <= ratio <= 2.2 and im.width >= 1100
@@ -839,19 +883,55 @@ def canvas(src, out, close=False, dark=0.0, blur=0):
 
 # ------------------------------------------------------------------ voice
 
-def voice_all(client, texts, job_dir, lang, voice):
+UNVERIFIED_MINUTES = 14       # my_channels.UNVERIFIED_MINUTES: the length asked of a channel YouTube has not verified
+UNVERIFIED_LIMIT = 885        # seconds (14:45): YouTube refuses uploads over 15:00 from such a channel
+FIT_MAX = 1.15                # the most the narration is sped up to fit
+
+
+def fit_voices(said, total, job_dir, log=print):
+    """The voiced paragraphs a little faster (atempo, at most FIT_MAX) so the film ends by UNVERIFIED_LIMIT;
+    the cards and pauses stay as they are. ``total``: the film's planned length with the voices as they are."""
+    voice = sum(s for p, s in said if p)
+    room = UNVERIFIED_LIMIT - (total - voice)
+    if voice <= 0 or room <= 0:
+        return said
+    f = voice / room
+    if f > FIT_MAX:
+        log(f"   ⚠️ The narration is {f:.2f}x too long for 14:45; sped up {FIT_MAX}x, the upload may be refused.")
+        f = FIT_MAX
+    log(f"   ⏩ Narration {f:.2f}x faster so the video stays under 15 minutes ({clock(total)} planned).")
+    out = []
+    for p, s in said:
+        if not p:
+            out.append((p, s))
+            continue
+        q = os.path.splitext(p)[0] + "_fit.wav"
+        r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", p, "-filter:a", f"atempo={f:.4f}", q],
+                           capture_output=True, text=True, timeout=300)
+        out.append((q, round(s / f, 3)) if r.returncode == 0 and os.path.isfile(q) else (p, s))
+    return out
+
+
+def voice_all(client, texts, job_dir, lang, voice, mode="history"):
     """[(wav, seconds) | (None, 0)] per text; failed or odd lines get two more tries."""
     import ai_take
     language = LANG_NAME.get(lang, "Roman Urdu")
-    style = VOICE_STYLE.get(lang, VOICE_STYLE["urdu"])
+    if mode == "horror":
+        import horror_stories
+        style = horror_stories.VOICE_STYLE.get(lang, horror_stories.VOICE_STYLE["urdu"])
+    else:
+        style = VOICE_STYLE.get(lang, VOICE_STYLE["urdu"])
     said = kit.voice_lines(client, [{"text": t, "voice": voice, "style": style, "language": language}
                                     for t in texts], job_dir, "hv")
+
+    # The horror voice reads slowly on purpose (~0.7 s a word, horror_stories.WPM): its "rambling" mark is higher.
+    slow = 0.95 if mode == "horror" else 0.75
 
     def odd(k):
         path, secs = said[k]
         n = len(texts[k].split())
         # A voice that rambles on or cuts off is redone (seconds per word far off a narrator's).
-        return not path or secs > n * 0.75 + 4 or secs < n * 0.15
+        return not path or secs > n * slow + 4 or secs < n * 0.15
     for attempt in range(2):
         bad = [k for k in range(len(texts)) if odd(k)]
         if not bad:
@@ -988,12 +1068,12 @@ def card_events(d, kicker, title):
                                                 rf"\t(0,600,\fscx100\fscy100)\fscx92\fscy92}}{_wrap(title, 32)}")]
 
 
-def end_events(d, handle, lang):
+def end_events(d, handle, lang, mode="history"):
     return [kit.dialogue(3, 0, d, "HvBig", rf"{{\an5\pos({W // 2},{H // 2 - 80})\fad(300,0)"
                                            rf"\t(0,400,\fscx100\fscy100)\fscx80\fscy80}}SUBSCRIBE"),
             kit.dialogue(3, 0.3, d, "HvKicker", rf"{{\an5\pos({W // 2},{H // 2 + 50})\fad(300,0)}}{_esc(handle)}"),
             kit.dialogue(3, 0.6, d, "HvLabel", rf"{{\an5\pos({W // 2},{H // 2 + 130})\fad(300,0)}}"
-                                               rf"{_esc(WORDS[lang]['next'])}")]
+                                               rf"{_esc(words_for(lang, mode)['next'])}")]
 
 
 MOTIONS = ["right", "left", "down", "diag", "up", "left"]
@@ -1009,14 +1089,50 @@ def _motion():
 CRF = "20"
 
 
+def mode_grade(lift=0):
+    """The horror channel's dark, cold grade on EVERY shot (paintings and footage alike, so they read as one
+    film), as a filter prefix; "" otherwise (history pictures stay as the archive has them). ``lift`` 1 is the
+    lighter variant, 2 no horror grade: for a shot the dark one turned black (_shot_tries)."""
+    if mode_now() != "horror" or os.environ.get("CHANNEL_GRADE", "1") == "0" or lift >= 2:
+        return ""
+    import horror_stories
+    return (horror_stories.GRADE_LIFT if lift else horror_stories.GRADE) + ","
+
+
+def too_dark(path):
+    """True when a shot holds 1.5 s+ that video_qa would call black (its own detector at half its length)."""
+    r = subprocess.run(["ffmpeg", "-nostdin", "-v", "info", "-i", path, "-vf",
+                        "fps=5,scale=320:-2,blackdetect=d=1.5:pix_th=0.10", "-an", "-f", "null", "-"],
+                       capture_output=True, text=True, errors="replace", timeout=300)
+    return "black_start" in r.stderr
+
+
+def _shot_tries(render, job_dir, out):
+    """Render a shot; in horror mode, again lighter while it comes out black (the dark grade on a night clip or
+    a dark painting): the grade, then GRADE_LIFT, then no horror grade."""
+    if not mode_grade():
+        return render(0)
+    for lift in (0, 1, 2):
+        render(lift)
+        if not too_dark(os.path.join(job_dir, out)):
+            break
+        print(f"   ℹ️ A shot came out black under the horror grade; lighter ({lift + 1}).")
+    return out
+
+
 def segment(job_dir, picture, out, frames, motion, events):
     """One shot: ``picture`` (a canvas, relative to job_dir) panned over
     ``frames`` frames under ``events``. Video only; same settings for all."""
+    return _shot_tries(lambda lift: _segment(job_dir, picture, out, frames, motion, events, lift), job_dir, out)
+
+
+def _segment(job_dir, picture, out, frames, motion, events, lift=0):
     ass = out[:-4] + ".ass"
     with open(os.path.join(job_dir, ass), "w", encoding="utf-8") as f:
         f.write(_ass(events))
     d = frames / FPS
-    ass_vf = f"ass=filename='{escape_filter_value(ass)}':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'"
+    ass_vf = (f"{mode_grade(lift)}ass=filename='{escape_filter_value(ass)}':"
+              f"fontsdir='{escape_filter_value(fl.FONTS_DIR)}'")
     if _motion() and motion != "still":
         # Depth parallax (parallax.py) when its model is there; any failure keeps the plain pan below.
         try:
@@ -1034,8 +1150,7 @@ def segment(job_dir, picture, out, frames, motion, events):
             "down": ("(iw-ow)/2", f"(ih-oh)*{p}"), "up": ("(iw-ow)/2", f"(ih-oh)*(1-{p})"),
             "diag": (f"(iw-ow)*{p}", f"(ih-oh)*{p}"), "still": ("(iw-ow)/2", "(ih-oh)/2")}[motion]
     vf = (f"loop=loop={frames - 1}:size=1:start=0,setpts=N/{FPS}/TB,crop={cw}:{chh}:x='{x}':y='{y}',"
-          f"scale={W}:{H}:flags=bicubic,setsar=1,format=yuv420p,"
-          f"ass=filename='{escape_filter_value(ass)}':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'")
+          f"scale={W}:{H}:flags=bicubic,setsar=1,format=yuv420p,{ass_vf}")
     r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", picture, "-vf", vf, "-frames:v", str(frames),
                         "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", CRF,
                         "-pix_fmt", "yuv420p", "-video_track_timescale", "30000", "-an", out],
@@ -1049,11 +1164,16 @@ def segment(job_dir, picture, out, frames, motion, events):
 
 def segment_video(job_dir, video, out, frames, offset, close, events):
     """One shot from a stock clip (looped if short), same encode settings as segment()."""
+    return _shot_tries(lambda lift: _segment_video(job_dir, video, out, frames, offset, close, events, lift),
+                       job_dir, out)
+
+
+def _segment_video(job_dir, video, out, frames, offset, close, events, lift=0):
+    import broll                # both branches use broll.grade() (it was imported in the motion one only)
     ass = out[:-4] + ".ass"
     with open(os.path.join(job_dir, ass), "w", encoding="utf-8") as f:
         f.write(_ass(events))
     if _motion():
-        import broll
         a, b = broll.PULL if close else broll.PUSH
         z = f"({a:.4f}+{b - a:.4f}*{broll._ease(frames / FPS)})"
         move = (f"fps={FPS},setpts=PTS-STARTPTS,scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
@@ -1061,8 +1181,8 @@ def segment_video(job_dir, video, out, frames, offset, close, events):
     else:
         zoom = "crop=iw*0.86:ih*0.86," if close else ""
         move = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},{zoom}scale={W}:{H},fps={FPS},"
-    # The channel's grade on footage (broll.GRADES), never on the archival pictures.
-    vf = (f"{move}setsar=1,{broll.grade()}format=yuv420p,"
+    # The channel's grade on footage (broll.GRADES), never on the archival pictures; horror's own on both.
+    vf = (f"{move}setsar=1,{mode_grade(lift) or broll.grade()}format=yuv420p,"
           f"ass=filename='{escape_filter_value(ass)}':fontsdir='{escape_filter_value(fl.FONTS_DIR)}'")
     r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-ss", f"{offset:.2f}", "-stream_loop", "-1", "-i", video,
                         "-vf", vf, "-frames:v", str(frames), "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast",
@@ -1258,7 +1378,7 @@ def narration(path, voices, total, rate=24000):
     return path
 
 
-def plan(script, said, handle, lang, captions=True):
+def plan(script, said, handle, lang, captions=True, mode="history"):
     """The frame-exact timeline: (segments, voices, whooshes, chapter marks,
     bed sections, total seconds). ``said`` is one (wav, seconds) per voiced
     paragraph: hook scenes, chapter scenes, outro, question.
@@ -1267,7 +1387,7 @@ def plan(script, said, handle, lang, captions=True):
     "motion", "events"}; a scene index refers to scenes_of(script)."""
     segs, voices, whooshes, marks, sections = [], [], [], [], []
     frames, n = 0, 0
-    word = WORDS.get(lang, WORDS["urdu"])
+    word = words_for(lang, mode)
 
     def at():
         return frames / FPS
@@ -1318,7 +1438,7 @@ def plan(script, said, handle, lang, captions=True):
     last = len(sc) - 1
     scene(None, script.outro, said[n], pic=last)
     scene(None, script.question, said[n + 1], question=script.question, pic="title")
-    add("end", "full", END_CARD, lambda d: end_events(d, handle or "", lang), "still")
+    add("end", "full", END_CARD, lambda d: end_events(d, handle or "", lang, mode), "still")
     sections.append(at())
     return segs, voices, whooshes, marks, sections, at()
 
@@ -1340,7 +1460,7 @@ def watch_next(description, uploads, lang="urdu", n=2, now=None):
             return not r.get("publish_at") or datetime.fromisoformat(r["publish_at"]) <= now
         except ValueError:
             return False
-    longs = [r for r in uploads if r.get("genre") == "history" and r.get("status") == "done"
+    longs = [r for r in uploads if r.get("genre") in LONG_GENRES and r.get("status") == "done"
              and r.get("video_id") and public(r) and not r.get("blocked")     # Content ID blocked: nobody can watch it
              and r["video_id"] not in description]                           # a series part is linked already
     if not longs:
@@ -1354,21 +1474,22 @@ def watch_next(description, uploads, lang="urdu", n=2, now=None):
 PART_WORD = {"urdu": ("Pichla hissa", "Agla hissa"), "english": ("Previous part", "Next part")}
 
 
-def series_rows(uploads, series):
-    """{part: upload row} of this series' long videos already uploaded."""
+def series_rows(uploads, series, genres=LONG_GENRES):
+    """{part: upload row} of this series' long videos already uploaded (``genres``: the cartoon channel's two-part
+    Shorts pass ("toons",))."""
     out = {}
     for r in uploads:
-        if (r.get("genre") == "history" and r.get("status") == "done" and r.get("video_id")
+        if (r.get("genre") in genres and r.get("status") == "done" and r.get("video_id")
                 and r.get("series") == series and r.get("series_part") and not r.get("blocked")):
             out[int(r["series_part"])] = r
     return out
 
 
-def series_links(description, uploads, series, part, lang="urdu"):
+def series_links(description, uploads, series, part, lang="urdu", genres=LONG_GENRES):
     """A series part's description with links to its earlier parts. They were
     scheduled before it, so they are public by the time it is."""
     import credits
-    rows = series_rows(uploads, series)
+    rows = series_rows(uploads, series, genres)
     before = [k for k in sorted(rows) if k < part]
     if not before:
         return description
@@ -1391,8 +1512,15 @@ def describe(script, marks, sources, credits, handle, lang, ai_used, stock_line=
         import trend_explainer
         word["follow"] = trend_explainer.FOLLOW.get(lang, trend_explainer.FOLLOW["urdu"])
         tags = ["#explained", "#urdu" if lang == "urdu" else "#news", f"#{slug}"]
+    if mode == "horror":
+        import horror_stories
+        word = words_for(lang, mode)
+        tags = ["#horrorstory", "#urdu" if lang == "urdu" else "#scarystories", f"#{slug}"]
     head = [script.summary.strip(), "", "\n".join(f"{clock(t)} {_esc(title)}" for title, t in marks), "",
             script.question.strip()]
+    if mode == "horror":
+        # Fiction, said plainly: nothing here is a true event about real people or places.
+        head += ["", horror_stories.describe_extra(lang)]
     if sources:
         head += ["", "Sources:"] + [f"- {n}: {u}" if n else f"- {u}" for n, u in sources[:8]]
     # A blank line before the hashtags: credits.insert puts later lines
@@ -1418,19 +1546,29 @@ def describe(script, marks, sources, credits, handle, lang, ai_used, stock_line=
     return "\n".join(head + pics + lines + tail)
 
 
-def _thumbnail(client, script, job_dir, fallback):
+def _thumbnail(client, script, job_dir, fallback, mode="history"):
     """thumbnail.jpg: free by default, the video's opening picture with the
     hook text set by PIL over a dark fade on the left; HISTORY_AI_THUMBNAIL=1
-    asks the image model for a new picture first (~$0.10). Path or None."""
+    asks the image model for a new picture first (~$0.10). Path or None.
+    Horror: red text, and the AI picture is one of its dark paintings."""
     import thumbnail as th
     out = os.path.join(job_dir, "thumbnail.jpg")
     text = script.thumb_text.upper()[:40]
+    colour = "yellow"
+    # The thumbnail A/B test (my_channels EXPERIMENTS["thumb"], judged by click rate): which side the text takes.
+    side = "right" if os.environ.get("HISTORY_THUMB", "").lower() == "right" else "left"
+    if mode == "horror":
+        import horror_stories
+        colour = horror_stories.thumb_colour()
     if AI_THUMBNAIL:
-        scene = (f"{script.thumb_picture}. Epic and dramatic, historical. "
+        scene = (f"{script.thumb_picture}. Epic and dramatic, historical, clearly a painting, never a photograph; "
+                 "no blood, bodies or people dying. "
                  + (NO_PEOPLE if script.sacred else "Never show any prophet or revered religious figure."))
+        if mode == "horror":
+            scene = f"{script.thumb_picture}. {horror_stories.AI_STYLE}"
         try:
-            return th._generate_one(client, {"scene": scene, "text": text, "text_position": "left",
-                                             "text_color": "yellow"}, [], out, burn_text=True)
+            return th._generate_one(client, {"scene": scene, "text": text, "text_position": side,
+                                             "text_color": colour}, [], out, burn_text=True)
         except Exception as e:  # noqa: BLE001 — fall back to a free picture
             print(f"   ℹ️ AI thumbnail failed ({type(e).__name__}); using a picture from the video.")
     if not fallback:
@@ -1446,9 +1584,10 @@ def _thumbnail(client, script, job_dir, fallback):
         draw = ImageDraw.Draw(shade)
         fade_end = round(th.THUMB_W * 0.62)
         for col in range(fade_end):
-            draw.line([(col, 0), (col, th.THUMB_H)], fill=round(190 * (1 - col / fade_end)))
+            x = col if side == "left" else th.THUMB_W - 1 - col
+            draw.line([(x, 0), (x, th.THUMB_H)], fill=round(190 * (1 - col / fade_end)))
         im = Image.composite(Image.new("RGB", im.size, (0, 0, 0)), im, shade)
-        im = th.burn_thumbnail_text(im, text, "left", "yellow").convert("RGB")
+        im = th.burn_thumbnail_text(im, text, side, colour).convert("RGB")
         im.save(out, "JPEG", quality=90)
         return out
     except Exception as e:  # noqa: BLE001
@@ -1456,20 +1595,24 @@ def _thumbnail(client, script, job_dir, fallback):
         return None
 
 
-def _bed_tracks(sacred):
+def _bed_tracks(sacred, kind="history"):
+    """Music beds for the chapters: the documentary's, or the horror channel's dark drones (kind "horror")."""
     if sacred or os.environ.get("BG_MUSIC", "0") != "1":
         return []
     import music_beds
-    have = music_beds.ensure("history", music_beds.PER_KIND)
-    folder = os.path.join(kit.MUSIC_DIR, "history")
+    music_beds.ensure(kind, music_beds.PER_KIND)
+    music_beds.grow(kind)
+    have = music_beds.beds(kind)
+    folder = os.path.join(kit.MUSIC_DIR, kind)
     tracks = [os.path.join(folder, f) for f in have]
     random.shuffle(tracks)
     return tracks
 
 
-def mix(job_dir, video, narration_wav, out, total, whooshes, sections, tracks):
+def mix(job_dir, video, narration_wav, out, total, whooshes, sections, tracks, sting=False):
     """The final file: the joined video (copied), the narration, a whoosh per
-    card and a music bed per chapter (looped, faded)."""
+    card and a music bed per chapter (looped, faded). ``sting``: a low horror hit on each card instead of the
+    whoosh (horror_stories.STING)."""
     cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", video, "-i", narration_wav]
     duck = bool(tracks) and kit.ducking()
     # Ducked (short_kit.ducking): the beds sit at -28 LUFS and dip under the narration, as on the Shorts.
@@ -1499,9 +1642,14 @@ def mix(job_dir, video, narration_wav, out, total, whooshes, sections, tracks):
         graph.append("[vkey]anullsink")
     else:
         mixin += beds
+    if sting:
+        import horror_stories
+        sound, secs = horror_stories.STING, 1.2
+    else:
+        sound, secs = kit.WHOOSH, 0.3
     for k, t in enumerate(whooshes):
         ms = int(t * 1000)
-        graph.append(f"aevalsrc='{kit.WHOOSH}':s=48000:d=0.3,aformat=channel_layouts=stereo,adelay={ms}|{ms}[sx{k}]")
+        graph.append(f"aevalsrc='{sound}':s=48000:d={secs},aformat=channel_layouts=stereo,adelay={ms}|{ms}[sx{k}]")
         mixin.append(f"[sx{k}]")
     graph.append(f"{''.join(mixin)}amix=inputs={len(mixin)}:duration=first:normalize=0,alimiter=limit=0.95[a]")
     r = subprocess.run(cmd + ["-filter_complex", ";".join(graph), "-map", "0:v", "-map", "[a]", "-c:v", "copy",
@@ -1511,6 +1659,7 @@ def mix(job_dir, video, narration_wav, out, total, whooshes, sections, tracks):
                        errors="replace", timeout=3600)
     if r.returncode != 0:
         raise RuntimeError(f"mix failed: {r.stderr.strip()[-400:]}")
+    kit.level(os.path.join(job_dir, out))     # the whole film to -14 LUFS, as the Shorts (short_kit.level)
     return out
 
 
@@ -1573,7 +1722,10 @@ def pictures(client, script, topic, job_dir, log=print, mode="history"):
         a = (s.wiki or "").strip()
         if a and a.lower() not in {x.lower() for x in articles}:
             articles.append(a)
-    log(f"🖼️ Looking for free pictures in {min(len(articles), MAX_ARTICLES)} Wikipedia articles...")
+    if mode == "horror":
+        articles = []           # fiction: dark footage and paintings only, never an encyclopaedia picture
+    else:
+        log(f"🖼️ Looking for free pictures in {min(len(articles), MAX_ARTICLES)} Wikipedia articles...")
     pool = candidates(articles, script.sacred)
     try:
         picks = pick(client, topic, sc, pool, script.sacred) if pool else {}
@@ -1618,6 +1770,9 @@ def pictures(client, script, topic, job_dir, log=print, mode="history"):
             if mode == "explainer":
                 import trend_explainer
                 rule = trend_explainer.FOOTAGE_RULE
+            elif mode == "horror":
+                import horror_stories
+                rule = horror_stories.FOOTAGE_RULE
             else:
                 rule = FOOTAGE_RULE
             rule += (NO_PEOPLE + " ") if script.sacred else ""
@@ -1634,8 +1789,25 @@ def pictures(client, script, topic, job_dir, log=print, mode="history"):
                     stock.append(item)
                     if item["kind"] == "video":
                         videos[item["path"]] = item
-    want = [k for k in ai_order(len(script.hook), [len(c.scenes) for c in script.chapters]) if k not in raw]
-    want = want[:max(0, AI_IMAGES)]
+    style = None
+    if mode == "horror":
+        # The painted look the niche's channels have: the hook, each chapter's opening and the climax are
+        # paintings (ai_order's order), above the footage they would otherwise get.
+        import horror_stories
+        style, budget = horror_stories.AI_STYLE, horror_stories.AI_IMAGES
+        order_all = ai_order(len(script.hook), [len(c.scenes) for c in script.chapters])
+        painted = set(order_all[:max(0, budget)])
+        # The hook and each chapter's opening are paintings even where footage was found (the first live run
+        # found footage for all 6 scenes and made no painting at all): the niche's look is painted art, with
+        # the footage moving between them.
+        for k in painted:
+            raw.pop(k, None)
+        kept = set(raw.values())
+        stock = [item for item in stock if item["path"] in kept]      # credit only the footage shown
+        want = [k for k in order_all if k not in raw][:max(0, budget)]
+    else:
+        want = [k for k in ai_order(len(script.hook), [len(c.scenes) for c in script.chapters]) if k not in raw]
+        want = want[:max(0, AI_IMAGES)]
     ai_used = 0
     if want:
         log(f"🎨 Making {len(want)} AI picture(s)...")
@@ -1644,7 +1816,7 @@ def pictures(client, script, topic, job_dir, log=print, mode="history"):
             out = os.path.join(job_dir, ".hv_pics", f"ai{k:03d}.jpg")
             for attempt in range(2):
                 try:
-                    return k, ai_picture(client, sc[k].picture, out, script.sacred)
+                    return k, ai_picture(client, sc[k].picture, out, script.sacred, **({"style": style} if style else {}))
                 except Exception as e:  # noqa: BLE001
                     if attempt:
                         print(f"   ℹ️ AI picture for scene {k + 1} failed ({type(e).__name__}).")
@@ -1710,6 +1882,39 @@ def frame_of(video, out, at=1.0):
     return out if r.returncode == 0 and os.path.isfile(out) else None
 
 
+def _resume_path(*settings):
+    import hashlib
+    key = hashlib.sha1(json.dumps(settings, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:20]
+    return os.path.join(RESUME_DIR, f"{key}.json")
+
+
+def load_resume(path, now=None):
+    """(script, facts, sources) a failed try of the same video saved, or None (none, too old or unreadable)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if (now or time.time()) - data["at"] > RESUME_HOURS * 3600:
+            return None
+        return Script.model_validate(data["script"]), data["facts"], [tuple(s) for s in data["sources"]]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def save_resume(path, script, facts, sources):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        old = time.time() - RESUME_HOURS * 3600
+        for name in os.listdir(os.path.dirname(path)):          # the folder never grows past two days of tries
+            p = os.path.join(os.path.dirname(path), name)
+            if os.path.getmtime(p) < old:
+                os.remove(p)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"at": time.time(), "script": script.model_dump(), "facts": facts,
+                       "sources": [list(s) for s in sources]}, f, ensure_ascii=False)
+    except OSError:
+        pass                    # a cache: the video goes on without it
+
+
 def run(output_dir, pipeline):
     from controversy_shorts import _real_url
     if os.environ.get("HISTORY_TEASER_OF"):
@@ -1724,25 +1929,36 @@ def run(output_dir, pipeline):
     lang = (os.environ.get("HISTORY_LANG") or "urdu").lower()
     lang = lang if lang in LANGS else "urdu"
     captions = os.environ.get("HISTORY_CAPTIONS", "1") != "0"
-    mode = "explainer" if (os.environ.get("HISTORY_MODE") or "").lower() == "explainer" else "history"
+    mode = mode_now()
     cfg = fl.settings()
     handle = cfg["handle"] or ""
     client = kit.gemini()
     started = time.time()
-    print(f"📜 {'Explainer' if mode == 'explainer' else 'History'} video ({minutes} min, {lang}): "
-          f"researching \"{topic}\"...")
+    print(f"📜 {MODE_NAME[mode]} video ({minutes} min, {lang}): "
+          f"{'writing' if mode == 'horror' else 'researching'} \"{topic}\"...")
     series = series_env()
     if series:
         print(f"   📚 Part {series['part']} of {series['parts']} of the series \"{series['name']}\".")
-    script, facts, sources = write(client, series_topic(topic, series), handle or "this channel", minutes, lang,
-                                   series_note=series_note(series, lang), mode=mode)
-    if not script.sacred:
-        # Sacred stories keep the writer's title: a tournament for clicks is the wrong tool there.
-        script.title = craft.pick_title(client, script.title, facts,
-                                        what="YouTube documentary" if mode != "explainer" else "YouTube explainer",
-                                        language="English" if lang == "english" else craft.ROMAN)
-    if series:
-        script.title = part_title(script.title, series["part"])
+    resume = _resume_path(topic, minutes, lang, mode, series, os.environ.get("OWNER_NOTES") or "")
+    saved = load_resume(resume)
+    if saved:
+        script, facts, sources = saved
+        print("   ♻️ The research and script of the last try (stopped by an outage) are reused.")
+    else:
+        script, facts, sources = write(client, series_topic(topic, series), handle or "this channel", minutes, lang,
+                                       series_note=series_note(series, lang), mode=mode)
+        if not script.sacred:
+            # Sacred stories keep the writer's title: a tournament for clicks is the wrong tool there.
+            script.title = craft.pick_title(client, script.title, facts,
+                                            what={"explainer": "YouTube explainer", "horror": "YouTube horror story"}
+                                            .get(mode, "YouTube documentary"),
+                                            language="English" if lang == "english" else craft.ROMAN)
+        if mode == "horror":
+            import horror_stories
+            script.title = horror_stories.search_title(script.title, lang)
+        if series:
+            script.title = part_title(script.title, series["part"])
+        save_resume(resume, script, facts, sources)
     sc = scenes_of(script)
     print(f"   ✅ \"{script.title}\": {len(script.chapters)} chapters, {len(sc)} scenes, {word_count(script)} words, "
           f"{len(sources)} sources{', sacred: no people shown, no music' if script.sacred else ''}.")
@@ -1752,14 +1968,18 @@ def run(output_dir, pipeline):
     # The two are independent and each takes a minute or more on a long video.
     with ThreadPoolExecutor(max_workers=1) as voicing:
         said_later = voicing.submit(voice_all, client, texts, output_dir, lang,
-                                    os.environ.get("HISTORY_VOICE") or "Charon")
+                                    os.environ.get("HISTORY_VOICE") or voice_for(mode), mode)
         pics, title_pic, credits, ai_used, first_pic, stock = pictures(client, script, topic, output_dir, mode=mode)
-        maps_used = add_maps(script, pics) if mode != "explainer" else 0
+        maps_used = add_maps(script, pics) if mode == "history" else 0
         said = said_later.result()
     missing = sum(1 for p, _ in said if not p)
     if missing > 2:
         raise RuntimeError(f"The AI voice failed for {missing} paragraphs; try again later.")
-    segs, voices, whooshes, marks, sections, total = plan(script, said, handle, lang, captions)
+    segs, voices, whooshes, marks, sections, total = plan(script, said, handle, lang, captions, mode)
+    if minutes <= UNVERIFIED_MINUTES and total > UNVERIFIED_LIMIT:
+        # A video meant for an unverified channel (<= 14 min) that the voice made too long would be refused.
+        said = fit_voices(said, total, output_dir)
+        segs, voices, whooshes, marks, sections, total = plan(script, said, handle, lang, captions, mode)
     srt = write_srt(os.path.join(output_dir, "captions.srt"), texts, said, voices, lang)
     # The English track is translated while the shots render (~40 s of calls
     # on the Rome script, which used to come before the render).
@@ -1772,10 +1992,11 @@ def run(output_dir, pipeline):
     video = render(output_dir, segs, pics, title_pic, ".hv_video.mp4")
     narration(os.path.join(output_dir, ".hv_voice.wav"), voices, total)
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
-    tracks = _bed_tracks(script.sacred)
-    mix(output_dir, video, ".hv_voice.wav", os.path.basename(final), total, whooshes, sections, tracks)
+    tracks = _bed_tracks(script.sacred, "horror" if mode == "horror" else "history")
+    mix(output_dir, video, ".hv_voice.wav", os.path.basename(final), total, whooshes, sections, tracks,
+        sting=mode == "horror")
     # A big wide picture of the video (pictures() chooses) under the thumbnail text.
-    thumb = _thumbnail(client, script, output_dir, first_pic)
+    thumb = _thumbnail(client, script, output_dir, first_pic, mode)
     en_srt = None
     if en_later:
         try:
@@ -1793,7 +2014,7 @@ def run(output_dir, pipeline):
             "video_title_for_youtube_short": script.title, "seo_title": script.title[:100],
             "seo_description": desc, "seo_tags": [t[:40] for t in script.tags][:15],
             "viral_hook_text": (script.hook[0].line if script.hook else "")[:200],
-            "why": f"{'Explainer' if mode == 'explainer' else 'History'} video: {topic}", "predicted_score": 85,
+            "why": f"{MODE_NAME[mode]} video: {topic}", "predicted_score": 85,
             "genre": "history",
             "comment_question": script.question, "ai_voice": "AI voice", "ai_made": ai_used > 0,
             "thumbnail_file": os.path.basename(thumb) if thumb else None,
@@ -1813,6 +2034,10 @@ def run(output_dir, pipeline):
                         "scene_pictures": {str(k): v for k, v in pics.items()},
                         "script": script.model_dump()}}
     kit.finish(output_dir, stem, [clip], None, pipeline, extra={"genre": "history", "format": "16:9"})
+    try:
+        os.remove(resume)           # made: a "make it again" must get a new script, not this one
+    except OSError:
+        pass
     print(f"   ⏱️ Made in {(time.time() - started) / 60:.1f} min.")
 
 
@@ -2007,7 +2232,11 @@ def _short_footage(client, script, windows, items):
     windows, fallback = _sentence_windows(windows, items)
     if os.environ.get("STOCK_FOOTAGE", "1") == "0" or not stock_media.available():
         return windows, fallback, []
-    rule = FOOTAGE_RULE + ((NO_PEOPLE + " ") if script.sacred else "")
+    if mode_now() == "horror":
+        import horror_stories
+        rule = horror_stories.FOOTAGE_RULE
+    else:
+        rule = FOOTAGE_RULE + ((NO_PEOPLE + " ") if script.sacred else "")
     try:
         lines = [w[2] for w in windows]
         terms = broll.terms_for(client, script.title, lines, rule)
@@ -2041,6 +2270,7 @@ def run_teaser(output_dir, pipeline):
         raise RuntimeError("This long video was made before teasers existed.")
     script = Script(**h["script"])
     lang = h.get("lang") if h.get("lang") in LANGS else "urdu"
+    mode = h.get("mode") if h.get("mode") in MODES else "history"       # the long video's own subject
     plan_ = teaser_plan(script, h["voices"], src)
     if not plan_:
         raise RuntimeError("The long video's voice files are gone; no teaser this time.")
@@ -2077,12 +2307,15 @@ def run_teaser(output_dir, pipeline):
     pics = h.get("scene_pictures") or {}
 
     def item(k):
+        # Absolute paths: broll runs ffmpeg INSIDE this teaser's folder, and src ("output\<long id>",
+        # app.OUTPUT_DIR is relative) read from there was output\<teaser>\output\<long>\... ("footage shot
+        # failed: Error opening input file output\...\.hv_pics\c007_full.jpg", server.log 4-nov-2026).
         entry = pics.get(str(k)) or {}
         if entry.get("video") and os.path.isfile(entry["video"]):
-            return {"kind": "video", "path": entry["video"], "seconds": entry.get("seconds") or 0}
+            return {"kind": "video", "path": os.path.abspath(entry["video"]), "seconds": entry.get("seconds") or 0}
         full = entry.get("full")
-        return {"kind": "photo", "path": os.path.join(src, full), "seconds": 0.0} if full and os.path.isfile(
-            os.path.join(src, full)) else None
+        return {"kind": "photo", "path": os.path.abspath(os.path.join(src, full)), "seconds": 0.0} \
+            if full and os.path.isfile(os.path.join(src, full)) else None
     t, voices, caps, windows, items, sfx = 0.4, [], [], [], [], []
     if setup and said[0][0]:
         wav, secs = said[0]
@@ -2122,19 +2355,20 @@ def run_teaser(output_dir, pipeline):
     sfx.append((kit.WHOOSH, 0.3, max(0.0, c0 - 0.15)))
     track = None
     if not script.sacred and os.environ.get("BG_MUSIC", "0") == "1":
-        track = kit.music_track("history")
+        track = kit.music_track("horror" if mode == "horror" else "history")
     stem = kit.neutral_stem("Teaser")
     final = os.path.join(output_dir, f"{stem}_clip_1.mp4")
     print(f"🎬 Rendering the {'moment' if part else 'teaser'} Short ({total:.0f}s)...")
     kit.render(final, total, [cfg["bg"], kit.blend("#7C5A2A", cfg["bg"], 0.3)],
                ([] if bg else kit.ambient_events(total)) + events + card_ev, cs.STYLES, voices=voices,
                sfx=sfx + card_sfx, bed=(track, body_end) if track else None, bg_video=bg, fast=True)
-    word = WORDS.get(lang, WORDS["urdu"])
+    word = words_for(lang, mode)
     link = f"https://youtu.be/{vid}" if re.fullmatch(r"[A-Za-z0-9_-]{11}", vid) else ""
     desc = "\n".join(x for x in [((setup + " ") if setup else "") + script.summary.strip(), "",
                                  (("Poori video: " if lang == "urdu" else "Full video: ") + link) if link else "",
                                  "", f"{word['follow']}{(' ' + handle) if handle else ''}", "",
-                                 "#shorts #history " + ("#urdu" if lang == "urdu" else "#documentary")] if x is not None)
+                                 ("#shorts #horrorstory " if mode == "horror" else "#shorts #history ")
+                                 + ("#urdu" if lang == "urdu" else "#documentary")] if x is not None)
     import credits
     import stock_media
     if any(it and not any(it is s for s in stock) for it in items):

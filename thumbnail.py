@@ -470,7 +470,8 @@ def burn_thumbnail_text(img, text, position="left", color="white"):
     horizontal = position in ("left", "right")
     box_w = int(W * (0.46 if horizontal else 0.92))
     box_h = int(H * (0.84 if horizontal else 0.40))
-    fill = (255, 221, 0, 255) if color == "yellow" else (255, 255, 255, 255)
+    # Red: the horror channel's thumbnails (horror_stories.thumb_colour), on a dark picture.
+    fill = {"yellow": (255, 221, 0, 255), "red": (230, 28, 28, 255)}.get(color, (255, 255, 255, 255))
 
     draw = ImageDraw.Draw(img)
     size = int(H * 0.30)

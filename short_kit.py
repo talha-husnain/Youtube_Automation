@@ -15,20 +15,26 @@ import glob
 import json
 import os
 import random
+import re
 import subprocess
 import time
 import wave
 from concurrent.futures import ThreadPoolExecutor
 
 import framed_layout as fl
-from ffmpeg_utils import (video_encode_args, QUALITY, METADATA_SCRUB, LOUDNORM_FILTER,
+from ffmpeg_utils import (video_encode_args, QUALITY, INTERMEDIATE, METADATA_SCRUB, LOUDNORM_FILTER,
                           escape_filter_value)
 
 OUT_W, OUT_H = fl.OUT_W, fl.OUT_H
 FPS = 30
 # Captions of a generated short hang from here (PlayResY 288 units, the
-# caption burner's), in the lower third above the platform UI.
-CAPTION_TOP_PX = 1430
+# caption burner's), in the lower third above the platform UI. At 1430 (until
+# 29-oct-2026) their glyphs sat at y 1500-1650, under YouTube's title, channel
+# and subscribe row (the bottom quarter of a phone screen). From 1206, one line
+# of subtitles.SHORTS_CAPTION_STYLE has its glyphs, outline included, at y
+# ~1244-1406 (1419 with a comma; 1238-1433 over every frame of a long track,
+# pops included); the boards above end by 1232 (cricket_shorts.BOARD_END).
+CAPTION_TOP_PX = 1206
 # Gemini voices (https://ai.google.dev/gemini-api/docs/speech-generation).
 MALE_VOICES = ["Puck", "Charon", "Fenrir", "Orus", "Iapetus"]
 FEMALE_VOICES = ["Kore", "Aoede", "Leda", "Zephyr", "Despina"]
@@ -56,6 +62,22 @@ BED_LOUDNORM = "loudnorm=I=-30:TP=-8:LRA=11"
 # 29 s where the default medium CRF 18 took 57 s on a 61 s Short (15-oct-2026),
 # and the caption pass re-encodes at full quality anyway.
 FAST_PASS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p"]
+# render() now asks ffmpeg_utils for the INTERMEDIATE tier (these same x264 args by default, Quick Sync
+# under FFMPEG_ENCODER=qsv); FAST_PASS stays as the documented x264 value.
+# Colour (29-oct-2026): renders took full-range BT.601 from JPEG photos and some footage (ffprobe said
+# "yuvj420p, bt470bg" on the day's controversy and teaser Shorts) or carried no tags at all (the gradient
+# ones: BT.601 maths that a player reads as BT.709, a small hue shift). Every render now ends in
+# limited-range BT.709 with the tags YouTube's upload guide asks for (answer/1722171).
+# setparams too: ffmpeg 8 takes primaries and transfer from the frames, not from the output options.
+TO_BT709 = ("scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,"
+            "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv")
+BT709_TAGS = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
+# Loudness of the finished file (29-oct-2026): each voice line is levelled to -14 LUFS, yet the pauses, the
+# bed and the end card left whole Shorts at -15 to -16 LUFS (cricket, quiz, controversy and a teaser that
+# day), and a Lyria song came out at -10 LUFS with its true peak at 0.0 dBFS. YouTube turns loud uploads
+# down to -14 and is reported not to raise quiet ones. One static gain to TARGET_LUFS, never lifting the
+# true peak past PEAK_CEILING (the AAC encoder adds inter-sample peaks: ffmpeg_utils' TP note). LEVEL=0 off.
+TARGET_LUFS, PEAK_CEILING = -14.0, -2.0
 
 
 def neutral_stem(prefix):
@@ -63,12 +85,25 @@ def neutral_stem(prefix):
     return time.strftime(f"{prefix}_%Y-%m-%d_%H%M%S")
 
 
+def http_options():
+    """Gemini's HTTP options with a timeout (GEMINI_TIMEOUT seconds, 600 by default). The client
+    has none by default: a history job sat 4.5 h on one dead connection after "Studied 3 of the
+    3 most viewed videos" (29-oct-2026, 10 CPU-seconds used). A timeout raises ReadTimeout,
+    which ask_json retries and my_channels treats as an outage."""
+    from google.genai import types
+    try:
+        secs = float(os.environ.get("GEMINI_TIMEOUT") or 600)
+    except ValueError:
+        secs = 600.0
+    return types.HttpOptions(timeout=int(secs * 1000))
+
+
 def gemini():
     from google import genai
     key = os.getenv("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("This video type needs GEMINI_API_KEY in .env.")
-    return genai.Client(api_key=key)
+    return genai.Client(api_key=key, http_options=http_options())
 
 
 def text_model():
@@ -79,23 +114,47 @@ TRANSIENT = ("getaddrinfo", "ConnectError", "ConnectTimeout", "ReadTimeout", "Re
              "503", "500", "502", "504", "UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED", "Server disconnected")
 
 
-def ask_json(client, schema, contents, tools=None, model=None, tries=3):
+def ask_json(client, schema, contents, tools=None, model=None, tries=3, max_tokens=None, invalid_tries=1):
     """One Gemini call validated against a pydantic schema. A network or server
     blip is retried (this laptop's DNS dropped for minutes on 15-oct-2026 and a
-    10-minute video died at its picture step, its voices already made)."""
+    10-minute video died at its picture step, its voices already made).
+
+    ``max_tokens`` caps the answer and ``invalid_tries`` asks again when it is
+    not valid JSON for the schema (4-nov-2026: an AI-editor plan degenerated
+    into 62,000 characters of "000..." in one number, ran 7 minutes to the
+    output limit and was cut mid-object). Defaults keep the old behaviour."""
     from google.genai import types
-    for attempt in range(tries):
+    from pydantic import ValidationError
+    attempt = invalid = 0
+    while True:
         try:
-            r = client.models.generate_content(
-                model=model or text_model(), contents=contents,
-                config=types.GenerateContentConfig(response_mime_type="application/json",
-                                                   response_schema=schema, tools=tools))
+            cfg = {"response_mime_type": "application/json", "response_schema": schema, "tools": tools}
+            if max_tokens:
+                cfg["max_output_tokens"] = int(max_tokens)
+            r = client.models.generate_content(model=model or text_model(), contents=contents,
+                                               config=types.GenerateContentConfig(**cfg))
+            if r.text is None and invalid_tries > 1:
+                raise ValueError("empty answer (cut at the output limit?)")
             return schema.model_validate_json(r.text)
-        except Exception as e:  # noqa: BLE001 — only blips are retried
-            if attempt == tries - 1 or not any(m in f"{type(e).__name__} {e}" for m in TRANSIENT):
+        except (ValidationError, ValueError) as e:
+            transient = any(m in f"{type(e).__name__} {e}" for m in TRANSIENT)
+            if not transient:
+                invalid += 1
+                if invalid >= invalid_tries:
+                    raise
+                print(f"   🔁 Gemini answered with broken JSON ({str(e)[:80]}); asking again.")
+                continue
+            attempt += 1
+            if attempt >= tries:
                 raise
-            print(f"   🔁 Gemini call failed ({type(e).__name__}); trying again in {10 * (attempt + 1)} s.")
-            time.sleep(10 * (attempt + 1))
+            print(f"   🔁 Gemini call failed ({type(e).__name__}); trying again in {10 * attempt} s.")
+            time.sleep(10 * attempt)
+        except Exception as e:  # noqa: BLE001 — only blips are retried
+            attempt += 1
+            if attempt >= tries or not any(m in f"{type(e).__name__} {e}" for m in TRANSIENT):
+                raise
+            print(f"   🔁 Gemini call failed ({type(e).__name__}); trying again in {10 * attempt} s.")
+            time.sleep(10 * attempt)
 
 
 def caption_margin():
@@ -420,7 +479,7 @@ def voice_lines(client, items, job_dir, prefix):
     out = [None] * len(items)
     for k in range(len(items)):
         if use_free and free[k]:
-            secs = free_voice.speak(free[k][0], path_of[k], free[k][1], free[k][2])
+            secs = free_voice.speak(free[k][0], path_of[k], free[k][1], free[k][2], *free[k][3:])
             if secs:
                 out[k] = (path_of[k], secs)
             time.sleep(free_voice.PAUSE)
@@ -528,6 +587,19 @@ def style(name, font, size, colour="#FFFFFF", outline=0, shadow=0, align=5, bold
             f"{spacing},0,1,{outline},{shadow},{align},60,60,0,1")
 
 
+def opaque(im, colour=(14, 14, 22)):
+    """``im`` as RGB with any see-through part laid on a dark colour. convert("RGB") only drops
+    the alpha, and the colours left under it are whatever the file holds: a Pixabay cut-out of
+    a statue came out as green and magenta streaks round it (controversy Short, 29-oct-2026)."""
+    if im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info):
+        from PIL import Image
+        rgba = im.convert("RGBA")
+        flat = Image.new("RGB", rgba.size, colour)
+        flat.paste(rgba, mask=rgba.getchannel("A"))
+        return flat
+    return im.convert("RGB")
+
+
 def blend(hex_color, base, share):
     """``share`` of hex_color mixed into base. Raw team or mood colours at full
     strength made garish, muddy backgrounds (first renders, 8-oct-2026)."""
@@ -547,8 +619,9 @@ def music_tracks():
 
 
 def music_track(kind=None):
-    """A random track from music/<kind>/ (the beds music_beds.py makes for a
-    channel kind), else from the music folder, or None when both are empty."""
+    """The track of music/<kind>/ (the beds music_beds.py makes for a channel kind) used longest ago,
+    else one from the music folder, or None when both are empty. Least recently used, not random: Shorts
+    that all carry the same bed match the spam policy's example of mass production (29-oct-2026)."""
     if kind:
         sub = os.path.join(MUSIC_DIR, kind)
         try:
@@ -556,9 +629,29 @@ def music_track(kind=None):
         except OSError:
             own = []
         if own:
-            return os.path.join(sub, random.choice(own))
+            return os.path.join(sub, _least_used(sub, own))
     tracks = music_tracks()
-    return os.path.join(MUSIC_DIR, random.choice(tracks)) if tracks else None
+    return os.path.join(MUSIC_DIR, _least_used(MUSIC_DIR, tracks)) if tracks else None
+
+
+def _least_used(folder, names):
+    """The name used longest ago (never used first, ties at random), marked as used now in
+    <folder>/.used.json. Without the file every name ties: a random pick, as before."""
+    path = os.path.join(folder, ".used.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            used = json.load(f)
+    except (OSError, ValueError):
+        used = {}
+    pick = min(names, key=lambda n: (used.get(n, 0), random.random()))
+    used = {n: t for n, t in used.items() if n in names}
+    used[pick] = time.time()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(used, f)
+    except OSError:
+        pass
+    return pick
 
 
 def ambient_events(total, seed=7):
@@ -576,14 +669,31 @@ def ambient_events(total, seed=7):
     return ev
 
 
+# Banding (4-nov-2026): an 8-bit gradient across 1920 px has only ~60-90 luma steps, so dark palettes
+# showed stepped bands, and YouTube's re-encode keeps them. CAMBI (Netflix's banding metric, libvmaf,
+# 0-24, ~5 = visible) on this gradient: 0.9-17.6 depending on the random gradient points, the same
+# after a 2.5 Mbps re-encode. A fixed (not per-frame) grain of strength 2 dithers it: 0.00 on the master
+# and 0.00 after the re-encode in every palette tried, invisible at that strength, ~7 Mbps more in the
+# master (moving grain, allf=t, cost 345 Mbps and still banded after the re-encode; a float gradient with
+# error-diffusion dither helped little, x264 smoothed the dither away). Only the gradient gets it: text and
+# cards are drawn on top. GRADIENT_GRAIN=0 = the old flat gradient.
+def _grain():
+    try:
+        return max(0, min(8, int(os.environ.get("GRADIENT_GRAIN", "2"))))
+    except ValueError:
+        return 2
+
+
 def bg_source(colors, seconds):
     """Slowly moving gradient over the whole canvas (lavfi input)."""
     cs = [c.lstrip("#") for c in colors][:3] or ["2B0F3D", "8B5CF6"]
     while len(cs) < 2:
         cs.append(cs[0])
     stops = ":".join(f"c{i}=0x{c}" for i, c in enumerate(cs))
+    grain = _grain()
     return (f"gradients=s={OUT_W}x{OUT_H}:{stops}:nb_colors={len(cs)}:x0=0:y0=0:"
-            f"x1={OUT_W}:y1={OUT_H}:speed=0.012:r={FPS}:d={seconds:.3f}")
+            f"x1={OUT_W}:y1={OUT_H}:speed=0.012:r={FPS}:d={seconds:.3f}"
+            + (f",noise=alls={grain}" if grain else ""))
 
 
 def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=(),
@@ -607,11 +717,21 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     size, at least ``seconds`` long) instead of either.
     stickers: stickers.place() output, animated emoji over the picture and under the text.
     """
+    # Levelled to speech loudness only when something leads: voices, or a song as the content. A bed
+    # alone stays a bed.
+    lead = bool(voices) or (bool(music) and not silent)
     ass_path = os.path.join(os.path.dirname(os.path.abspath(out_path)),
                             f"gen_{os.getpid()}_{int(time.time() * 1000) % 10**8}.ass")
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write("\n".join(ass_header(extra_styles) + list(events)) + "\n")
     mixed = None
+    if voices and bed and os.environ.get("KEEP_STEMS", "1") != "0":
+        # The voices and sounds without the bed, kept beside the Short so the Studio's AI editor can put
+        # other music under them ("change the music", ai_editor.py) instead of over the old bed.
+        try:
+            mix_audio(stem_path(out_path), seconds, voices, sfx, None)
+        except RuntimeError:
+            pass
     if bg_video and not music:
         # Over footage, audio filtered in the same graph as the video stalled
         # the render for good (the music bed at 47.6 s every time, bisected
@@ -697,18 +817,18 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
             idx += 1
     idx = _voice_sfx_inputs(cmd, graph, mix, idx, voices, sfx)
     graph.append(f"{v}ass=filename='{escape_filter_value(ass_path)}'"
-                 f":fontsdir='{escape_filter_value(fl.FONTS_DIR)}',format=yuv420p[v]")
+                 f":fontsdir='{escape_filter_value(fl.FONTS_DIR)}',{TO_BT709}[v]")
     picture = ass_path[:-4] + "_picture.mp4" if mixed else None
     if mixed:
         # The picture alone (no sound in this pass at all), then a join that
         # copies it: an audio stream in the picture pass, even a finished
         # track mapped as is, still stalled it.
         outputs = ["-map", "[v]", "-an", "-t", f"{seconds:.3f}", "-r", str(FPS),
-                   *(FAST_PASS if fast else video_encode_args(QUALITY)), picture]
+                   *video_encode_args(INTERMEDIATE if fast else QUALITY), *BT709_TAGS, picture]
     else:
         _final_mix(graph, mix)
         outputs = ["-map", "[v]", "-map", "[a]", "-t", f"{seconds:.3f}", "-r", str(FPS),
-                   *(FAST_PASS if fast else video_encode_args(QUALITY)), "-c:a", "aac", "-b:a", "192k",
+                   *video_encode_args(INTERMEDIATE if fast else QUALITY), *BT709_TAGS, "-c:a", "aac", "-b:a", "192k",
                    *METADATA_SCRUB, "-movflags", "+faststart", out_path]
     try:
         r = subprocess.run(cmd + ["-filter_complex", ";".join(graph), *outputs],
@@ -730,7 +850,54 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
         for temp in (ass_path, mixed, picture):
             if temp and os.path.exists(temp):
                 os.remove(temp)
+    if lead:
+        level(out_path)
     return out_path
+
+
+def stem_path(video):
+    """The voices-only sound kept beside a render that has a music bed (render, KEEP_STEMS=0 off)."""
+    return os.path.splitext(video)[0] + ".voice.wav"
+
+
+def loudness(path):
+    """(integrated LUFS, true peak dBTP) of a file's sound by one EBU R128 pass, or None."""
+    try:
+        r = subprocess.run(["ffmpeg", "-nostdin", "-hide_banner", "-i", path, "-vn", "-af", "ebur128=peak=true",
+                            "-f", "null", "-"], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=900)
+    except subprocess.SubprocessError:
+        return None
+    summary = r.stderr[r.stderr.rfind("Summary:"):]
+    lufs = re.search(r"I:\s+(-?[\d.]+) LUFS", summary)
+    peak = re.search(r"Peak:\s+(-?[\d.]+|-inf) dBFS", summary)
+    if r.returncode != 0 or not lufs or not peak:
+        return None
+    return float(lufs.group(1)), float(peak.group(1))
+
+
+def level(path, target=TARGET_LUFS, ceiling=PEAK_CEILING):
+    """Bring a finished file's sound to ``target`` LUFS with one static gain, the picture copied. Returns
+    the gain applied in dB (0.0 when none: close enough, silent, LEVEL=0 or the pass failed)."""
+    if os.environ.get("LEVEL", "1").strip() == "0":
+        return 0.0
+    got = loudness(path)
+    if not got or got[0] <= -60:              # no sound worth levelling (a silent song track)
+        return 0.0
+    gain = round(min(target - got[0], ceiling - got[1]), 2)
+    if abs(gain) < 0.5:
+        return 0.0
+    tmp = path + ".level.mp4"
+    r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", path, "-map", "0:v?", "-map", "0:a",
+                        "-c:v", "copy", "-af", f"volume={gain}dB", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+                        *METADATA_SCRUB, "-movflags", "+faststart", tmp],
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace", timeout=900)
+    if r.returncode != 0 or not os.path.isfile(tmp):
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        return 0.0
+    os.replace(tmp, path)
+    return gain
 
 
 # Ducking (quality pass 2, 22-oct-2026): the bed sat at a fixed -30 LUFS, 16 dB under the voice, so it was
@@ -861,5 +1028,6 @@ def finish(output_dir, stem, clips, transcript, pipeline, extra=None, margin=Non
         if c.get("ai_voice"):
             from ffmpeg_utils import mark_ai_generated
             mark_ai_generated(served, c["ai_voice"])
+        c["served"] = served           # the captioned file (toon_shorts keeps a copy for the weekly compilation)
         print(f"   ✅ Clip {i + 1} ready: {c['file']}")
         print(f"CLIP_READY {i} {os.path.basename(served)}")

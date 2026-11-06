@@ -89,6 +89,61 @@ def test_creator_name_in_a_take_becomes_bhai(monkeypatch):
     assert got == {0: "bhai ki toh hawa tight. Aapki kab hui? Neeche likho!"}  # Devanagari dropped
 
 
+def _wav_bytes(seconds=0.5, rate=24000):
+    import io
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\0\0" * int(seconds * rate))
+    return buf.getvalue()
+
+
+def test_speak_sends_the_line_verbatim_and_the_delivery_as_a_style_note(monkeypatch, tmp_path):
+    import base64
+    monkeypatch.delenv("TAKE_TTS_MODEL", raising=False)
+    sent = []
+
+    class _Interactions:
+        def create(self, **kw):
+            sent.append(kw)
+            audio = type("A", (), {"data": base64.b64encode(_wav_bytes()).decode()})()
+            return type("I", (), {"output_audio": audio})()
+    client = type("C", (), {"interactions": _Interactions()})()
+    secs = ai_take.speak(client, "Comment mein batao!", str(tmp_path / "t.wav"), "Puck",
+                         "like a calm narrator.", language="Roman Urdu")
+    assert secs == pytest.approx(0.5)
+    kw = sent[0]
+    assert kw["model"] == ai_take.TTS_MODELS[0] == "gemini-3.8-flash-tts"
+    part = kw["input"][0]["content"][0]
+    assert part["text"] == "Comment mein batao!"                  # nothing added to what is read aloud
+    note = part["annotations"][0]
+    assert note["type"] == "speech_metadata" and note["style"].startswith("like a calm narrator. The words are Roman Urdu")
+    assert kw["generation_config"] == {"speech_config": [{"voice": "Puck"}]}
+
+
+def test_speak_falls_back_to_the_older_voices_when_3_8_fails(monkeypatch, tmp_path):
+    monkeypatch.delenv("TAKE_TTS_MODEL", raising=False)
+    monkeypatch.setattr(ai_take.time, "sleep", lambda s: None)
+    used = []
+
+    class _Interactions:
+        def create(self, **kw):
+            used.append(kw["model"])
+            raise RuntimeError("503 UNAVAILABLE")
+
+    class _Models:
+        def generate_content(self, **kw):
+            used.append(kw["model"])
+            part = type("P", (), {"inline_data": type("D", (), {"data": b"\0\0" * 24000})()})()
+            cand = type("Cd", (), {"content": type("Ct", (), {"parts": [part]})()})()
+            return type("R", (), {"candidates": [cand]})()
+    client = type("C", (), {"interactions": _Interactions(), "models": _Models()})()
+    assert ai_take.speak(client, "Ek line", str(tmp_path / "t.wav")) == pytest.approx(1.0)
+    assert used == ["gemini-3.8-flash-tts"] * 2 + ["gemini-3.8-flash-lite-tts"] * 2 + ["gemini-2.5-flash-preview-tts"]
+
+
 def test_off_switch(monkeypatch, tmp_path):
     monkeypatch.setenv("AI_TAKE", "0")
     assert ai_take.apply([{"start": 0, "end": 10}], {}, str(tmp_path), ["a.mp4"]) == {}
