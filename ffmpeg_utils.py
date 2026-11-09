@@ -4,7 +4,10 @@ FFMPEG_ENCODER env values:
   x264  (default) — CPU libx264, exact pre-GPU behavior
   nvenc           — force h264_nvenc; probed once and falls back to x264
                     (with a warning) if the GPU/driver is unavailable
-  auto            — h264_nvenc when the probe succeeds, else x264
+  qsv             — force h264_qsv (Intel Quick Sync: the owner's laptop's
+                    Iris Xe); probed once, falls back to x264 likewise
+  auto            — h264_nvenc when its probe succeeds, else h264_qsv when
+                    its probe does, else x264
 
 Only the codec/quality args live here; surrounding args (-movflags, -pix_fmt,
 audio codecs, filters) stay at each call site.
@@ -18,11 +21,15 @@ import time
 QUALITY = "quality"            # was: -preset medium -crf 18
 QUALITY_FAST = "quality_fast"  # was: -preset fast -crf 18
 DELIVERY = "delivery"          # was: -preset fast -crf 22
+# A picture that is encoded again later (short_kit's render before its
+# caption burn): veryfast at CRF 16, short_kit.FAST_PASS since 15-oct-2026.
+INTERMEDIATE = "intermediate"
 
 _X264_ARGS = {
     QUALITY: ["-c:v", "libx264", "-preset", "medium", "-crf", "18"],
     QUALITY_FAST: ["-c:v", "libx264", "-preset", "fast", "-crf", "18"],
     DELIVERY: ["-c:v", "libx264", "-preset", "fast", "-crf", "22"],
+    INTERMEDIATE: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p"],
 }
 
 # NVENC -cq is not 1:1 with x264 CRF: benchmarked on the prod GPU (RTX 4000
@@ -41,6 +48,42 @@ _NVENC_ARGS = {
     DELIVERY: ["-c:v", "h264_nvenc", "-preset", "p4",
                "-rc", "vbr", "-cq", "29", "-b:v", "0", "-spatial-aq", "1",
                "-pix_fmt", "yuv420p"],
+    INTERMEDIATE: ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq",
+                   "-rc", "vbr", "-cq", "23", "-b:v", "0", "-spatial-aq", "1",
+                   "-pix_fmt", "yuv420p"],
+}
+
+# Intel Quick Sync (h264_qsv), measured on the owner's laptop (i7-1360P, Iris
+# Xe, ffmpeg 8.0, 4-nov-2026) re-encoding two real Shorts, VMAF/SSIM against
+# the source frames, while Autopilot jobs shared the CPU:
+#
+#   cricket (cards over footage)   secs   Mbps   VMAF    SSIM
+#     x264 medium crf 18            25.6   3.26   98.92   0.9978
+#     x264 veryfast crf 16          17.0   3.69   98.45   0.9968
+#     qsv medium gq 18               7.8   3.33   98.44   0.9948
+#     qsv slow look_ahead gq 20      7.1   5.49   99.01   0.9965
+#   comedy (stage footage)
+#     x264 medium crf 18            58.3   2.88   98.24   0.9743
+#     x264 veryfast crf 16          17.1   3.26   97.68   0.9736
+#     qsv medium gq 18               8.2   2.78   97.28   0.9727
+#     qsv slow look_ahead gq 20     12.7   5.06   98.21   0.9739
+#
+# Look-ahead ICQ ("slow", look_ahead 1, global_quality 20) matches x264
+# medium CRF 18 (within 0.1 VMAF; ~6 points is one just-noticeable step) at
+# 3.6-4.6x the speed, for ~1.7x the bits (a 30 s Short ~20 MB: nothing next
+# to an upload). Plain medium ICQ is faster still but ~0.5-1 VMAF lower, so it
+# only takes DELIVERY. hevc_qsv was smaller but lower VMAF and slower on
+# footage; av1_qsv is not supported by the Iris Xe. nv12 is the encoder's
+# own format: callers that add "-pix_fmt yuv420p" after these args get a
+# warning and nv12 anyway (checked), and BT.709 tags come out as asked.
+_QSV_ARGS = {
+    QUALITY: ["-c:v", "h264_qsv", "-preset", "slow", "-look_ahead", "1", "-global_quality", "20",
+              "-pix_fmt", "nv12"],
+    QUALITY_FAST: ["-c:v", "h264_qsv", "-preset", "slow", "-look_ahead", "1", "-global_quality", "20",
+                   "-pix_fmt", "nv12"],
+    DELIVERY: ["-c:v", "h264_qsv", "-preset", "medium", "-global_quality", "23", "-pix_fmt", "nv12"],
+    INTERMEDIATE: ["-c:v", "h264_qsv", "-preset", "slow", "-look_ahead", "1", "-global_quality", "18",
+                   "-pix_fmt", "nv12"],
 }
 
 # Output args that drop container/stream metadata carried over from the source
@@ -96,7 +139,7 @@ LOUDNORM_FILTER = "loudnorm=I=-14:TP=-2.0:LRA=11"
 # voice or a person (dubbing, AI actors), not on an ordinary clip, whose audio
 # and pixels are the user's own footage. Marking everything would make the tag
 # mean nothing.
-AI_DISCLOSURE = "AI-generated content produced with OpenShorts (openshorts.app)"
+AI_DISCLOSURE = "AI-generated content produced with Shortkaar"
 
 
 def mark_ai_generated(path, detail=""):
@@ -176,12 +219,54 @@ def nvenc_available():
     return _nvenc_ok
 
 
+_qsv_ok = None  # None = not probed yet
+
+
+def _probe_qsv():
+    """One short 1080x1920 encode with the QUALITY settings (look-ahead
+    included, the option a driver is likeliest to refuse) to prove h264_qsv
+    works end-to-end here. Any failure means False."""
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "testsrc2=s=1080x1920:r=30:d=0.5",
+        *_QSV_ARGS[QUALITY], "-f", "null", "-",
+    ]
+    try:
+        result = subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def qsv_available():
+    """Probe h264_qsv once and cache the verdict (thread-safe)."""
+    global _qsv_ok
+    if _qsv_ok is None:
+        with _probe_lock:
+            if _qsv_ok is None:
+                _qsv_ok = _probe_qsv()
+    return _qsv_ok
+
+
 def reset_encoder_cache():
-    """Test hook: forget the cached probe result."""
-    global _nvenc_ok, _announced
+    """Test hook: forget the cached probe results."""
+    global _nvenc_ok, _qsv_ok, _announced
     with _probe_lock:
         _nvenc_ok = None
+        _qsv_ok = None
         _announced = False
+
+
+def encoder_name():
+    """'h264_nvenc', 'h264_qsv' or 'libx264': what video_encode_args uses now."""
+    mode = os.environ.get("FFMPEG_ENCODER", "x264").strip().lower()
+    if mode in ("nvenc", "auto") and nvenc_available():
+        return "h264_nvenc"
+    if mode in ("qsv", "auto") and qsv_available():
+        return "h264_qsv"
+    return "libx264"
 
 
 def video_encode_args(tier=QUALITY):
@@ -191,19 +276,17 @@ def video_encode_args(tier=QUALITY):
         raise ValueError(f"Unknown encode tier: {tier!r}")
 
     mode = os.environ.get("FFMPEG_ENCODER", "x264").strip().lower()
-    use_nvenc = False
-    if mode in ("nvenc", "auto"):
-        use_nvenc = nvenc_available()
-        if mode == "nvenc" and not use_nvenc:
-            print("⚠️ [Encoder] FFMPEG_ENCODER=nvenc but h264_nvenc is not "
-                  "usable here — falling back to libx264")
+    name = encoder_name()
+    if mode in ("nvenc", "qsv") and name == "libx264":
+        print(f"⚠️ [Encoder] FFMPEG_ENCODER={mode} but h264_{mode} is not "
+              "usable here — falling back to libx264")
 
     if not _announced:
         _announced = True
-        print(f"🎞️ [Encoder] video encoder: {'h264_nvenc' if use_nvenc else 'libx264'} "
-              f"(FFMPEG_ENCODER={mode})")
+        print(f"🎞️ [Encoder] video encoder: {name} (FFMPEG_ENCODER={mode})")
 
-    return list((_NVENC_ARGS if use_nvenc else _X264_ARGS)[tier])
+    table = {"h264_nvenc": _NVENC_ARGS, "h264_qsv": _QSV_ARGS}.get(name, _X264_ARGS)
+    return list(table[tier])
 
 
 def blurred_backdrop(out_w, out_h, sigma):

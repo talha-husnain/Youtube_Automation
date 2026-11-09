@@ -8,7 +8,8 @@ import PricingPage from './components/PricingPage'
 import AccountPage from './components/AccountPage'
 import LoginModal from './components/LoginModal'
 import { applyConsent } from './lib/consent'
-import CookieBanner from './components/CookieBanner'
+// import CookieBanner from './components/CookieBanner'
+import { applySavedTheme } from './lib/theme'
 
 const App = lazy(() => import('./App.jsx'))
 const Legal = lazy(() => import('./Legal.jsx'))
@@ -18,7 +19,7 @@ function PageShell({ title, children }) {
   return (
     <div className="min-h-screen bg-paper text-ink2">
       <header className="h-14 sm:h-16 border-b border-rule bg-paper flex items-center justify-between gap-3 px-4 sm:px-6 sticky top-0 z-20">
-        <a href="#app" className="font-display lowercase text-lg text-ink truncate">OpenShorts</a>
+        <a href="#app" className="font-display lowercase text-lg text-ink truncate">short<span className="text-gradient">kaar</span></a>
         <a href="#app" className="text-sm lowercase text-muted hover:text-ink transition-colors shrink-0">← <span className="hidden sm:inline">Back to app</span><span className="sm:hidden">back</span></a>
       </header>
       <main className="p-4 sm:p-6 md:p-8 pb-[max(2rem,env(safe-area-inset-bottom))]">
@@ -64,7 +65,7 @@ function DeletedView() {
           You're welcome back any time — signing up again with the same address
           starts a brand-new, empty account.
         </p>
-        <a href="#landing" className="btn-ghost px-4 py-2 inline-flex">Back to openshorts.app</a>
+        <a href="#app" className="btn-ghost px-4 py-2 inline-flex">Back to Shortkaar</a>
       </div>
     </div>
   );
@@ -77,12 +78,10 @@ function Root() {
     if (hash.startsWith('#/oauth/authorize')) return 'oauth';
     if (hash.startsWith('#/account')) return 'account';
     if (hash.startsWith('#/deleted')) return 'deleted';
-    if (hash.startsWith('#/pricing')) return 'pricing';
     if (hash === '#legal') return 'legal';
-    // #landing = explicit landing view (app logo); section anchors keep the landing mounted
-    if (['#landing', '#features', '#how-it-works', '#pricing', '#comparison', '#faq'].includes(hash)) return 'landing';
-    if (hash === '#app' || hash.startsWith('#app?') || localStorage.getItem('openshorts_skip_landing') === '1') return 'app';
-    return 'landing';
+    if (hash === '#landing') return 'landing';
+    // By default, always land directly in the App (bypassing cloud promotional landing and paywalls)
+    return 'app';
   };
 
   const [view, setView] = useState(resolveView);
@@ -115,6 +114,9 @@ function Root() {
 // would destroy the referrer and any UTM params we still need to read.
 captureAttribution();
 
+// The theme picked last time, before the first paint (no flash of Aurora).
+applySavedTheme();
+
 // Start whatever the visitor previously agreed to. Nothing at all on a first
 // visit: index.html only publishes the analytics initialiser, it never runs it.
 applyConsent();
@@ -125,7 +127,8 @@ createRoot(document.getElementById('root')).render(
       <Suspense fallback={<div className="min-h-screen bg-paper flex items-center justify-center text-muted text-sm lowercase">loading…</div>}>
         <Root />
       </Suspense>
-      <CookieBanner />
+      {/* No cookie banner: Shortkaar is a private tool with no analytics.
+      <CookieBanner /> */}
     </AuthProvider>
   </StrictMode>,
 )

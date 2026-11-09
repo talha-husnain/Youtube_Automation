@@ -1,53 +1,97 @@
-/* Hallmark · genre: atmospheric · theme: lumen (night foundry) · design-system: design.md · designed-as-app
- * macrostructure: Marquee Hero (marketing) / Workbench (app) / Long Document (content)
- * nav: N9 edge-aligned · footer: Ft5 statement · enrichment: filament apparatus (landing only)
- * pre-emit critique: P5 H4 E4 S5 R5 V4
+/* Shortkaar themes.
+ * Every component colours itself from these tokens, so a theme is only a
+ * set of variables. :root is the default (Aurora); the others apply through
+ * <html data-theme="...">, set by ThemePicker and remembered per browser.
+ * --color-accent / --color-accent-2 are the gradient pair used by primary
+ * buttons, the logo and highlighted headline text.
  */
 
 :root {
-  /* paper */
-  --color-paper: oklch(13% 0.014 265);
-  --color-paper-2: oklch(16.5% 0.015 265);
-  --color-paper-3: oklch(20% 0.016 265);
+  /* Aurora: near-black navy, violet to pink */
+  --color-paper: oklch(13.5% 0.022 278);
+  --color-paper-2: oklch(17% 0.026 278);
+  --color-paper-3: oklch(21.5% 0.03 278);
 
-  /* ink */
-  --color-ink: oklch(96% 0.006 262);
-  --color-ink-2: oklch(86% 0.01 262);
-  --color-muted: oklch(64% 0.012 262);
+  --color-ink: oklch(97% 0.006 278);
+  --color-ink-2: oklch(87% 0.012 278);
+  --color-muted: oklch(66% 0.02 278);
 
-  /* rules */
-  --color-rule: oklch(96% 0.006 262 / 0.08);
-  --color-rule-2: oklch(96% 0.006 262 / 0.14);
-  --rule-blueprint: oklch(96% 0.006 262 / 0.04);
+  --color-rule: oklch(90% 0.02 278 / 0.09);
+  --color-rule-2: oklch(90% 0.02 278 / 0.16);
+  --rule-blueprint: oklch(90% 0.02 278 / 0.04);
 
-  /* accents */
-  --color-accent: oklch(76% 0.17 50);
-  --color-accent-ink: oklch(17% 0.03 50);
-  --color-accent-2: oklch(68% 0.16 18);
-  --color-glow: oklch(80% 0.16 50 / 0.42);
-  --color-paper-emit: oklch(76% 0.17 50 / 0.04);
-  --color-focus: oklch(76% 0.17 50);
+  --color-accent: oklch(70% 0.2 292);
+  --color-accent-ink: oklch(99% 0 0);
+  --color-accent-2: oklch(68% 0.23 355);
+  --color-glow: oklch(70% 0.2 292 / 0.45);
+  --color-paper-emit: oklch(70% 0.2 292 / 0.05);
+  --color-focus: oklch(70% 0.2 292);
 
-  /* states */
-  --color-ok: oklch(75% 0.11 150);
-  --color-danger: oklch(66% 0.18 25);
-  --color-warn: oklch(78% 0.14 75);
+  --color-ok: oklch(78% 0.15 158);
+  --color-danger: oklch(67% 0.21 22);
+  --color-warn: oklch(82% 0.15 78);
 
-  /* type */
-  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
+  /* type: Montserrat ExtraBold is the face burned into the shorts' titles */
+  --font-display: "Montserrat", "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-body: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --text-display: clamp(3rem, 6vw + 1rem, 6rem);
-  --tracking-display: -0.032em;
+  --text-display: clamp(2.5rem, 5vw + 1rem, 5rem);
+  --tracking-display: -0.02em;
   --tracking-micro: 0.10em;
 
-  /* geometry */
-  --radius-card: 10px;
-  --radius-input: 8px;
+  --radius-card: 16px;
+  --radius-input: 12px;
 
-  /* motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur-short: 220ms;
   --dur-reveal: 600ms;
   --dur-pulse: 4s;
+}
+
+/* Ocean: deep slate, cyan to blue */
+:root[data-theme="ocean"] {
+  --color-paper: oklch(14% 0.02 245);
+  --color-paper-2: oklch(17.5% 0.025 245);
+  --color-paper-3: oklch(22% 0.03 245);
+  --color-muted: oklch(68% 0.025 240);
+  --color-rule: oklch(90% 0.03 240 / 0.09);
+  --color-rule-2: oklch(90% 0.03 240 / 0.16);
+  --color-accent: oklch(80% 0.13 210);
+  --color-accent-ink: oklch(18% 0.04 245);
+  --color-accent-2: oklch(66% 0.19 262);
+  --color-glow: oklch(80% 0.13 210 / 0.4);
+  --color-paper-emit: oklch(80% 0.13 210 / 0.05);
+  --color-focus: oklch(80% 0.13 210);
+}
+
+/* Sunset: warm charcoal, coral to amber */
+:root[data-theme="sunset"] {
+  --color-paper: oklch(14.5% 0.012 40);
+  --color-paper-2: oklch(18% 0.014 40);
+  --color-paper-3: oklch(22.5% 0.016 40);
+  --color-muted: oklch(68% 0.02 50);
+  --color-rule: oklch(92% 0.02 50 / 0.09);
+  --color-rule-2: oklch(92% 0.02 50 / 0.16);
+  --color-accent: oklch(72% 0.19 35);
+  --color-accent-ink: oklch(99% 0 0);
+  --color-accent-2: oklch(80% 0.16 72);
+  --color-glow: oklch(72% 0.19 35 / 0.42);
+  --color-paper-emit: oklch(72% 0.19 35 / 0.05);
+  --color-focus: oklch(72% 0.19 35);
+}
+
+/* Mint: dark teal-black, mint to teal */
+:root[data-theme="mint"] {
+  --color-paper: oklch(14% 0.016 190);
+  --color-paper-2: oklch(17.5% 0.02 190);
+  --color-paper-3: oklch(22% 0.024 190);
+  --color-muted: oklch(68% 0.025 185);
+  --color-rule: oklch(90% 0.03 180 / 0.09);
+  --color-rule-2: oklch(90% 0.03 180 / 0.16);
+  --color-accent: oklch(85% 0.15 165);
+  --color-accent-ink: oklch(18% 0.04 190);
+  --color-accent-2: oklch(72% 0.13 205);
+  --color-glow: oklch(85% 0.15 165 / 0.38);
+  --color-paper-emit: oklch(85% 0.15 165 / 0.05);
+  --color-focus: oklch(85% 0.15 165);
 }

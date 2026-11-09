@@ -1,3 +1,4 @@
+import functools
 import os
 import re
 import subprocess
@@ -148,7 +149,10 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
     return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration)
 
 
-def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0):
+_SOUND_TAG = re.compile(r"^\s*[\[(].*[\])]\s*$")
+
+
+def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0, fits=None):
     """
     Flatten transcript words for a clip range and group them into short blocks
     suitable for vertical video. Returns a list of blocks; each block is a list
@@ -157,17 +161,25 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
     Continuation fragments are merged defensively here too, because transcripts
     from old jobs on disk store unmerged tokens (the leading space is still
     present, so the boundary signal survives).
+
+    ``fits``: [word text] -> bool, True when those words fit on ONE caption line
+    (generate_ass's ``box``); a block never grows past it, so libass never wraps
+    a caption onto a second line below the safe area.
     """
     flat_words = []
     for segment in transcript.get('segments', []):
         flat_words.extend(segment.get('words', []))
+    # Before merging: a tag with no leading space would join the word before it.
+    flat_words = [w for w in flat_words if not _SOUND_TAG.match(str(w.get('word') or ''))]
     flat_words = merge_continuation_words(flat_words)
 
     words = []
     for word_info in flat_words:
         if word_info.get('end', 0) > clip_start and word_info.get('start', 0) < clip_end:
             cleaned_word = _normalize_subtitle_word(word_info.get('word', ''))
-            if not cleaned_word:
+            # "[Music]" / "[Applause]" are YouTube caption sound tags, not
+            # speech: burned, a Short showed "[MUSIC]" as its caption (14-oct-2026).
+            if not cleaned_word or _SOUND_TAG.match(cleaned_word):
                 continue
             words.append({
                 'word': cleaned_word,
@@ -178,6 +190,7 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
     blocks = []
     current_block = []
     block_start = None
+    phrases = max_chars >= 6          # 1-word (or tiny) styles are a deliberate rhythm: left as they are
 
     for word in words:
         if not current_block:
@@ -187,17 +200,90 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
 
         current_text_len = sum(len(w['word']) + 1 for w in current_block)
         duration = word['end'] - block_start
+        prev = current_block[-1]['word']
 
-        if current_text_len + len(word['word']) > max_chars or duration > max_duration:
+        def fit(ws):
+            return fits is None or fits([w['word'] for w in ws])
+        new_block = (current_text_len + len(word['word']) > max_chars or duration > max_duration
+                     or not fit(current_block + [word]))
+        carry = []
+        if phrases:
+            if _ends_sentence(prev, word['word']) or (prev.endswith(",") and current_text_len >= max_chars * 0.5):
+                new_block = True      # a new sentence (or clause) starts a new caption
+            elif new_block and _glued(prev, word['word']):
+                limit = max(max_chars * 1.35, max_chars + 4)
+                if (current_text_len + len(word['word']) <= limit and duration <= max_duration + 0.8
+                        and fit(current_block + [word])):
+                    new_block = False         # a little over, rather than split one phrase in two
+                elif len(current_block) >= 2 and fit(current_block[-1:] + [word]):
+                    # The phrase moves to the next caption whole: the last word and the words glued
+                    # to it ("Harbhajan Singh" + "ka"), while that still fits and one word stays behind.
+                    k = len(current_block) - 1
+                    while (k > 1 and _glued(current_block[k - 1]['word'], current_block[k]['word'])
+                           and sum(len(w['word']) + 1 for w in current_block[k - 1:]) + len(word['word']) <= limit
+                           and fit(current_block[k - 1:] + [word])):
+                        k -= 1
+                    carry = current_block[k:]
+                    del current_block[k:]
+
+        if new_block:
             blocks.append(current_block)
-            current_block = [word]
-            block_start = word['start']
+            current_block = carry + [word]
+            block_start = current_block[0]['start']
         else:
             current_block.append(word)
 
     if current_block:
         blocks.append(current_block)
     return blocks
+
+
+# Caption grouping by meaning (29-oct-2026, after Hypit's caption craft notes: keep a name, a number
+# and its unit, a negation together). Greedy grouping by length cut "Sharma | ne thoki" and
+# "35 | balls par": Urdu and Hindi postpositions and particles belong with the word BEFORE them.
+_TRAILING = {"ne", "ka", "ki", "ke", "ko", "se", "par", "pe", "mein", "me", "tak", "wala", "wali", "wale",
+             "bhi", "hi", "toh", "to", "nahi", "nahin", "hai", "hain", "tha", "thi", "the", "gaya", "gayi",
+             "gaye", "diya", "diye", "liya", "liye", "khilaf", "baad", "saath", "sath", "taraf", "andar"}
+# ...and these with the word AFTER them.
+_LEADING = {"a", "an", "the", "not", "no", "very", "sirf", "bas", "sabse", "mr", "dr", "vs"}
+
+# A full stop after these is not a sentence end (29-oct-2026): any word ending in "." started a new
+# caption, so "Dr. | Shoaib" and "Babar vs. | Kohli" were split, and the name after them lost its colour.
+_ABBREVIATIONS = {"dr", "mr", "mrs", "ms", "mx", "st", "vs", "v", "jr", "sr", "prof", "lt", "col", "gen", "capt",
+                  "sgt", "maj", "rev", "hon", "etc", "approx", "dept", "govt", "inc", "ltd", "co", "mt", "ft",
+                  "e.g", "i.e", "a.m", "p.m", "u.s", "u.k", "u.n", "ph.d"}
+
+
+def _ends_sentence(word, nxt=""):
+    """True when ``word`` ends a sentence: "?" or "!", or a full stop that is not an abbreviation
+    ("Dr.", "vs.", "etc."), an initial ("A.", "M.S." of M.S. Dhoni) or "No." before a number."""
+    w = re.sub(r"[\"')\]]+$", "", str(word or "").strip())
+    if not re.search(r"[.?!]$", w):
+        return False
+    if w.endswith(("?", "!")):
+        return True
+    core = w[:-1].lower().lstrip("(\"'[")
+    if core in _ABBREVIATIONS or re.fullmatch(r"(?:[a-z]\.)*[a-z]", core):
+        return False
+    return not (core == "no" and re.match(r"\W*\d", str(nxt or "")))
+
+
+def _bare(word):
+    return re.sub(r"[^\w%]", "", str(word)).lower()
+
+
+def _glued(prev, nxt):
+    """True when a caption break between these two words would split one phrase."""
+    p, n = _bare(prev), _bare(nxt)
+    if not p or not n:
+        return False
+    if n in _TRAILING or p in _LEADING:
+        return True
+    if re.fullmatch(r"\d[\d.,:/%]*", p) and re.search(r"[a-z]", n):
+        return True                                   # "35 balls", "5 wickets", "2018 mein"
+    # Two capitalised words in a row: a name ("Sri Lanka", "Glenn Maxwell"); not text in all capitals.
+    return (prev[:1].isupper() and nxt[:1].isupper() and not prev.isupper() and not nxt.isupper()
+            and p.isalpha() and n.isalpha())
 
 
 def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, max_duration=2.0):
@@ -251,6 +337,113 @@ AUTO_CAPTION_STYLE = {
     "max_chars": 16,
     "max_duration": 1.4,
 }
+
+# Generated Shorts (cricket, controversy, history teasers...): the same look, kept out of YouTube's own
+# overlay (29-oct-2026). Frames of real Shorts had the caption glyphs at y 1500-1650 of 1920 (1876 when a
+# block wrapped onto a second line), under the title, channel and subscribe row that cover the bottom
+# quarter on a phone, and lines reached x 1022, under the like/comment column (x > 888). Here a caption
+# is one line inside x 48-888 (YouTube's safe area), centred on the frame like the cards whenever it
+# fits in 192-888, else moved left just enough to end by 888, and it hangs from short_kit.CAPTION_TOP_PX,
+# which puts its glyphs at y ~1250-1430. Font 38 instead of 44: inside 192-888 at font 40, 2-word
+# phrases did not fit ("MAXWELL T20I" is 777 px) and captions went one word at a time; at 38 in 48-888
+# a caption holds about the 16 letters max_chars allows. CAPTION_SAFE=0 turns it off.
+SAFE_BOX = (48, 888)
+SHORTS_CAPTION_STYLE = {**AUTO_CAPTION_STYLE, "font_size": 38, "box": SAFE_BOX}
+
+
+def auto_caption_style():
+    """The caption look for this process: SHORTS_CAPTION_STYLE where a generated Short is captioned
+    (short_kit.finish and studio's reburn set CAPTION_EMPHASIS=1; the comedy clips never do), unless
+    CAPTION_SAFE=0; else AUTO_CAPTION_STYLE."""
+    flag = os.environ.get("CAPTION_SAFE") or os.environ.get("CAPTION_EMPHASIS") or "0"
+    return SHORTS_CAPTION_STYLE if flag.strip() == "1" else AUTO_CAPTION_STYLE
+
+
+# The canvas a ``box`` is given on (generated Shorts are 1080x1920) and the script's implicit width: the
+# caption scripts set PlayResY 288 only, so libass takes PlayResX 384 and margins are in those units.
+CANVAS_W, CANVAS_H, PLAYRES_X = 1080, 1920, 384
+# Fonts measured for ``box`` fitting: file in fonts/ and usWinAscent, usWinDescent, unitsPerEm from its
+# OS/2 and head tables. libass sizes a font so that ascent + descent fill the requested size (VSFilter's
+# rule), so an em is size * upm / (ascent + descent): Anton at Fontsize 37 drew "SIRF 31 BALLS PAR"
+# 961 px wide, as computed. The baseline sits ascent / (ascent + descent) of the size below the line top.
+_MEASURED_FONTS = {"Anton": ("Anton-Regular.ttf", 2876, 674, 2048),
+                   "Montserrat ExtraBold": ("Montserrat-ExtraBold.ttf", 1109, 453, 1000)}
+FIT_SLACK_PX = 12          # under libass's own wrap width, so rounding never wraps a line we measured
+
+
+@functools.lru_cache(maxsize=8)
+def _measure_font(font_name):
+    known = _MEASURED_FONTS.get(font_name)
+    if not known:
+        return None
+    try:
+        from PIL import ImageFont
+        _file, ascent, descent, upm = known
+        return (ImageFont.truetype(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", _file), 100),
+                (ascent + descent) / upm)
+    except (OSError, ImportError):
+        return None
+
+
+def _ascent_share(font_name):
+    """Where the baseline sits in a line of this font, as a share of its size (0.81 for Anton)."""
+    known = _MEASURED_FONTS.get(font_name)
+    return known[1] / (known[1] + known[2]) if known else 0.8
+
+
+def text_px(text, font_name, size_units, frame_h=CANVAS_H):
+    """How wide libass draws ``text`` (no outline) at Fontsize ``size_units`` of a PlayResY 288 script on a
+    ``frame_h`` frame, in pixels; None for a font this module does not ship."""
+    got = _measure_font(font_name)
+    if not got:
+        return None
+    font, ratio = got
+    em = size_units * frame_h / 288 / ratio
+    return font.getlength(str(text)) * em / 100
+
+
+# Named looks for /api/subtitle `preset` (and the MCP add_subtitles tool), in
+# request-field names. Mirrors the dashboard's CAPTION_PRESETS in
+# SubtitleModal.jsx (a test checks the ids): "default" is what every clip
+# ships with, the rest are the short-form looks trending in 2026.
+_PRESET_BASE = {"style": "karaoke", "font_color": "#FFFFFF", "bg_opacity": 0.0,
+                "base_opacity": 1.0, "reveal": False, "shadow": 0,
+                "max_duration": 1.4}
+CAPTION_PRESETS = {
+    "default": {**_PRESET_BASE, "font_name": "Anton", "font_size": 44,
+                "highlight_color": "#FFE500", "border_width": 4, "effect": "pop",
+                "uppercase": True, "max_chars": 16},
+    # Words appear as they are spoken, yellow active word, shadow.
+    "hormozi": {**_PRESET_BASE, "font_name": "Montserrat ExtraBold", "font_size": 44,
+                "highlight_color": "#FFE500", "border_width": 4, "shadow": 2,
+                "effect": "pop", "uppercase": True, "reveal": True, "max_chars": 9},
+    # Solid box behind the active word (CapCut / Submagic).
+    "pill": {**_PRESET_BASE, "font_name": "Montserrat ExtraBold", "font_size": 44,
+             "highlight_color": "#7C3AED", "border_width": 3, "effect": "highlight",
+             "uppercase": True, "max_chars": 9},
+    "lime": {**_PRESET_BASE, "font_name": "Montserrat ExtraBold", "font_size": 44,
+             "highlight_color": "#A3FF12", "border_width": 3, "effect": "highlight",
+             "uppercase": True, "max_chars": 9},
+    # One big word at a time.
+    "oneword": {**_PRESET_BASE, "font_name": "Anton", "font_size": 70,
+                "highlight_color": "#FFFFFF", "border_width": 5, "effect": "pop",
+                "uppercase": True, "max_chars": 1},
+    # No outline, soft shadow, sentence case.
+    "clean": {**_PRESET_BASE, "font_name": "Montserrat ExtraBold", "font_size": 34,
+              "highlight_color": "#FFFFFF", "border_width": 0, "shadow": 2,
+              "effect": "none", "uppercase": False, "base_opacity": 0.7,
+              "max_chars": 12},
+}
+
+# Characters per line at font size 44, per font (Anton is condensed,
+# Montserrat wide). Mirrors lineBudget in SubtitleModal.jsx.
+_LINE_CHARS = {"Anton": 16, "Montserrat ExtraBold": 9, "Impact": 16}
+
+
+def line_budget(font_name, font_size):
+    """max_chars that keeps one line inside the 9:16 frame at this size."""
+    size = _clamp_number(font_size, 10, 200, 44)
+    return max(6, round(_LINE_CHARS.get(font_name, 14) * 44 / size))
 
 
 # Named looks for /api/subtitle `preset` (and the MCP add_subtitles tool), in
@@ -344,6 +537,40 @@ def _dim_hex_color(hex_color, opacity, fallback="FFFFFF"):
     return f"{r:02X}{g:02X}{b:02X}"
 
 
+# Quality pass 2 (22-oct-2026): on generated Shorts the numbers and names in a caption carry a second
+# colour, the way pro caption styles mark the words a viewer should catch. Only where short_kit.finish
+# sets CAPTION_EMPHASIS=1: the comedy clips' captions stay as they are.
+EMPHASIS_COLOR = "#38E1FF"
+
+
+def _emphasised(words):
+    """Indexes of the words to colour: anything with a digit, and capitalised words that do not start a
+    sentence (Roman Urdu capitalises names: "Babar Azam", "Lahore")."""
+    out = set()
+    for j, w in enumerate(words):
+        bare = w.strip().strip("\"'()[]{},.!?;:")
+        if not bare:
+            continue
+        if re.search(r"\d", bare):
+            out.add(j)
+        elif len(bare) > 2 and bare[0].isupper() and not bare.isupper() and j > 0 \
+                and not _ends_sentence(words[j - 1], w):
+            out.add(j)
+    # A capitalised word before a marked name is the name's first half ("Babar" in "Babar Azam"), even at
+    # the start of a sentence, where the rule above leaves it out.
+    for j in sorted(out):
+        prev = words[j - 1].strip().strip("\"'()[]{},.!?;:") if j > 0 else ""
+        if prev[:1].isupper() and prev.lower() not in SENTENCE_STARTS and not words[j].strip()[:1].isdigit():
+            out.add(j - 1)
+    return out
+
+
+# Roman Urdu / Hindi words that open sentences: capitalised there, never the first half of a name.
+SENTENCE_STARTS = {"phir", "aaj", "ab", "yeh", "ye", "is", "us", "kya", "lekin", "magar", "aur", "jab", "woh",
+                   "wo", "ek", "hum", "main", "aap", "kal", "pehle", "sab", "kyun", "kaise", "agar", "to", "iske",
+                   "uske", "unhon", "inhon", "jo", "har", "kabhi", "sirf", "bas", "the", "in", "on", "at", "this"}
+
+
 def generate_ass(transcript, clip_start, clip_end, output_path,
                  max_chars=20, max_duration=2.0, alignment='bottom',
                  fontsize=16, font_name="Verdana", font_color="#FFFFFF",
@@ -351,7 +578,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                  highlight_color="#FFD700", bg_color="#000000", bg_opacity=0.0,
                  effect="none", base_opacity=1.0, uppercase=False,
                  margin_v=SAFE_MARGIN_V, split_ranges=None,
-                 reveal=False, shadow=0):
+                 reveal=False, shadow=0, box=None):
     """
     Generates a karaoke-style ASS file: each block is shown like the SRT path,
     but the currently spoken word is rendered in highlight_color (modern
@@ -370,15 +597,43 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     shadow: drop shadow depth in PlayRes units (0 = none). With border_width
     0 it is the soft "clean" look; a hard outline does not need it.
     max_chars=1 puts one word on screen at a time.
+    box: (left, right) in pixels of the 1080-wide canvas: every caption is one
+    line between them (the margins say where libass may draw, and blocks are
+    cut by their measured width, the active word's pop included, so libass
+    never wraps one; a single word too wide on its own is drawn smaller).
     """
-    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration)
-    if not blocks:
-        return False
-
     # Match the SRT burn path: PlayResY 288 keeps font sizes consistent.
     final_fontsize = int(_clamp_number(fontsize, 10, 200, 16) * 0.85)
     if final_fontsize < 10:
         final_fontsize = 10
+    safe_font = _sanitize_font_name(font_name)
+    border_width = _clamp_number(border_width, 0, 10, 2)
+
+    margin_l = margin_r = 10
+    width_of, room = None, None
+    if box:
+        left, right = sorted(float(v) for v in box)
+        margin_l = round(left * PLAYRES_X / CANVAS_W)
+        margin_r = round((CANVAS_W - right) * PLAYRES_X / CANVAS_W)
+        room = (PLAYRES_X - margin_l - margin_r) * CANVAS_W / PLAYRES_X - FIT_SLACK_PX
+        # The same right edge mirrored on the left: a caption that fits there stays on the frame's centre.
+        centred_l = max(margin_l, margin_r)
+        centred_room = (PLAYRES_X - centred_l - margin_r) * CANVAS_W / PLAYRES_X - FIT_SLACK_PX
+        # The outline is in PlayRes units too: 384 across, so ~2.8 px a unit on each side.
+        outline_x = 2 * border_width * CANVAS_W / PLAYRES_X
+        grow = 0.08 if effect == "pop" else 0.0             # the active word pops to 108%
+
+        def width_of(words):
+            texts = [_escape_ass_text(w).upper() if uppercase else _escape_ass_text(w) for w in words]
+            line = text_px(" ".join(texts), safe_font, final_fontsize)
+            if line is None:                 # a font we cannot measure: the old character budget only
+                return 0.0
+            return line + outline_x + grow * max(text_px(t, safe_font, final_fontsize) for t in texts)
+
+    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration,
+                                  fits=(lambda ws: width_of(ws) <= room) if box else None)
+    if not blocks:
+        return False
 
     align_map = {'top': 8, 'middle': 5, 'bottom': 2}
     ass_alignment = align_map.get(str(alignment).lower(), 2)
@@ -439,8 +694,11 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     elif effect == "pop":
         # Gentle pop. The old 75->112 range started the word so small that any
         # frame caught mid-animation read as a sizing bug rather than a beat.
+        # It settles back to 100% (29-oct-2026): held at 108% the spoken word
+        # stood taller than its line for as long as it was said.
         active_prefix = (f"{{\\c{highlight_inline}"
-                         f"\\fscx90\\fscy90\\t(0,110,\\fscx108\\fscy108)}}")
+                         f"\\fscx90\\fscy90\\t(0,110,\\fscx108\\fscy108)"
+                         f"\\t(110,200,\\fscx100\\fscy100)}}")
     else:
         active_prefix = f"{{\\c{highlight_inline}}}"
 
@@ -454,7 +712,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
             f"Style: Active,{safe_font},{final_fontsize},"
             f"{hex_to_ass_color(on_box, 1.0)},{hex_to_ass_color(on_box, 1.0)},"
             f"{box_colour},{box_colour},1,0,0,0,100,100,0,0,3,{pad},0,"
-            f"{ass_alignment},10,10,{int(_clamp_number(margin_v, 0, 200, SAFE_MARGIN_V))},1\n"
+            f"{ass_alignment},{margin_l},{margin_r},{int(_clamp_number(margin_v, 0, 270, SAFE_MARGIN_V))},1\n"
         )
 
     header = (
@@ -471,7 +729,8 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{safe_font},{final_fontsize},{primary_colour},{primary_colour},"
         f"{outline_colour},{back_colour},1,0,0,0,100,100,0,0,{border_style},"
-        f"{outline_width},{shadow},{ass_alignment},10,10,{int(_clamp_number(margin_v, 0, 200, SAFE_MARGIN_V))},1\n"
+        f"{outline_width},{shadow},{ass_alignment},{margin_l},{margin_r},"
+        f"{int(_clamp_number(margin_v, 0, 270, SAFE_MARGIN_V))},1\n"
         f"{active_style}"
         "\n"
         "[Events]\n"
@@ -479,7 +738,30 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     )
 
     events = []
+    emphasis = os.environ.get("CAPTION_EMPHASIS", "0").strip() == "1"
+    emph_inline = _hex_to_ass_inline_color(EMPHASIS_COLOR, fallback="38E1FF")
     for block in blocks:
+        marked = _emphasised([w['word'] for w in block]) if emphasis else set()
+        # Only a single word can be wider than the box (blocks are cut to fit): it is drawn
+        # smaller, and \r (back to the style) brings the size back after each word. Hung from
+        # the top, a smaller line would sit higher: its own MarginV keeps it on the same baseline.
+        # Each caption gets its own margins: centred on the frame when it fits the centred box,
+        # else a box ending at the right limit and just wide enough for it.
+        size, reset, line_l, line_r, line_v = "", "{\\r}", 0, 0, 0
+        if box:
+            need = width_of([w['word'] for w in block])
+            if need > room:
+                smaller = max(10, int(final_fontsize * room / need))
+                size, reset = f"\\fs{smaller}", f"{{\\r\\fs{smaller}}}"
+                if ass_alignment == 8:
+                    line_v = round(int(_clamp_number(margin_v, 0, 270, SAFE_MARGIN_V))
+                                   + _ascent_share(safe_font) * (final_fontsize - smaller))
+            line_r = margin_r
+            if need <= centred_room:
+                line_l = centred_l
+            else:
+                spare = max(0.0, room - need) * PLAYRES_X / CANVAS_W
+                line_l = max(margin_l, int(margin_l + spare))
         for i, word in enumerate(block):
             # Event runs until the next word starts (no flicker in gaps);
             # the last word holds until the block ends.
@@ -494,15 +776,17 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                 if uppercase:
                     text = text.upper()
                 if j == i:
-                    parts.append(f"{active_prefix}{text}{{\\r}}")
+                    parts.append(f"{active_prefix}{text}{reset}")
                 elif reveal and j > i:
-                    parts.append(f"{{\\alpha&HFF&}}{text}{{\\r}}")
+                    parts.append(f"{{\\alpha&HFF&}}{text}{reset}")
+                elif j in marked:
+                    parts.append(f"{{\\c{emph_inline}}}{text}{reset}")
                 else:
                     parts.append(text)
 
             events.append(
-                f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,0,,"
-                f"{seam_prefix(ev_start)}{' '.join(parts)}"
+                f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,{line_l},{line_r},{line_v},,"
+                f"{seam_prefix(ev_start)}{'{' + size + '}' if size else ''}{' '.join(parts)}"
             )
 
     if not events:

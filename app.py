@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import time
 import zipfile
+import io
 import math
 import itertools
 import functools
@@ -843,12 +844,12 @@ def _unmark_local_job(job_id, clip_index, clean_filename):
         ready[clip_index] = clean_filename
     for meta_path in glob.glob(os.path.join(job_dir, "*_metadata.json")):
         try:
-            with open(meta_path, 'r') as f:
+            with open(meta_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             shorts = data.get('shorts', [])
             if clip_index < len(shorts):
                 shorts[clip_index]['video_url'] = url
-                with open(meta_path, 'w') as f:
+                with open(meta_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=4)
         except Exception as e:
             print(f"⚠️ Could not unmark metadata of {job_id}: {e}")
@@ -876,7 +877,7 @@ def _reapply_captions(job_id, clip_index, video_path):
         meta_files = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
         if not meta_files:
             return None
-        with open(meta_files[0], 'r') as f:
+        with open(meta_files[0], 'r', encoding='utf-8') as f:
             data = json.load(f)
         transcript = data.get('transcript')
         clips = data.get('shorts', [])
@@ -923,7 +924,7 @@ def _recover_jobs_from_disk():
         if not json_files:
             continue
         try:
-            with open(json_files[0], 'r') as f:
+            with open(json_files[0], 'r', encoding='utf-8') as f:
                 data = json.load(f)
             base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
             clips = data.get('shorts', [])
@@ -935,7 +936,7 @@ def _recover_jobs_from_disk():
             owner = None
             owner_path = os.path.join(job_path, ".owner")
             if os.path.exists(owner_path):
-                with open(owner_path) as f:
+                with open(owner_path, 'r', encoding='utf-8') as f:
                     raw = f.read().strip()
                 owner = int(raw) if raw.isdigit() else (raw or None)
             jobs[job_id] = {
@@ -943,7 +944,8 @@ def _recover_jobs_from_disk():
                 'logs': _TimedLog(["♻️ Job recovered from disk after server restart."]),
                 'output_dir': job_path,
                 'user_id': owner,
-                'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
+                'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis'),
+                       'output_format': data.get('output_format')},
             }
             recovered += 1
         except Exception as e:
@@ -959,6 +961,12 @@ def _recover_jobs_from_disk():
 # instead of vanish. Bounded by MAX_RESUME_ATTEMPTS so a video that reliably
 # crashes the worker can't crashloop the service.
 _RESUME_FILE = ".resume.json"
+# Video types (CONTENT_GENRE): comedy is the main pipeline; the others are
+# song_shorts.py, movie_dub.py and cricket_shorts.py.
+CONTENT_GENRES = ("comedy", "songs", "movies", "cricket", "quiz", "music", "controversy", "history", "quran", "money",
+                  "toons")
+# Made from nothing but a prompt (main.py --generate): no link, no upload.
+GENERATED_GENRES = ("cricket", "quiz", "music", "controversy", "history", "quran", "money", "toons")
 MAX_RESUME_ATTEMPTS = 2
 
 # --- Deploy handover (two instances, one disk) -------------------------------
@@ -1238,7 +1246,9 @@ def _install_drain_signal_handler():
     try:
         loop.add_signal_handler(signal.SIGTERM, on_sigterm)
     except (NotImplementedError, RuntimeError, ValueError) as e:
-        print(f"⚠️ Drain-on-SIGTERM unavailable ({e}); jobs will resume on restart instead.")
+        # Windows event loops have no signal handlers (a bare NotImplementedError: the line read "()").
+        print(f"ℹ️ Drain-on-SIGTERM unavailable ({type(e).__name__}{': ' + str(e) if str(e) else ''}); "
+              f"jobs will resume on restart instead.")
 
 
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
@@ -1314,7 +1324,7 @@ def _resume_interrupted_jobs() -> set:
         # at every terminal state), so a metadata file next to it means the job
         # was stopped mid-render, not that it finished: resume it too.
         try:
-            with open(manifest_path) as f:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
                 m = json.load(f)
         except Exception as e:
             print(f"⚠️ Bad resume manifest for {job_id}: {e}")
@@ -1326,6 +1336,21 @@ def _resume_interrupted_jobs() -> set:
             continue  # already ours (queued, running or recovered)
         if _manifest_busy_elsewhere(m):
             continue  # the other instance is on it; we take over if it goes stale
+        if not BILLING_ENABLED:
+            # On the laptop every copy of the app shares INSTANCE_ID, so a fresh
+            # heartbeat under our own id is another live process (the server,
+            # while mcp_stdio or its test starts): resuming re-ran the server's
+            # running job in its own folder (18-oct-2026). After a real restart
+            # the heartbeat goes stale within a minute and the next scan resumes it.
+            if time.time() - float(m.get("heartbeat") or 0) < HEARTBEAT_STALE_AFTER:
+                continue
+            if "--generate" in (m.get("cmd") or []):
+                # A generated Short's genre, topic and voice live only in the
+                # job's env, which the manifest does not keep: a controversy job
+                # came back as a cricket one with no topic and failed. Dropped:
+                # my_channels sees it lost and makes the next video.
+                _clear_resume_manifest(job_id)
+                continue
 
         attempts = int(m.get("attempts", 0)) + 1
         user_id = m.get("user_id")
@@ -1373,7 +1398,7 @@ def _resume_interrupted_jobs() -> set:
 
         m["attempts"] = attempts
         try:
-            with open(manifest_path, "w") as f:
+            with open(manifest_path, "w", encoding='utf-8') as f:
                 json.dump(m, f)
         except Exception:
             pass
@@ -1440,12 +1465,24 @@ def _upload_job_id(filename: str) -> str:
     return filename.split("_", 1)[0]
 
 
+# A job's folder is named by its uuid4 (saas_ / saas_actors_ for SaaSShorts).
+# Everything else in output/ is state the sweeps must never touch: on
+# 18-oct-2026 the 24 h sweep deleted output/channels (five channels' Google
+# connections and upload logs), whose own mtime only changes when a channel
+# is added. flags/ and stock_cache/ were next.
+_JOB_DIR = re.compile(r"(?:saas_(?:actors_)?)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def _is_job_dir(name) -> bool:
+    return bool(_JOB_DIR.fullmatch(name or ""))
+
+
 def _sweep_expired_job_dirs(now):
     """Drop job dirs older than JOB_RETENTION_SECONDS, except live jobs."""
     for job_id in os.listdir(OUTPUT_DIR):
-        # Not a job: the thumbnails dir backs a StaticFiles mount, so
-        # deleting it would 500 every /thumbnails request until reboot.
-        if job_id == os.path.basename(THUMBNAILS_DIR):
+        # Not a job (thumbnails backs a StaticFiles mount; channels, flags and
+        # stock_cache are state): left alone.
+        if not _is_job_dir(job_id):
             continue
         job_path = os.path.join(OUTPUT_DIR, job_id)
         if not os.path.isdir(job_path):
@@ -1456,9 +1493,33 @@ def _sweep_expired_job_dirs(now):
             continue
         if not expired or _job_is_active(job_id, now):
             continue
+        if not BILLING_ENABLED and _waiting_to_post(job_id, job_path, now):
+            continue
         print(f"🧹 Purging old job: {job_id}")
         shutil.rmtree(job_path, ignore_errors=True)
         jobs.pop(job_id, None)
+
+
+def _waiting_to_post(job_id, job_path, now):
+    """A Short of this job is still in Ready to post (kept up to a week)."""
+    try:
+        import post_queue
+        metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
+        if not metas:
+            return False
+        src = _job_source(job_path)
+        if src.get("genre") == "studio_upload":          # the owner's own video in the Studio (ai_editor.py)
+            return now < float(src.get("keep_until") or 0)
+        if src.get("genre") == "long":
+            return now - os.path.getmtime(job_path) < post_queue.KEEP_DAYS * 86400
+        if src.get("channel") not in (None, "", "main"):
+            import my_channels
+            return my_channels.keeps(job_id, src["channel"], now - os.path.getmtime(job_path))
+        with open(metas[0], encoding="utf-8") as f:
+            n = len(json.load(f).get("shorts") or [])
+        return post_queue.keeps(job_id, n, now - os.path.getmtime(job_path))
+    except Exception:  # noqa: BLE001 — the sweep goes on as before
+        return False
 
 
 def _sweep_expired_uploads(now):
@@ -1515,10 +1576,9 @@ def _enforce_output_size_cap():
     used = _dir_size(OUTPUT_DIR)
     if used <= cap:
         return
-    thumbs = os.path.basename(THUMBNAILS_DIR)
     candidates = []
     for job_id in os.listdir(OUTPUT_DIR):
-        if job_id == thumbs:
+        if not _is_job_dir(job_id):            # thumbnails, channels, caches: never trimmed
             continue
         p = os.path.join(OUTPUT_DIR, job_id)
         if os.path.isdir(p) and not _job_is_active(job_id):
@@ -1555,7 +1615,7 @@ def _sweep_retained_sources(now=None):
             metas = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
             if not metas:
                 continue
-            with open(metas[0]) as f:
+            with open(metas[0], 'r', encoding='utf-8') as f:
                 name = json.load(f).get('source_video')
             if not name:
                 continue
@@ -1973,6 +2033,23 @@ _ERROR_MARKERS = ("❌", "ERROR:", "Error:", "Traceback", "FATAL", "Exception",
                   "Reframe v2 failed")
 
 
+def _job_reason(job_id):
+    """The one-line reason a job failed ("Not enough reliable sources..."), from
+    its log, for the Channels and Today pages; None when there is none."""
+    for ln in reversed((jobs.get(job_id) or {}).get("logs") or []):
+        m = re.search(r"\b(?:RuntimeError|ValueError|HTTPException|Exception): (.+)", ln)
+        if m:
+            return m.group(1).strip()[:160]
+        # Any other exception keeps its class name: "ConnectError: [Errno 11001]
+        # getaddrinfo failed" and "ServerError: 503 UNAVAILABLE" read as "the job
+        # failed" before, so my_channels.TRANSIENT never saw an outage and it
+        # used up one of the day's tries (a song on 18-oct-2026).
+        m = re.search(r"\b([A-Z]\w*(?:Error|Exception|Timeout)): (.+)", ln)
+        if m and "Traceback" not in ln:
+            return f"{m.group(1)}: {m.group(2).strip()}"[:160]
+    return None
+
+
 def _job_error_text(logs) -> str:
     """The lines that explain WHY a job failed, for the alert's classifier.
 
@@ -2291,6 +2368,44 @@ async def lifespan(app: FastAPI):
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
         asyncio.create_task(_alerts.proxy_watch_loop())
+    elif os.environ.get("AUTOPILOT_LOCAL", "1").strip() != "0":
+        # Self-host Autopilot: daily Shorts + uploads into posting times.
+        # AUTOPILOT_LOCAL=0 for any second copy of the app (mcp_stdio, tests):
+        # one started by the MCP test ran a claim check and a learning pass
+        # on the real output/ files with the owner's token (14-oct-2026), and
+        # could as well have started the daily jobs or uploads twice.
+        import autopilot_local
+        asyncio.create_task(autopilot_local.loop_forever(
+            _autopilot_submit, _job_clips, is_active=lambda: not _draining,
+            build_weekly=_autopilot_weekly, to_phone=(_plan_items, _send_to_phone),
+            post_ready=_auto_post_ready, check_claims=_check_claims))
+        # The owner's other channels (my_channels.py): their own loop, so the
+        # main channel's Autopilot above runs exactly as before.
+        import my_channels
+        import short_kit
+        my_channels.failure_reason = _job_reason
+        my_channels.cancel_job = _cancel_job
+        # Telegram replies become AI edits (my_channels.telegram_reply); the poll runs in a thread.
+        global _main_loop
+        _main_loop = asyncio.get_running_loop()
+        my_channels.start_ai_edit = _phone_ai_edit
+        import reminders
+        import youtube_account as _ya
+        _ya.on_dead = reminders.connection_lost
+        try:
+            my_channels.move_old_folder()
+        except Exception as e:  # noqa: BLE001 — the files stay where they were
+            print(f"⚠️ Could not move output/channels: {e}")
+        asyncio.create_task(my_channels.loop_forever(
+            _autopilot_submit, _job_clips, OUTPUT_DIR, short_kit.gemini, is_active=lambda: not _draining,
+            today_fn=_today))
+        asyncio.create_task(_stay_awake_loop())
+        asyncio.create_task(_restart_notice())
+        # Outside heartbeat (HEALTHCHECK_URL, off when unset): the alert for a laptop that is off,
+        # asleep or offline has to come from somewhere else.
+        import heartbeat
+        asyncio.create_task(heartbeat.loop_forever(
+            lambda: {"Autopilot": autopilot_local.last_tick, "Channels": my_channels.last_tick}))
     yield
     # Cleanup (optional: cancel worker)
 
@@ -2477,6 +2592,38 @@ def enqueue_output(out, job_id):
     finally:
         out.close()
 
+# job id -> its Popen while it runs, so a job someone gave up on can be stopped (_cancel_job).
+_procs = {}
+
+
+def _kill_tree(process):
+    """Stop a job's process and its children. On Windows the venv's python.exe is a launcher whose
+    child runs main.py, and kill() stops only the launcher."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, timeout=30)
+        else:
+            process.kill()
+    except Exception:  # noqa: BLE001
+        try:
+            process.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _cancel_job(job_id, why="stopped"):
+    """Stop a running job; True when a process was stopped. my_channels calls it for a job past
+    its time: a history job hung 4.5 h on a dead connection while marked "took too long" after 3 h,
+    its process still holding a job slot (29-oct-2026)."""
+    process = _procs.get(job_id)
+    if process is None or process.poll() is not None:
+        return False
+    _kill_tree(process)
+    if job_id in jobs:
+        jobs[job_id]['logs'].append(f"⏹️ Job {why}.")
+    return True
+
+
 async def run_job(job_id, job_data):
     """Executes the subprocess for a specific job."""
     
@@ -2496,7 +2643,8 @@ async def run_job(job_id, job_data):
             env=env,
             cwd=os.getcwd()
         )
-        
+        _procs[job_id] = process
+
         # We need to capture logs in a thread because Popen isn't async
         t_log = threading.Thread(target=enqueue_output, args=(process.stdout, job_id))
         t_log.daemon = True
@@ -2511,10 +2659,7 @@ async def run_job(job_id, job_data):
             except asyncio.CancelledError:
                 # Shutting down: stop the child so it cannot keep writing into
                 # the job dir while the next instance resumes the same job.
-                try:
-                    process.kill()
-                except Exception:
-                    pass
+                _kill_tree(process)
                 raise
             if time.time() - last_heartbeat >= HEARTBEAT_EVERY:
                 _touch_manifest(job_id)
@@ -2530,7 +2675,7 @@ async def run_job(job_id, job_data):
                     # Use a lock or just robust read? json.load might fail if file is partial.
                     # Usually main.py writes it once at start (based on my review).
                     if os.path.getsize(target_json) > 0:
-                        with open(target_json, 'r') as f:
+                        with open(target_json, 'r', encoding='utf-8') as f:
                             data = json.load(f)
                             
                         base_name = os.path.basename(target_json).replace('_metadata.json', '')
@@ -2556,7 +2701,8 @@ async def run_job(job_id, job_data):
                                  ready_clips.append(clip)
                         
                         if ready_clips:
-                             jobs[job_id]['result'] = {'clips': ready_clips, 'cost_analysis': cost_analysis}
+                             jobs[job_id]['result'] = {'clips': ready_clips, 'cost_analysis': cost_analysis,
+                                                      'output_format': data.get('output_format')}
             except Exception as e:
                 # Ignore read errors during processing
                 pass
@@ -2581,7 +2727,7 @@ async def run_job(job_id, job_data):
                     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
             if json_files:
                 target_json = json_files[0] 
-                with open(target_json, 'r') as f:
+                with open(target_json, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
                 # Enhance result with video URLs
@@ -2601,7 +2747,8 @@ async def run_job(job_id, job_data):
                     if missing:
                         jobs[job_id]['logs'].append(
                             f"⚠️ {missing} of {len(clips)} clips failed to render.")
-                    jobs[job_id]['result'] = {'clips': rendered, 'cost_analysis': cost_analysis}
+                    jobs[job_id]['result'] = {'clips': rendered, 'cost_analysis': cost_analysis,
+                                               'output_format': data.get('output_format')}
             else:
                  jobs[job_id]['status'] = 'failed'
                  jobs[job_id]['logs'].append("No metadata file generated.")
@@ -2614,6 +2761,8 @@ async def run_job(job_id, job_data):
         # Exception text can embed URLs with credentials (e.g. the proxy URL
         # inside a yt-dlp/httpx error) — scrub before it reaches client logs.
         jobs[job_id]['logs'].append(_scrub_secrets(f"Execution error: {str(e)}"))
+    finally:
+        _procs.pop(job_id, None)
 
 @app.get("/health")
 async def health():
@@ -2644,7 +2793,2191 @@ async def get_config():
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        # Self-host only: GEMINI_API_KEY is set in the server's .env, so
+        # resolve_gemini() falls back to it and the dashboard must not ask.
+        "serverGeminiKey": (not BILLING_ENABLED) and bool(os.environ.get("GEMINI_API_KEY")),
+        # Royalty-free tracks the user put in the music folder (short_kit.MUSIC_DIR).
+        "musicTracks": len(__import__("short_kit").music_tracks()),
     }
+
+
+@app.get("/api/cricket/ideas")
+async def cricket_ideas():
+    """Cricket Short ideas for this week (Google-grounded), self-host only."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not available")
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise HTTPException(status_code=400, detail="GEMINI_API_KEY is not set in .env")
+    import cricket_shorts
+    import short_kit
+    try:
+        found = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: cricket_shorts.ideas(short_kit.gemini()))
+    except Exception as e:  # noqa: BLE001 — the box still works without ideas
+        raise HTTPException(status_code=502, detail=f"Could not fetch ideas: {type(e).__name__}")
+    return {"ideas": found}
+
+# ---------------------------------------------------------------- channel tools
+# Self-host only (Shortkaar): video finder, YouTube account, "what works"
+# report and the daily Autopilot. Cloud mode has its own versions or none.
+
+def _local_only():
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not available")
+
+
+async def _in_thread(fn, *args):
+    return await asyncio.get_event_loop().run_in_executor(None, functools.partial(fn, *args))
+
+
+@app.get("/api/finder/search")
+async def finder_search(q: str, duration: str = "any", date: str = "any", sort: str = "relevance",
+                        cc: str = "1"):
+    """YouTube search with the Creative Commons filter (channel_tools.search)."""
+    _local_only()
+    import channel_tools
+    import used_moments
+    if duration not in channel_tools.DURATIONS or date not in channel_tools.DATES \
+            or sort not in channel_tools.SORTS:
+        raise HTTPException(status_code=400, detail="Unknown filter")
+    try:
+        found = await _in_thread(channel_tools.search, q, cc != "0", duration, date, sort)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"YouTube search failed: {type(e).__name__}")
+    for v in found:
+        v["used"] = used_moments.summary(v["url"])
+    return {"results": found}
+
+
+@app.get("/api/finder/licence")
+async def finder_licence(url: str):
+    """Is this video reuse-allowed, and how much of it is already used."""
+    _local_only()
+    import channel_tools
+    import used_moments
+    if not used_moments.video_id(url):
+        raise HTTPException(status_code=400, detail="Not a YouTube video link")
+    out = await _in_thread(channel_tools.licence, url)
+    return {**out, "used": used_moments.summary(url)}
+
+
+@app.get("/api/finder/channel")
+async def finder_channel(url: str):
+    _local_only()
+    import channel_tools
+    if not channel_tools.channel_url(url):
+        raise HTTPException(status_code=400, detail="Paste a YouTube channel link or @handle")
+    try:
+        return await _in_thread(channel_tools.channel_info, url)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=channel_tools.why_not(e))
+
+
+async def _restart_notice():
+    """When autostart.bat's watchdog had to start the server again, tell the
+    owner once it is up (restart_notice.py; a silent crash loop looked healthy)."""
+    await asyncio.sleep(30)
+    try:
+        import restart_notice
+        sent = await asyncio.get_running_loop().run_in_executor(None, restart_notice.announce_restart)
+        if sent is not None:
+            print(f"📣 Restart notice sent ({', '.join(sent) or 'nothing connected'})")
+    except Exception as e:  # noqa: BLE001 — a notice never stops the server
+        print(f"⚠️ Restart notice failed: {type(e).__name__}: {e}")
+
+
+async def _stay_awake_loop():
+    """keep_awake.refresh each minute on the event loop's own thread (Windows
+    ties the stay-awake request to the thread that made it)."""
+    import keep_awake
+    while True:
+        try:
+            working = any((j or {}).get("status") in ("queued", "processing") for j in list(jobs.values()))
+            keep_awake.refresh(working)
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️ Stay-awake error: {type(e).__name__}: {e}")
+        await asyncio.sleep(60)
+
+
+def _job_clips(job_id):
+    """(status, [{index, path, title, description, tags, genre, ai_made}]) of a job."""
+    job_path = os.path.join(OUTPUT_DIR, job_id)
+    state = (jobs.get(job_id) or {}).get("status")
+    metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
+    if not metas:
+        return state or "missing", []
+    if state is None and not os.path.isfile(os.path.join(job_path, _RESUME_FILE)):
+        state = "completed"
+    try:
+        with open(metas[0], encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return state, []
+    base = os.path.basename(metas[0]).replace("_metadata.json", "")
+    genre = data.get("genre") or ("comedy" if not data.get("compilation") else "comedy")
+    out = []
+    for i, c in enumerate(data.get("shorts") or []):
+        name = _canonical_clip_file(job_path, base, i)
+        if not name or not os.path.isfile(os.path.join(job_path, name)):
+            continue
+        out.append({"index": i, "path": os.path.join(job_path, name), "name": name,
+                    "title": c.get("seo_title") or c.get("video_title_for_youtube_short") or "Short",
+                    "description": c.get("seo_description") or "",
+                    "tags": c.get("seo_tags") or [], "genre": genre,
+                    "hook": c.get("video_title_for_youtube_short") or "", "take": c.get("ai_take") or "",
+                    "opening": c.get("viral_hook_text") or "",
+                    "tiktok": c.get("video_description_for_tiktok") or "",
+                    "instagram": c.get("video_description_for_instagram") or "",
+                    # An AI-edited clip keeps its place in the source (start/end) and its new length here.
+                    "seconds": round(float(c.get("seconds") or (float(c.get("end", 0)) - float(c.get("start", 0)))), 1),
+                    # The Short's own question for the first comment (engage.py),
+                    # and a quiz's answers so replies can say who got it right.
+                    "question": (c.get("comment_question") or (c.get("cricket_topic") or {}).get("question")
+                                 or (c.get("cricket") or {}).get("question") or ""),
+                    "answers": (c.get("quiz") or {}).get("answers") or [],
+                    # Dubbed actors say lines they never said, and an AI song's
+                    # voice is a realistic voice nobody sang: YouTube asks for the label.
+                    # A history video says so itself when it used AI pictures.
+                    "ai_made": genre in ("movies", "music") or bool(c.get("ai_made")),
+                    "thumbnail": (os.path.join(job_path, c["thumbnail_file"])
+                                  if c.get("thumbnail_file")
+                                  and os.path.isfile(os.path.join(job_path, c["thumbnail_file"])) else None),
+                    # A long video's own caption track (history_videos.write_srt).
+                    "captions": (os.path.join(job_path, c["captions_file"])
+                                 if c.get("captions_file")
+                                 and os.path.isfile(os.path.join(job_path, c["captions_file"])) else None),
+                    "captions_language": c.get("captions_language") or "ur",
+                    "captions_extra": [(os.path.join(job_path, x["file"]), x.get("language") or "en")
+                                       for x in c.get("captions_extra") or []
+                                       if x.get("file") and os.path.isfile(os.path.join(job_path, x["file"]))]})
+    return state, out
+
+
+async def _autopilot_submit(payload):
+    """Start one job through the normal /api/process (Autopilot)."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://shortkaar.local") as client:
+        r = await client.post("/api/process", json=payload, timeout=180,
+                              headers={"X-Shortkaar-Autopilot": "1"})
+    if r.status_code != 200:
+        raise RuntimeError(f"{r.status_code}: {r.text[:200]}")
+    data = r.json()
+    if data.get("needs_confirmation"):
+        # The quality gate: a low-resolution source makes blurry Shorts, so
+        # unattended jobs skip it instead of forcing it through.
+        q = data.get("quality_check") or {}
+        raise RuntimeError(f"video quality too low ({q.get('max_height', '?')}p), skipped")
+    return data["job_id"]
+
+
+@app.get("/api/youtube/status")
+async def youtube_status():
+    _local_only()
+    import youtube_account
+    return youtube_account.status()
+
+
+@app.get("/api/youtube/connect")
+async def youtube_connect(back: str = "", channel: str = ""):
+    """Google's sign-in for the main channel, or for ``channel`` (my_channels)."""
+    _local_only()
+    import youtube_account
+    from fastapi.responses import RedirectResponse
+    acct = None
+    if channel and channel != "main":
+        import my_channels
+        if not my_channels.get(channel):
+            raise HTTPException(status_code=404, detail="Unknown channel.")
+        acct = my_channels.account(channel)
+    try:
+        return RedirectResponse(youtube_account.auth_url(back, acct))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _refuse_same_channel(me, account):
+    """A YouTube channel connects to one place only: picking Punchline Bazaar
+    again on Google's screen for a new channel would post its Shorts there."""
+    import my_channels
+    import youtube_account
+    here = (account or {}).get("id") or "main"
+    if here != "main":
+        why = my_channels.wrong_pick(here, me)
+        if why:
+            return why
+    places = [("main", None, "your main channel")] + [
+        (c["id"], my_channels.account(c["id"]), c["name"]) for c in my_channels.channels()]
+    for cid, acct, name in places:
+        if cid == here:
+            continue
+        with youtube_account.use(acct):
+            other = youtube_account.status().get("channel") or {}
+        if other.get("id") and other["id"] == me.get("id"):
+            return (f"That is {me.get('title') or 'a channel'}, already connected here as {name}. "
+                    "Press Connect again and pick the other channel on Google's screen "
+                    "(channels you made are listed under your account).")
+    return None
+
+
+@app.get("/api/meta/status")
+async def meta_status():
+    """Facebook / Instagram cross-posting: connected?, the Pages (and their Instagram), the queue."""
+    _local_only()
+    import meta_publish
+    st = meta_publish.status()
+    st["redirect"] = meta_publish.redirect_uri()
+    st["queue"] = [{k: q.get(k) for k in ("id", "channel", "page", "ig_page", "caption", "at", "seconds", "fb", "ig")}
+                   for q in meta_publish.queue()][-50:]
+    return st
+
+
+@app.get("/api/meta/connect")
+async def meta_connect(back: str = ""):
+    _local_only()
+    import meta_publish
+    from fastapi.responses import RedirectResponse
+    try:
+        return RedirectResponse(meta_publish.auth_url(back))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/meta/callback")
+async def meta_callback(code: str = "", state: str = "", error: str = "", error_description: str = ""):
+    _local_only()
+    import urllib.parse
+    import meta_publish
+    import youtube_account
+    from fastapi.responses import RedirectResponse
+    origin = meta_publish.back_for(state)
+    if error or not code:
+        return RedirectResponse(youtube_account.back_url(
+            origin, "meta_error=" + urllib.parse.quote((error_description or error or "cancelled")[:200]), "channels"))
+    try:
+        await _in_thread(meta_publish.finish_connect, code, state)
+    except Exception as e:  # noqa: BLE001
+        return RedirectResponse(youtube_account.back_url(origin, "meta_error=" + urllib.parse.quote(str(e)[:200]),
+                                                         "channels"))
+    import my_channels
+    try:
+        await _in_thread(my_channels.auto_link)       # each channel to the Page named like it
+    except Exception:  # noqa: BLE001 — the owner can still pick the Pages by hand
+        pass
+    return RedirectResponse(youtube_account.back_url(origin, "meta_connected=1", "channels"))
+
+
+@app.post("/api/meta/keys")
+async def meta_keys(request: Request):
+    """{"app_id", "app_secret", "config_id"?}: the Meta app's keys from the dashboard, checked with Meta and
+    saved to .env (meta_publish.save_keys); no restart."""
+    _local_only()
+    import meta_publish
+    body = await request.json()
+    try:
+        return await _in_thread(meta_publish.save_keys, body.get("app_id"), body.get("app_secret"),
+                                body.get("config_id") or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/meta/redirect")
+async def meta_redirect(request: Request):
+    """{"host": "localhost" | "127.0.0.1"}: the address Facebook sends the sign-in back to."""
+    _local_only()
+    import meta_publish
+    try:
+        url = meta_publish.use_redirect_host(str((await request.json()).get("host") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"redirect": url}
+
+
+@app.post("/api/meta/refresh")
+async def meta_refresh():
+    """Read the Pages and their Instagram links again, then link the channels (one linked later shows up)."""
+    _local_only()
+    import meta_publish
+    import my_channels
+    try:
+        st = await _in_thread(meta_publish.refresh_pages)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {**st, "links": await _in_thread(my_channels.auto_link)}
+
+
+@app.get("/api/meta/check")
+async def meta_check():
+    """Each Page's token and whether its Instagram may publish, posting nothing (meta_publish.check), and
+    where every channel's Reels go."""
+    _local_only()
+    import meta_publish
+    import my_channels
+    rows = await _in_thread(meta_publish.check)
+    return {"pages": rows, "links": await _in_thread(my_channels.auto_link)}
+
+
+@app.post("/api/meta/disconnect")
+async def meta_disconnect():
+    _local_only()
+    import meta_publish
+    meta_publish.disconnect()
+    return meta_publish.status()
+
+
+@app.get("/api/youtube/callback")
+async def youtube_callback(code: str = "", state: str = "", error: str = ""):
+    _local_only()
+    import urllib.parse
+    import youtube_account
+    from fastapi.responses import RedirectResponse
+    import my_channels
+    origin = youtube_account.origin_for(state)
+    acct = youtube_account.account_for(state)
+    chain = youtube_account.chain_for(state)
+    # Another channel's sign-in returns to the Channels tab, the main one to My channel.
+    tab = "channels" if acct else "channel"
+    if error or not code:
+        return RedirectResponse(youtube_account.back_url(
+            origin, "yt_error=" + urllib.parse.quote(error or "cancelled"), tab))
+    try:
+        me = await _in_thread(youtube_account.finish_connect, code, state, _refuse_same_channel)
+    except Exception as e:  # noqa: BLE001
+        return RedirectResponse(youtube_account.back_url(origin, "yt_error=" + urllib.parse.quote(str(e)[:200]), tab))
+    if acct:
+        my_channels.remember_channel(acct["id"], me or {})
+    if chain is not None:
+        # "connect all": on to the next channel that is not connected.
+        return RedirectResponse("/api/youtube/connect-all?" + urllib.parse.urlencode(
+            {"back": origin, "skip": ",".join(chain)}))
+    return RedirectResponse(youtube_account.back_url(origin, "connected=1", tab))
+
+
+@app.get("/api/youtube/connect-all")
+async def youtube_connect_all(back: str = "", skip: str = ""):
+    """Every channel that is not connected, one after another: a page saying
+    which channel to pick next, then Google's screen, then the next page."""
+    _local_only()
+    import html
+    import urllib.parse
+    import my_channels
+    import youtube_account
+    from fastapi.responses import HTMLResponse, RedirectResponse
+    skipped = [s for s in skip.split(",") if s]
+    todo = [c for c in my_channels.channels() if not c.get("main") and c["id"] not in skipped
+            and not my_channels.connected(c).get("connected")]
+    if not todo:
+        return RedirectResponse(youtube_account.back_url(back, "connected=1", "channels"))
+    ch = todo[0]
+    try:
+        go = youtube_account.auth_url(back, my_channels.account(ch["id"]), chain=skipped)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    pick = (f"pick <b>{html.escape(ch['yt_title'])}</b>" if ch.get("yt_title")
+            else "pick the YouTube channel you made for it")
+    later = "/api/youtube/connect-all?" + urllib.parse.urlencode({"back": back, "skip": ",".join(skipped + [ch["id"]])})
+    left = f"{len(todo)} channel{'s' if len(todo) > 1 else ''} left to connect"
+    page = f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect your channels</title><style>
+body{{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#0d0d16;color:#ececf4;margin:0;padding:48px 16px}}
+main{{max-width:520px;margin:0 auto}} p{{line-height:1.6;color:#b9b9cc}} b{{color:#fff}}
+a.go{{display:inline-block;background:#7c5cff;color:#fff;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:600}}
+a.alt{{color:#b9b9cc;margin-left:16px}}</style></head><body><main>
+<p>{left}</p>
+<h1 style="font-size:22px">Next: {html.escape(ch['name'])}</h1>
+<p>On Google's next screen, {pick}. If Google says it hasn't verified this app, press Advanced, then Go to (it is your own app), and allow everything.</p>
+<p><a class="go" href="{html.escape(go)}">Continue to Google</a><a class="alt" href="{html.escape(later)}">skip this one</a>
+<a class="alt" href="{html.escape(youtube_account.back_url(back, '', 'channels'))}">stop</a></p>
+</main></body></html>"""
+    return HTMLResponse(page)
+
+
+@app.post("/api/youtube/disconnect")
+async def youtube_disconnect():
+    _local_only()
+    import youtube_account
+    await _in_thread(youtube_account.disconnect)
+    return {"ok": True}
+
+
+@app.get("/api/youtube/uploads")
+async def youtube_uploads():
+    _local_only()
+    import youtube_account
+    return {"uploads": sorted(youtube_account.uploads(), key=lambda r: r.get("created", 0), reverse=True)}
+
+
+@app.get("/api/youtube/slots")
+async def youtube_slots(count: int = 6):
+    _local_only()
+    import autopilot_local
+    import youtube_account
+    times = autopilot_local.settings()["post_times"]
+    return {"post_times": times,
+            "slots": [s.isoformat() for s in youtube_account.next_slots(times, max(1, min(count, 20)))]}
+
+
+@app.post("/api/youtube/upload")
+async def youtube_upload(request: Request):
+    """Upload one clip now or into a posting time; runs in the background,
+    the dashboard follows it on /api/youtube/uploads."""
+    _local_only()
+    import autopilot_local
+    import youtube_account
+    from datetime import datetime
+    body = await request.json()
+    if not youtube_account.status()["connected"]:
+        raise HTTPException(status_code=400, detail="Connect your YouTube channel first.")
+    job_id = str(body.get("job_id") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", job_id):
+        raise HTTPException(status_code=400, detail="Bad job id")
+    _state, clips = _job_clips(job_id)
+    clip = next((c for c in clips if c["index"] == int(body.get("clip_index", -1))), None)
+    if not clip:
+        raise HTTPException(status_code=404, detail="That clip is no longer on this computer.")
+    when = str(body.get("when") or "slot")
+    if when == "slot":
+        publish_at = youtube_account.next_slots(autopilot_local.settings()["post_times"], 1)[0]
+    elif when == "now":
+        publish_at = None
+    else:
+        try:
+            publish_at = datetime.fromisoformat(when)
+            if publish_at.tzinfo is None:
+                publish_at = publish_at.astimezone()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Bad time")
+    privacy = body.get("privacy") if body.get("privacy") in ("public", "unlisted", "private") else "public"
+    tags = body.get("tags") if isinstance(body.get("tags"), list) else clip["tags"]
+    args = (clip["path"], body.get("title") or clip["title"], body.get("description") or clip["description"],
+            tags, clip["genre"], publish_at, privacy, clip["ai_made"],
+            {"job_id": job_id, "clip_index": clip["index"]})
+    asyncio.get_event_loop().run_in_executor(None, functools.partial(youtube_account.upload_and_mark, *args))
+    return {"ok": True, "publish_at": publish_at.isoformat() if publish_at else None}
+
+
+# "Post all to YouTube" (Ready to post): every waiting Short, one after the
+# other, each scheduled into the next free posting time. One run at a time;
+# the dashboard follows it on GET.
+_post_all = {"running": False, "total": 0, "done": 0, "failed": 0, "current": "", "errors": [], "finished": None,
+             "uploaded": [], "limit": False}
+_post_all_lock = threading.Lock()
+
+
+def _spawn(fn, *args):
+    threading.Thread(target=fn, args=args, daemon=True).start()
+
+
+def _post_all_run(items):
+    import autopilot_local
+    import youtube_account
+    st = _post_all
+    try:
+        for it in items:
+            st["current"] = (it.get("title") or "")[:80]
+            _state, clips = _job_clips(it["job_id"])
+            clip = next((c for c in clips if c["index"] == it["index"]), None)
+            if not clip:
+                st["failed"] += 1
+                st["errors"].append(f"{st['current'][:50]}: no longer on this computer")
+                continue
+            slot = youtube_account.next_slots(autopilot_local.settings()["post_times"], 1)[0]
+            import my_channels
+            row = youtube_account.upload_and_mark(
+                clip["path"], clip["title"], my_channels.promote(clip["description"], "main"), clip["tags"],
+                clip["genre"], publish_at=slot, ai_made=clip["ai_made"],
+                meta={"job_id": it["job_id"], "clip_index": it["index"], "post_all": True,
+                      "source": _source_of(it["job_id"]), "seconds": clip.get("seconds"),
+                      "question": clip.get("question") or "",
+                      **dict(zip(("exp", "arm"), __import__("learning")._arm_of(it["job_id"])))})
+            if row.get("status") != "done" and youtube_account.upload_limit_hit(row.get("error")):
+                # Every later upload would get the same refusal: stop, the
+                # rest stay in Ready to post for tomorrow.
+                st["failed"] += 1
+                left = len(items) - st["done"] - st["failed"]
+                st["limit"] = True
+                st["errors"].append(f"YouTube's daily upload limit for your channel is reached after {st['done']} "
+                                    f"uploads. The other {left + 1} stay in Ready to post: press again tomorrow.")
+                break
+            if row.get("status") == "done":
+                st["done"] += 1
+                # Until the project passes the API audit YouTube keeps these
+                # private and ignores publishAt, so the dashboard lists each
+                # one with its planned time and a Studio link.
+                st["uploaded"].append({"title": st["current"], "slot": slot.isoformat(),
+                                       "video_id": row.get("video_id")})
+            else:
+                st["failed"] += 1
+                st["errors"].append(f"{st['current'][:50]}: {row.get('error') or 'upload failed'}"[:300])
+    finally:
+        st.update(running=False, current="", finished=int(time.time()))
+
+
+def _source_of(job_id):
+    """The link a job was cut from: its .source.json, or Autopilot's run log
+    once the job dir is gone (24 h retention; a claim can land days later)."""
+    import autopilot_local
+    src = _job_source(os.path.join(OUTPUT_DIR, job_id)).get("url")
+    if src:
+        return src
+    for run in autopilot_local.settings().get("runs") or []:
+        for j in run.get("jobs") or []:
+            if j.get("job_id") == job_id and j.get("source"):
+                return j["source"]
+    return None
+
+
+def _check_claims(log=print):
+    """Autopilot's claim check: a Short blocked by a copyright claim bans its
+    source (autopilot_local.block_source) and pulls the waiting Shorts cut
+    from the same video out of Ready to post."""
+    import autopilot_local
+    import post_queue
+    import youtube_account
+    if not youtube_account.status()["connected"]:
+        return []
+    found = youtube_account.claim_check()
+    for row in found:
+        if row.get("job_id") is None:
+            continue
+        src = row.get("source") or _source_of(row["job_id"])
+        post_queue.update(post_queue.item_id(row["job_id"], row["clip_index"]), blocked=True)
+        if not src:
+            continue
+        autopilot_local.block_source(src, row.get("block_reason") or "copyright claim", log)
+        for x in _plan_items():
+            if x["status"] == "ready" and _source_of(x["job_id"]) == src:
+                post_queue.update(x["id"], status="skipped")
+                log(f"Skipped (same source as a blocked Short): {x['title'][:60]}")
+    return found
+
+
+def _auto_post_ready():
+    """Autopilot's auto upload: the same run as the "post all" button, in the
+    calling thread. None when a run is already going or nothing waits."""
+    # A clip Studio's AI editor is changing waits for the next run (post_queue.plan "editing").
+    items = sorted((x for x in _plan_items() if x["status"] == "ready" and not x.get("editing")),
+                   key=lambda x: x.get("slot") or "")
+    if not items:
+        return None
+    with _post_all_lock:
+        if _post_all["running"]:
+            return None
+        _post_all.update(running=True, total=len(items), done=0, failed=0, current="", errors=[], finished=None,
+                         uploaded=[], limit=False)
+    _post_all_run(items)
+    return {"done": _post_all["done"], "limit": _post_all["limit"]}
+
+
+@app.post("/api/youtube/post-all")
+async def youtube_post_all(request: Request):
+    """Upload every Short waiting in Ready to post (or the ``ids`` given)."""
+    _local_only()
+    import youtube_account
+    if not youtube_account.status()["connected"]:
+        raise HTTPException(status_code=400, detail="Connect your YouTube channel first (My channel).")
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    ids = set(body.get("ids") or []) if isinstance(body, dict) else set()
+    items = [x for x in await _in_thread(_plan_items)
+             if x["status"] == "ready" and not x.get("editing") and (not ids or x["id"] in ids)]
+    items.sort(key=lambda x: x.get("slot") or "")
+    if not items:
+        raise HTTPException(status_code=400, detail="Nothing is waiting to be posted.")
+    with _post_all_lock:
+        if _post_all["running"]:
+            raise HTTPException(status_code=409, detail="Already posting. Wait for it to finish.")
+        _post_all.update(running=True, total=len(items), done=0, failed=0, current="", errors=[], finished=None,
+                         uploaded=[], limit=False)
+    _spawn(_post_all_run, items)
+    return {"ok": True, "total": len(items)}
+
+
+@app.get("/api/youtube/post-all")
+async def youtube_post_all_status():
+    _local_only()
+    return dict(_post_all)
+
+
+# ------------------------------------------------------------------ my channels
+
+def _main_channel_row():
+    import autopilot_local
+    import my_channels
+    import youtube_account
+    cfg = autopilot_local.settings()
+    yt = youtube_account.status()
+    return {"id": "main", "kind": "comedy", "main": True,
+            "name": ((yt.get("channel") or {}).get("title") or "Main channel").strip(),
+            "kind_label": "Comedy (Autopilot, Ready to post)", "enabled": cfg["enabled"],
+            "auto_upload": cfg["auto_upload"], "per_day": cfg["comedy_per_day"] + cfg["cricket_per_day"],
+            "post_times": cfg["post_times"], "youtube": yt, **my_channels.main_settings()}
+
+
+# ------------------------------------------------------------------ today
+
+# One line per step: the box wraps them itself (hard breaks wrapped badly on a phone).
+PUBLISH_STEPS = "\n".join([
+    '1. Make the new channels: open youtube.com/channel_switcher, press "Create a channel" and give it a name (Shortkaar suggests three on each channel card, under "Channel kit"). Once for each new channel.',
+    "2. Open console.cloud.google.com and pick your Shortkaar project.",
+    '3. Go to APIs & Services > OAuth consent screen (or Google Auth Platform > Audience), press "Publish app" and confirm.',
+    '4. In Shortkaar open Channels. On your main channel press "reconnect".',
+    '5. On each new channel press "connect youtube channel" and pick it on Google\'s screen. If Google says "Google hasn\'t verified this app": Advanced > Go to ... (it is your app).',
+    "6. For the history channel (long videos): switch to it on YouTube, open youtube.com/verify and verify with your phone. Without this YouTube refuses videos over 15 minutes and custom thumbnails.",
+    '7. On each connected channel card open "Channel kit" and press "put About text, keywords and banner on YouTube". Then upload its profile picture yourself in YouTube Studio > Customization > Branding (download it from the same place).',
+])
+# Voice samples played on the Today tab, so the owner compares them where the
+# choice is made (a Desktop folder was hard to find, 17-oct-2026). Files live
+# in output/thumbnails/voice_samples/compare/, which the sweep never touches.
+VOICE_SAMPLES = [("free-asad", "Free voice, Asad, telling a story"),
+                 ("free-uzma", "Free voice, Uzma, telling a story"),
+                 ("free-cricket", "Free voice, Asad, a fast cricket line"),
+                 ("gemini-story", "Gemini voice, telling a story"),
+                 ("gemini-cricket", "Gemini voice, a cricket commentator")]
+
+
+def _voice_samples():
+    folder = os.path.join(THUMBNAILS_DIR, "voice_samples", "compare")
+    return [{"label": label, "url": f"/thumbnails/voice_samples/compare/{name}.wav",
+             "engine": "gemini" if name.startswith("gemini") else "edge"}
+            for name, label in VOICE_SAMPLES if os.path.isfile(os.path.join(folder, f"{name}.wav"))]
+
+
+VERIFY_STEPS = "\n".join([
+    "1. On YouTube, switch to the history channel (your picture at the top right > Switch account).",
+    "2. Open youtube.com/verify, pick text message, and type the code YouTube sends to your phone.",
+    "3. That is all. Shortkaar sees it within 6 hours: videos then get their full length and their own "
+    "thumbnails, and thumbnails that were refused before are added to the videos already up.",
+])
+STOCK_STEPS = "\n".join([
+    '1. Open pexels.com/api, sign up (Google sign-in is fine), press "Your API Key", fill the short form (purpose: "my own YouTube video maker") and copy the key.',
+    "2. Open pixabay.com/accounts/register and sign up. Then open pixabay.com/api/docs: your key is shown under Parameters, next to key.",
+    "3. Open the file .env in the Shortkaar folder with Notepad and add two lines at the end:",
+    "PEXELS_API_KEY=your pexels key",
+    "PIXABAY_API_KEY=your pixabay key",
+    "4. Save the file. The next video uses them; nothing needs restarting.",
+])
+_fresh = {}
+
+
+def _fresh_channel(key):
+    """The connected channel's own numbers, at most every 15 minutes (1 unit)."""
+    import youtube_account
+    hit = _fresh.get(key)
+    if hit and time.time() - hit[0] < 900:
+        return hit[1]
+    try:
+        me = youtube_account.channel()
+        youtube_account.spend(1)
+    except Exception:  # noqa: BLE001 — the saved copy from the sign-in will do
+        me = None
+    _fresh[key] = (time.time(), me)
+    return me
+
+
+def _today_row(cid, name, kind, per_day, made, views, problems, enabled=True):
+    """One channel's line on the Today tab (inside youtube_account.use)."""
+    import youtube_account
+    from datetime import datetime, timezone
+    yt = youtube_account.status()
+    ups = youtube_account.uploads()
+    now = datetime.now(timezone.utc)
+    day = datetime.now().strftime("%Y-%m-%d")
+    done = [r for r in ups if r.get("status") == "done"]
+    future = []
+    for r in done:
+        try:
+            if r.get("publish_at") and datetime.fromisoformat(r["publish_at"]) > now:
+                future.append(r)
+        except ValueError:
+            pass
+    future.sort(key=lambda r: r["publish_at"])
+    me = (_fresh_channel(cid) if yt.get("connected") else None) or yt.get("channel") or {}
+    if not yt.get("connected"):
+        problems = ["not connected"] + problems
+    return {"id": cid, "name": name, "kind": kind, "connected": bool(yt.get("connected")), "enabled": enabled,
+            "expires": yt.get("expires"), "thumbnail": me.get("thumbnail"), "handle": me.get("handle"),
+            "subscribers": me.get("subscribers"), "per_day": per_day, "made_today": made,
+            "uploaded_today": sum(1 for r in done if datetime.fromtimestamp(r.get("created", 0)).strftime("%Y-%m-%d") == day),
+            "scheduled": len(future), "next_post": future[0]["publish_at"] if future else None,
+            "views": views, "problems": problems,
+            "upcoming": [{"title": r.get("title"), "at": r["publish_at"], "video_id": r.get("video_id")}
+                         for r in future[:4]]}
+
+
+def _today():
+    """Everything the Today tab and the reminders need, for every channel."""
+    import autopilot_local
+    import learning
+    import my_channels
+    import reminders
+    import youtube_account
+    from datetime import datetime
+    now = time.time()
+    day = datetime.now().strftime("%Y-%m-%d")
+    cfg = autopilot_local.settings()
+    run = (cfg.get("runs") or [{}])[0]
+    made = sum(int(j.get("clips") or 1) for j in run.get("jobs") or []) if run.get("date") == day else 0
+    problems = []
+    if not cfg["enabled"]:
+        problems.append("Autopilot is off")
+    if cfg.get("upload_paused_until", 0) > now:
+        problems.append("daily upload limit reached, uploads start again later")
+    try:
+        main_views = learning.summary().get("total_views")
+    except Exception:  # noqa: BLE001
+        main_views = None
+    with youtube_account.use(None):
+        main_name = ((youtube_account.status().get("channel") or {}).get("title") or "Main channel").strip()
+        rows = [_today_row("main", main_name, "comedy", cfg["comedy_per_day"] + cfg["cricket_per_day"], made,
+                           main_views, problems, cfg["enabled"])]
+    for ch in my_channels.channels():
+        p = []
+        if not ch.get("enabled"):
+            p.append("switched off")
+        if ch.get("upload_paused_until", 0) > now:
+            p.append("daily upload limit reached, uploads start again later")
+        if ch.get("paused_until", 0) > now:
+            p.append("waiting until " + datetime.fromtimestamp(ch["paused_until"]).strftime("%H:%M")
+                     + " (Gemini's limit or the network; it goes on by itself)")
+        failed_jobs = my_channels._jobs_on(ch, day, ("failed",))
+        if failed_jobs:
+            # The latest reason, so the owner knows whether it needs them or fixes itself.
+            why = (sorted(failed_jobs, key=lambda j: j.get("at", 0))[-1].get("error") or "").strip()
+            p.append(f"{len(failed_jobs)} failed today" + (f" (latest: {why[:90]})" if why else ""))
+        with youtube_account.use(my_channels.account(ch["id"])):
+            st = youtube_account.status()
+            hold = my_channels.settling(st, now)
+            if hold:
+                p.append(f"just connected to {((st.get('channel') or {}).get('title') or 'a channel').strip()}: "
+                         f"nothing is made or uploaded until {datetime.fromtimestamp(hold):%H:%M}. "
+                         "Wrong channel? Disconnect it now")
+            rows.append(_today_row(ch["id"], ch["name"], ch["kind"], ch["per_day"],
+                                   len(my_channels._jobs_on(ch, day)), (ch.get("stats") or {}).get("views"),
+                                   p, bool(ch.get("enabled"))))
+        rows[-1]["time_tip"] = my_channels.time_tip(ch)
+        rows[-1]["length_tip"] = my_channels.length_tip(ch)
+        rows[-1]["failed_today"] = len(failed_jobs)
+        rows[-1]["fail_reason"] = (sorted(failed_jobs, key=lambda j: j.get("at", 0))[-1].get("error") or ""
+                                   )[:160] if failed_jobs else ""
+        rows[-1]["asked"] = __import__("engage").requests(my_channels.account(ch["id"]), limit=3)
+        # Comments saying a video got a fact wrong: no auto reply went to them, the owner looks.
+        rows[-1]["corrections"] = __import__("engage").corrections(my_channels.account(ch["id"]), limit=3)
+        rows[-1]["elsewhere"] = my_channels.elsewhere(ch["id"], now)
+    connected = [r for r in rows if r["connected"]]
+    expiring = [r["expires"] for r in connected if r.get("expires")]
+    views = sum(r["views"] or 0 for r in rows) if any(r["views"] is not None for r in rows) else None
+    setup = [{"key": "keys", "done": youtube_account.configured(), "title": "YouTube keys in .env"},
+             {"key": "publish", "done": bool(connected) and not expiring,
+              "title": "Google project published, so the connections never stop",
+              "deadline": min(expiring) if expiring else None, "steps": PUBLISH_STEPS}]
+    setup += [{"key": f"connect_{r['id']}", "done": r["connected"], "title": f"{r['name']} connected",
+               "tab": "channels"} for r in rows]
+    # A long-video channel YouTube has answered for: phone-verified or not
+    # (my_channels.long_minutes keeps the answer, asked every 6 hours).
+    for ch in my_channels.channels():
+        st = (ch.get("long_uploads") or {}).get("status")
+        if my_channels.KINDS.get(ch["kind"], {}).get("long") and st:
+            setup.append({"key": f"verify_{ch['id']}", "done": st == "allowed",
+                          "title": f"{ch['name']} phone-verified (videos over 15 minutes, custom thumbnails)",
+                          "steps": VERIFY_STEPS})
+    setup.append({"key": "autopilot", "done": bool(cfg["enabled"]), "title": "Autopilot on for the main channel",
+                  "tab": "local-autopilot"})
+    # .env is read by each job itself, so keys added there work without a restart.
+    from dotenv import dotenv_values
+    env_file = dotenv_values(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    stock = {k: bool((env_file.get(k) or os.environ.get(k) or "").strip())
+             for k in ("PEXELS_API_KEY", "PIXABAY_API_KEY")}
+    # One library is enough: Pexels paused new API keys (17-oct-2026), and
+    # Pixabay, Openverse and Wikipedia fill the footage without it.
+    setup.append({"key": "stock", "done": any(stock.values()),
+                  "title": "Free stock footage key (Pixabay or Pexels) in .env", "steps": STOCK_STEPS})
+    upcoming = sorted(({**u, "channel": r["name"]} for r in rows for u in r["upcoming"]), key=lambda u: u["at"])
+    rem = reminders.load()
+    return {"channels": rows, "setup": setup, "upcoming": upcoming[:8],
+            "look": {**my_channels.look(), "stock_keys": stock, "samples": _voice_samples(),
+                     "voice_rest": __import__("free_voice").rest_info()},
+            "totals": {"made_today": sum(r["made_today"] for r in rows),
+                       "uploaded_today": sum(r["uploaded_today"] for r in rows),
+                       "scheduled": sum(r["scheduled"] for r in rows), "views": views,
+                       "views_gain": reminders.views_gain(views) if views is not None else 0,
+                       "disk_free_gb": round(my_channels.disk_free_gb(), 1),
+                       "subscribers": sum(r["subscribers"] or 0 for r in rows)},
+            "todo": reminders.things_to_do({"channels": rows}),
+            "notify": {"reminders": rem["reminders"], "summary": rem["summary"], "phone": rem.get("phone", True),
+                       "telegram": __import__("telegram_notify").status().get("connected", False),
+                       "snooze_until": rem["snooze_until"], "slots": list(reminders.SLOTS),
+                       "summary_at": reminders.SUMMARY_AT},
+            "quota_used": youtube_account.quota_used()}
+
+
+@app.get("/api/today")
+async def today_get():
+    _local_only()
+    return await _in_thread(_today)
+
+
+@app.put("/api/today/settings")
+async def today_settings(request: Request):
+    _local_only()
+    import my_channels
+    import reminders
+    patch = await request.json()
+    reminders.update(patch)
+    if any(k in patch for k in ("voice", "footage")):
+        my_channels.update_look(patch)
+    return await _in_thread(_today)
+
+
+def _channel_view(ch):
+    """my_channels.summary plus, per finished Short still here, its title and
+    a link to watch it before it goes up."""
+    import my_channels
+    out = my_channels.summary(ch)
+    for j in out["jobs"]:
+        if j.get("job_id") and j.get("status") in ("done", "uploaded"):
+            _state, clips = _job_clips(j["job_id"])
+            if clips:
+                j["title"] = clips[0]["title"]
+                j["video_url"] = f"/videos/{j['job_id']}/{clips[0]['name']}"
+    return out
+
+
+@app.get("/api/my-channels")
+async def my_channels_list():
+    """Every channel: the main one (its settings live in Autopilot) and the others."""
+    _local_only()
+    import my_channels
+    rows = await _in_thread(lambda: [_channel_view(c) for c in my_channels.channels()])
+    return {"channels": [await _in_thread(_main_channel_row)] + rows,
+            "kinds": {k: {"label": v["label"], "about": v["about"]} for k, v in my_channels.KINDS.items()},
+            "max_per_day": my_channels.MAX_PER_DAY}
+
+
+@app.post("/api/my-channels")
+async def my_channels_add(request: Request):
+    _local_only()
+    import my_channels
+    body = await request.json()
+    try:
+        ch = my_channels.add(str(body.get("kind") or ""), body.get("name") or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _in_thread(_channel_view, ch)
+
+
+@app.put("/api/my-channels/{cid}")
+async def my_channels_update(cid: str, request: Request):
+    _local_only()
+    import my_channels
+    if cid == "main":
+        # Only its engagement switches live here; the rest is Autopilot's.
+        my_channels.update_main(await request.json())
+        return await _in_thread(_main_channel_row)
+    ch = my_channels.update(cid, await request.json())
+    if not ch:
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+    return await _in_thread(_channel_view, ch)
+
+
+@app.delete("/api/my-channels/{cid}")
+async def my_channels_remove(cid: str):
+    _local_only()
+    import my_channels
+    if not my_channels.get(cid):
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+    my_channels.remove(cid)
+    return {"ok": True}
+
+
+@app.post("/api/my-channels/{cid}/disconnect")
+async def my_channels_disconnect(cid: str):
+    """Forget this channel's Google token. No revoke: when the same Google
+    identity also holds another channel's token, revoking would cut it too."""
+    _local_only()
+    import my_channels
+    import youtube_account
+    if not my_channels.get(cid):
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+
+    def run():
+        with youtube_account.use(my_channels.account(cid)):
+            youtube_account.disconnect(revoke=False)
+        my_channels.forget_channel(cid)   # on purpose: the card may go to another channel now
+    await _in_thread(run)
+    return {"ok": True}
+
+
+@app.post("/api/my-channels/{cid}/take-over")
+async def my_channels_take_over(cid: str, request: Request):
+    """{"from": other card}: this card takes that card's YouTube channel and the other card is retired
+    (my_channels.hand_over: its files kept in state/retired, its videos stay on YouTube)."""
+    _local_only()
+    import my_channels
+    body = await request.json()
+    try:
+        out = my_channels.hand_over(re.sub(r"[^a-z0-9]", "", str(body.get("from") or ""))[:30], cid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {**out, "card": await _in_thread(_channel_view, my_channels.get(cid))}
+
+
+@app.post("/api/my-channels/samples")
+async def my_channels_samples():
+    """One sample video for every channel, made one after another (connected or not)."""
+    _local_only()
+    import my_channels
+    picked = my_channels.want_samples()
+    return {"ok": True, "queued": picked}
+
+
+@app.post("/api/my-channels/{cid}/make")
+async def my_channels_make(cid: str, request: Request):
+    """Make this channel's next Short now (also before it is connected, to see one). A song channel takes
+    {"mood": key}: that mood's song next (now, or right after the one being made)."""
+    _local_only()
+    import my_channels
+    import short_kit
+    ch = my_channels.get(cid)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    mood = str((body or {}).get("mood") or "") if isinstance(body, dict) else ""
+    mix = str((body or {}).get("mix") or "") if isinstance(body, dict) else ""
+    if mix:
+        import mood_mix
+        import music_moods
+        settings = music_moods.settings_of(ch.get("moods"))
+        moods = music_moods.active(settings)
+        if ch["kind"] != "music" or mix not in moods:
+            raise HTTPException(status_code=400, detail="That mood is switched off or unknown.")
+        if moods[mix].get("mix_only") and music_moods.mix_setting(settings, "mix_budget") <= 0:
+            raise HTTPException(status_code=400, detail="Study and sleep mixes are off: set a budget for their tracks.")
+        if not moods[mix].get("mix_only"):
+            uploaded = {j.get("job_id") for j in ch.get("jobs") or [] if j.get("status") == "uploaded"}
+            songs = music_moods.mix_songs(mix, uploaded)
+            secs = sum(float(s.get("seconds") or 0) for s in songs)
+            if secs < mood_mix.MIX_MIN_SECONDS:
+                raise HTTPException(status_code=400, detail=(
+                    f"{len(songs)} new {moods[mix]['name'].lower()} so far ({mood_mix.clock(secs)}); a mix needs "
+                    f"{mood_mix.MIX_MIN_SECONDS // 60} minutes of songs that went up and were in no mix yet."))
+        ch = my_channels.update(cid, {"next_mix": mix})
+        if my_channels.running(ch):
+            return {"ok": True, "queued": True,
+                    "message": f"A video is being made now; the {moods[mix]['name']} mix comes right after it."}
+    if mood:
+        import music_moods
+        moods = music_moods.active(music_moods.settings_of(ch.get("moods")))
+        if ch["kind"] != "music" or mood not in moods:
+            raise HTTPException(status_code=400, detail="That mood is switched off or unknown.")
+        ch = my_channels.update(cid, {"next_mood": mood})
+        if my_channels.running(ch):
+            return {"ok": True, "queued": True,
+                    "message": f"A song is being made now; the next one is for {moods[mood]['name']}."}
+    if my_channels.running(ch):
+        raise HTTPException(status_code=409, detail="A Short for this channel is being made. Wait for it.")
+    notes = []
+    job_id = await my_channels.make_one(_autopilot_submit, ch, short_kit.gemini, notes.append)
+    if not job_id:
+        raise HTTPException(status_code=502, detail=(notes[-1] if notes else "Could not start one; try again in a minute."))
+    return {"ok": True, "job_id": job_id}
+
+
+def _kit_view(cid):
+    import channel_kit
+    data = channel_kit.load(cid)
+    if not data:
+        return {"kit": None}
+    stamp = int(os.path.getmtime(os.path.join(channel_kit.folder(cid), "kit.json")))
+    return {"kit": {**data, "banner": f"/api/my-channels/{cid}/kit/banner.png?v={stamp}",
+                    "profile": f"/api/my-channels/{cid}/kit/profile.png?v={stamp}"}}
+
+
+@app.get("/api/my-channels/{cid}/kit")
+async def my_channels_kit(cid: str):
+    _local_only()
+    return _kit_view(cid)
+
+
+@app.post("/api/my-channels/{cid}/kit")
+async def my_channels_kit_make(cid: str):
+    """Names, About text, keywords, banner and profile picture for a new channel (channel_kit.py)."""
+    _local_only()
+    import channel_kit
+    import my_channels
+    if not my_channels.get(cid):
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+    try:
+        await _in_thread(channel_kit.make, cid)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not make the kit: {str(e)[:200]}")
+    return _kit_view(cid)
+
+
+@app.get("/api/my-channels/{cid}/kit/{name}")
+async def my_channels_kit_file(cid: str, name: str):
+    _local_only()
+    import channel_kit
+    if name not in ("banner.png", "profile.png") or not re.fullmatch(r"[a-z]+\d*", cid):
+        raise HTTPException(status_code=404, detail="Not found.")
+    path = os.path.join(channel_kit.folder(cid), name)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Not found.")
+    return FileResponse(path, media_type="image/png", filename=f"{cid}_{name}")
+
+
+@app.post("/api/my-channels/{cid}/kit/apply")
+async def my_channels_kit_apply(cid: str):
+    """Put the kit's About text, keywords and banner on the connected channel (the owner's button)."""
+    _local_only()
+    import channel_kit
+    try:
+        return await _in_thread(channel_kit.apply, cid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001 — YouTube's own reason
+        raise HTTPException(status_code=502, detail=f"YouTube refused: {str(e)[:300]}")
+
+
+@app.post("/api/my-channels/{cid}/skip/{job_id}")
+async def my_channels_skip(cid: str, job_id: str):
+    """Keep a waiting Short off YouTube (the owner watched it and said no)."""
+    _local_only()
+    import my_channels
+    if not my_channels.skip(cid, job_id):
+        raise HTTPException(status_code=400, detail="That Short is not waiting to upload.")
+    return await _in_thread(_channel_view, my_channels.get(cid))
+
+
+@app.post("/api/my-channels/{cid}/ideas")
+async def my_channels_ideas(cid: str, request: Request):
+    """The owner steers the queue: {"add": topic} goes first, {"drop": topic} goes for good."""
+    _local_only()
+    import my_channels
+    if not my_channels.get(cid):
+        raise HTTPException(status_code=404, detail="No such channel.")
+    body = await request.json()
+    try:
+        if body.get("add"):
+            # A pasted YouTube link is studied first (captions + one Gemini call).
+            await _in_thread(my_channels.add_idea, cid, body["add"])
+        elif body.get("drop"):
+            my_channels.drop_idea(cid, body["drop"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _in_thread(_channel_view, my_channels.get(cid))
+
+
+@app.get("/api/research/{cid}")
+async def research_view(cid: str):
+    """The research agent of a channel's niche (niche_research): playbook, today's viral finds,
+    the videos studied and the creators on the watchlist. ``cid`` "main" is the comedy channel."""
+    _local_only()
+    import my_channels
+    import niche_research
+    ch = my_channels.get(cid) if cid != "main" else {"id": "main"}
+    niche = my_channels.niche_of(ch) if ch else None
+    if niche not in niche_research.NICHES:
+        raise HTTPException(status_code=404, detail="No research for this channel.")
+    return await _in_thread(niche_research.summary, niche)
+
+
+@app.post("/api/research/{cid}/run")
+async def research_run(cid: str):
+    """Run the channel's research pass now (~1 minute: searches, then Gemini watches 2 videos)."""
+    _local_only()
+    import my_channels
+    import niche_research
+    import short_kit
+    ch = my_channels.get(cid) if cid != "main" else {"id": "main"}
+    niche = my_channels.niche_of(ch) if ch else None
+    if niche not in niche_research.NICHES:
+        raise HTTPException(status_code=404, detail="No research for this channel.")
+    notes = []
+    await _in_thread(niche_research.run, niche, short_kit.gemini(), notes.append,
+                     ours_files=my_channels.recent_files(niche))      # our videos measured against the winners
+    return {**(await _in_thread(niche_research.summary, niche)), "notes": notes}
+
+
+# ---- Studio: edit a channel's finished video before (or after) it goes up (studio.py) --------------------
+
+def _studio_call(fn, *args, **kwargs):
+    """A studio.py call with its StudioError as a 400 the dashboard shows as it is."""
+    import studio
+    try:
+        return fn(*args, **kwargs)
+    except studio.StudioError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:          # YouTube refused an update (quota, video gone)
+        raise HTTPException(status_code=502, detail=str(e)[:300])
+
+
+def _mix_env(mood, extra):
+    """The env of a mood-mix job (mood_mix.py). Song folders outside the song archive are dropped: the mix reads
+    the audio files it is given."""
+    import music_moods
+    root = os.path.realpath(music_moods.ARCHIVE_DIR)
+    songs = extra.get("music_mix_songs") or []
+    songs = [s for s in (songs if isinstance(songs, list) else [])
+             if isinstance(s, str) and os.path.realpath(s).startswith(root + os.sep)][:music_moods.MIX_MAX_SONGS]
+    mood_data = extra.get("music_mix_mood") if isinstance(extra.get("music_mix_mood"), dict) else {}
+
+    def num(key, lo, hi, default, cast):
+        try:
+            return str(max(lo, min(hi, cast(extra.get(key)))))
+        except (TypeError, ValueError):
+            return str(default)
+    return {"MUSIC_MIX": mood, "MUSIC_MIX_SONGS": json.dumps(songs),
+            "MUSIC_MIX_MOOD": json.dumps(mood_data, ensure_ascii=False)[:4000],
+            "MUSIC_MIX_MINUTES": num("music_mix_minutes", 20, 60, music_moods.MIX_MINUTES, int),
+            "MUSIC_MIX_BUDGET": num("music_mix_budget", 0.0, 5.0, music_moods.MIX_BUDGET, float),
+            "MUSIC_MIX_VOL": num("music_mix_vol", 1, 999, 1, int)}
+
+
+def _main_name():
+    import youtube_account
+    return ((youtube_account.status().get("channel") or {}).get("title") or "Main channel").strip()
+
+
+@app.get("/api/studio/videos")
+async def studio_videos():
+    _local_only()
+    import my_channels
+    import studio
+    # The main channel's clips too (4-nov-2026): its comedy jobs hold 3 Shorts, each its own Studio video.
+    return {"videos": await _in_thread(lambda: studio.videos(my_channels.channels(), main=_queue_clips(),
+                                                              main_name=_main_name()))}
+
+
+@app.get("/api/studio/video/{job_id}")
+async def studio_video(job_id: str):
+    _local_only()
+    import my_channels
+    import studio
+    return await _in_thread(functools.partial(_studio_call, studio.detail, job_id, my_channels.channels(),
+                                              main_name=_main_name()))
+
+
+@app.get("/api/studio/poster/{job_id}")
+async def studio_poster(job_id: str):
+    _local_only()
+    import studio
+    path = await _in_thread(_studio_call, studio.poster, job_id)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
+
+@app.put("/api/studio/video/{job_id}/details")
+async def studio_details(job_id: str, request: Request):
+    _local_only()
+    import my_channels
+    import studio
+    body = await request.json()
+    tags = body.get("tags")
+    if isinstance(tags, str):
+        tags = [t for t in re.split(r"[,\n]", tags)]
+    return await _in_thread(functools.partial(
+        _studio_call, studio.save_details, job_id, my_channels.channels(), title=body.get("title"),
+        description=body.get("description"), tags=tags, push=bool(body.get("push"))))
+
+
+@app.post("/api/studio/video/{job_id}/captions")
+async def studio_captions(job_id: str, request: Request):
+    _local_only()
+    import my_channels
+    import studio
+    body = await request.json()
+    segments = [{"text": str((s or {}).get("text") or "")} for s in body.get("captions") or []]
+    url = await _in_thread(_studio_call, studio.save_captions, job_id, my_channels.channels(), segments)
+    return {"url": url}
+
+
+@app.post("/api/studio/video/{job_id}/trim")
+async def studio_trim(job_id: str, request: Request):
+    _local_only()
+    import my_channels
+    import studio
+    body = await request.json()
+    try:
+        start, end = float(body.get("start")), float(body.get("end"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Give the start and end in seconds.")
+    url = await _in_thread(_studio_call, studio.trim, job_id, my_channels.channels(), start, end)
+    return {"url": url}
+
+
+@app.get("/api/studio/video/{job_id}/insights")
+async def studio_insights(job_id: str):
+    """An uploaded video's retention curve, where viewers left (with the words said there) and the search terms
+    that found it (yt_insights; Analytics quota, not the Data API's)."""
+    _local_only()
+    import my_channels
+    import studio
+    return await _in_thread(_studio_call, studio.insights, job_id, my_channels.channels())
+
+
+@app.post("/api/studio/video/{job_id}/titles")
+async def studio_titles(job_id: str):
+    """Other title ideas and YouTube search phrases for the video (one Gemini call); nothing is saved.
+    Declared before studio_action, whose {action} would take "titles"."""
+    _local_only()
+    import my_channels
+    import studio
+    return await _in_thread(_studio_call, studio.title_options, job_id, my_channels.channels())
+
+
+@app.post("/api/studio/video/{job_id}/{action}")
+async def studio_action(job_id: str, action: str):
+    _local_only()
+    import my_channels
+    import studio
+    if action not in ("approve", "skip", "remake"):
+        raise HTTPException(status_code=404, detail="Unknown action.")
+    message = await _in_thread(_studio_call, studio.act, job_id, my_channels.channels(), action)
+    return {"message": message}
+
+
+# ---- Studio's AI editor: the owner types what to change (ai_editor.py, in a subprocess) ----------------
+
+_ai_edits = {}          # job id -> {"proc", "started", "log"}
+
+
+def _ai_running(job_id):
+    t = _ai_edits.get(job_id)
+    return bool(t and t["proc"].poll() is None)
+
+
+def _start_ai_edit(job_id, prompt, phone=False):
+    """Start an AI edit (on the event loop's thread: it schedules the follow-up task). ``phone``: the
+    request came as a Telegram reply, so the result and the new video go back there."""
+    import ai_editor
+    import my_channels
+    import studio
+    prompt = " ".join(str(prompt or "").split())[:1000]
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Say what to change.")
+    path = _studio_call(studio.job_dir, job_id)
+    jid, index = studio.split_ref(job_id)
+    job_id = studio.ref_of(jid, index)              # "<id>.1" is the job id itself
+    if _ai_running(job_id):
+        raise HTTPException(status_code=409, detail="An edit of this video is still running.")
+    ai_editor.write_request(job_id, prompt)
+    ch, j = studio._find_job(job_id, my_channels.channels())
+    if ch and j and j.get("status") == "done":
+        # Held while the file changes: the upload loop must not send a half-edited video.
+        my_channels._set_job(ch["id"], job_id, editing_until=int(time.time()) + 3600)
+    elif not ch and (studio.main_clip(jid, index, path) or {}).get("status") == "ready":
+        import post_queue                           # the main channel's poster skips it meanwhile
+        post_queue.update(post_queue.item_id(jid, index), editing_until=int(time.time()) + 3600)
+    log = open(os.path.join(ai_editor.edits_dir(job_id), "edit.log"), "a", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai_editor.py"),
+                             "apply", job_id], cwd=os.path.dirname(os.path.abspath(__file__)), stdout=log,
+                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"})
+    _ai_edits[job_id] = {"proc": proc, "started": time.time(), "log": log, "phone": phone}
+    asyncio.create_task(_ai_edit_done(job_id))
+    return {"started": True}
+
+
+@app.post("/api/studio/ai/{job_id}")
+async def studio_ai_edit(job_id: str, request: Request):
+    """Start an AI edit of the video; GET the same path for its progress and result."""
+    _local_only()
+    body = await request.json()
+    return _start_ai_edit(job_id, body.get("prompt"))
+
+
+_main_loop = None       # the server's event loop (lifespan), for calls from executor threads
+
+
+async def _start_ai_edit_async(job_id, prompt):
+    return _start_ai_edit(job_id, prompt, phone=True)
+
+
+def _phone_ai_edit(job_id, prompt):
+    """my_channels.start_ai_edit: called from the Telegram poll's executor thread, so the start runs on
+    the event loop and this waits for it (an HTTPException comes back with the reason)."""
+    if _main_loop is None:
+        raise RuntimeError("the server is still starting")
+    asyncio.run_coroutine_threadsafe(_start_ai_edit_async(job_id, prompt), _main_loop).result(timeout=60)
+
+
+def _tell_phone_edit(job_id, result):
+    """The AI edit's outcome back to Telegram: the new video (reply to it to change more), or why not."""
+    import my_channels
+    import studio
+    import telegram_notify
+    if not telegram_notify.status().get("connected"):
+        return
+    ref = f"\n{my_channels.PHONE_EDIT_HINT}\nref {job_id}"
+    lines = [x for x in [result.get("summary")] + list(result.get("notes") or [])[:3]
+             + [", ".join(result.get("actions") or [])] if x]
+    problems = (result.get("check") or {}).get("problems") or []
+    if problems:
+        lines.append("The check saw: " + "; ".join(problems[:2]))
+    try:
+        if result.get("ok") and result.get("file_changed"):
+            path = studio.job_dir(job_id)
+            try:
+                telegram_notify.send_video(studio.served(path, studio.split_ref(job_id)[1]),
+                                           "Done: " + "\n".join(lines)[:850] + ref)
+                return
+            except RuntimeError as e:                      # over 50 MB: words only
+                lines.append(str(e))
+        if result.get("ok"):
+            telegram_notify.send_text("Done: " + "\n".join(lines) + ref)
+        else:
+            telegram_notify.send_text("Could not do that: " + (result.get("message") or "the edit stopped") + ref)
+    except Exception as e:  # noqa: BLE001 — the edit stands; the phone just did not hear
+        print(f"⚠️ Phone edit note failed: {type(e).__name__}: {e}")
+
+
+async def _ai_edit_done(job_id):
+    """After the edit: the job's checks run again, a details change goes to YouTube for an uploaded video,
+    a remake goes back to the channel with the owner's notes."""
+    import ai_editor
+    import my_channels
+    import studio
+    t = _ai_edits.get(job_id) or {}
+    proc = t.get("proc")
+    try:
+        await _in_thread(proc.wait, 3 * 3600)
+    except Exception:  # noqa: BLE001 — a stuck edit is ended, its folder kept
+        _kill_tree(proc)
+    finally:
+        try:
+            t["log"].close()
+        except Exception:  # noqa: BLE001
+            pass
+    jid, index = studio.split_ref(job_id)
+    path = os.path.join(OUTPUT_DIR, jid)
+    result_path = os.path.join(path, ai_editor.edits_name(index), "result.json")
+    result = ai_editor._read_json(result_path, None) or {"ok": False, "message": "The edit stopped without a result."}
+    chans = my_channels.channels()
+    ch, j = studio._find_job(job_id, chans)
+    main = None if ch else studio.main_clip(jid, index, path)
+    done = []
+    try:
+        if ch and j:
+            my_channels._set_job(ch["id"], job_id, editing_until=0)
+        if main is not None and main.get("editing_until"):
+            import post_queue
+            post_queue.update(post_queue.item_id(jid, index), editing_until=0)
+        if result.get("ok") and result.get("file_changed") and ch and j:
+            studio._recheck(job_id, chans)
+        video_id = (j or {}).get("video_id") or ((main or {}).get("youtube_id") if (main or {}).get("status") == "posted" else None)
+        if result.get("ok") and result.get("push") and (ch and j or main is not None) and video_id:
+            import youtube_account as ya
+            short = studio.clip_of(studio._read(path), index)
+
+            def push():
+                with ya.use(my_channels.account(ch["id"]) if ch else None):
+                    ya.update_video(video_id, title=short.get("seo_title"),
+                                    description=short.get("seo_description"), tags=short.get("seo_tags"))
+            await _in_thread(push)
+            done.append("updated on YouTube")
+        if result.get("ok") and result.get("remake") and ch and j:
+            if my_channels.skip(ch["id"], job_id):
+                my_channels._remake(ch["id"], j, result["remake"])
+                done.append("sent back to the channel to be made again with your notes")
+    except Exception as e:  # noqa: BLE001 — the edit itself stands
+        done.append(f"a follow-up step failed ({type(e).__name__}: {str(e)[:120]})")
+    if done:
+        result["actions"] = done
+        ai_editor._write_json(result_path, result)
+    if t.get("phone"):
+        await _in_thread(_tell_phone_edit, job_id, result)
+
+
+@app.post("/api/studio/ai/{job_id}/suggest")
+async def studio_ai_suggest(job_id: str):
+    """Edits the AI proposes for this video (ai_editor.suggest; cached until the video changes)."""
+    _local_only()
+    import ai_editor
+    try:
+        return await _in_thread(_studio_call, ai_editor.suggest, job_id)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — the owner sees one plain line
+        raise HTTPException(status_code=502, detail=f"No suggestions right now ({type(e).__name__}).")
+
+
+@app.get("/api/studio/ai/{job_id}")
+async def studio_ai_status(job_id: str):
+    _local_only()
+    import ai_editor
+    st = await _in_thread(_studio_call, ai_editor.status, job_id)
+    st["running"] = _ai_running(job_id)
+    return st
+
+
+@app.post("/api/studio/ai/{job_id}/restore")
+async def studio_ai_restore(job_id: str, request: Request):
+    """Undo: publish an earlier version (n = 0 is the video before any AI edit)."""
+    _local_only()
+    import ai_editor
+    import my_channels
+    import studio
+    body = await request.json()
+    if _ai_running(job_id):
+        raise HTTPException(status_code=409, detail="Wait for the running edit to finish.")
+    try:
+        n = int(body.get("n", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Which version?")
+    st = await _in_thread(_studio_call, ai_editor.restore, job_id, n)
+    await _in_thread(studio._recheck, job_id, my_channels.channels())
+    st["running"] = False
+    return st
+
+
+@app.post("/api/studio/upload")
+async def studio_upload(file: UploadFile = File(...)):
+    """The owner's own video into the Studio, to edit by saying what to change. Kept 7 days."""
+    _local_only()
+    import ai_editor
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    tmp = os.path.join(UPLOAD_DIR, f"studio_{uuid.uuid4().hex}.upload")
+
+    def save():
+        with open(tmp, "wb") as f:
+            shutil.copyfileobj(file.file, f, 8 * 1024 * 1024)
+    try:
+        await _in_thread(save)
+        job_id = await _in_thread(_studio_call, ai_editor.create_upload, tmp, file.filename or "video")
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    root = os.path.dirname(os.path.abspath(__file__))
+    log = open(os.path.join(OUTPUT_DIR, job_id, "transcribe.log"), "a", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, os.path.join(root, "ai_editor.py"), "transcribe", job_id], cwd=root,
+                            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    asyncio.create_task(_close_when_done(proc, log))
+    return {"job_id": job_id}
+
+
+async def _close_when_done(proc, log):
+    try:
+        await _in_thread(proc.wait, 3600)
+    except Exception:  # noqa: BLE001
+        _kill_tree(proc)
+    finally:
+        log.close()
+
+
+@app.post("/api/my-channels/{cid}/learn")
+async def my_channels_learn(cid: str):
+    _local_only()
+    import my_channels
+    ch = my_channels.get(cid)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Unknown channel.")
+    try:
+        ch = await _in_thread(my_channels.learn, ch)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await _in_thread(_channel_view, ch)
+
+
+@app.get("/api/learning")
+async def learning_get():
+    """What Shortkaar has learned from its own Shorts (learning.py)."""
+    _local_only()
+    import learning
+    return learning.summary()
+
+
+@app.put("/api/learning")
+async def learning_put(request: Request):
+    _local_only()
+    import learning
+    body = await request.json()
+    learning.set_learn(bool(body.get("learn", True)))
+    return learning.summary()
+
+
+@app.post("/api/learning/run")
+async def learning_run():
+    """One learning pass now (normally every 6 hours)."""
+    _local_only()
+    import autopilot_local
+    import learning
+    import youtube_account
+    if not youtube_account.status()["connected"]:
+        raise HTTPException(status_code=400, detail="Connect your YouTube channel first.")
+    return await _in_thread(learning.run, print, autopilot_local.look("comedy").get("frame_handle") or "")
+
+
+@app.get("/api/report")
+async def report_get():
+    _local_only()
+    import what_works
+    return {"report": what_works.load()}
+
+
+@app.post("/api/report/build")
+async def report_build(request: Request):
+    _local_only()
+    import what_works
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    handle = str(body.get("handle") or os.environ.get("FRAME_HANDLE") or "").strip()[:100]
+    if not handle:
+        import autopilot_local
+        handle = autopilot_local.look("comedy").get("frame_handle") or ""
+    try:
+        return {"report": await _in_thread(what_works.build, handle)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not build the report: {e}")
+
+
+@app.post("/api/report/use")
+async def report_use(request: Request):
+    _local_only()
+    import what_works
+    body = await request.json()
+    return {"report": what_works.set_use(bool(body.get("use")))}
+
+
+def _channel_handle(given=""):
+    import autopilot_local
+    h = str(given or os.environ.get("FRAME_HANDLE") or autopilot_local.look("comedy").get("frame_handle") or "")
+    return h.strip()[:100]
+
+
+def _job_source(job_path):
+    try:
+        with open(os.path.join(job_path, ".source.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _queue_clips():
+    """Every finished Short on this computer since the plan started."""
+    import post_queue
+    start = post_queue.since()
+    out = []
+    try:
+        entries = os.listdir(OUTPUT_DIR)
+    except FileNotFoundError:
+        return out
+    for job_id in entries:
+        job_path = os.path.join(OUTPUT_DIR, job_id)
+        if (not os.path.isdir(job_path) or job_id == os.path.basename(THUMBNAILS_DIR)
+                or (jobs.get(job_id) or {}).get("status") in ("queued", "processing")):
+            continue
+        state, clips = _job_clips(job_id)
+        if state != "completed" or not clips:
+            continue
+        src = _job_source(job_path)
+        if src.get("genre") in ("long", "studio_upload") or src.get("channel") not in (None, "", "main"):
+            continue   # another channel's Short (my_channels.py), or the owner's own Studio upload, never posts here
+        created = os.path.getmtime(glob.glob(os.path.join(job_path, "*_metadata.json"))[0])
+        if created < start:
+            continue
+        for c in clips:
+            out.append({"job_id": job_id, "index": c["index"], "title": c["title"],
+                        "description": c["description"], "tags": c["tags"], "genre": src.get("genre") or c["genre"],
+                        "hook": c["hook"], "take": c["take"], "seconds": c["seconds"],
+                        "tiktok": c["tiktok"], "instagram": c["instagram"],
+                        "video_url": f"/videos/{job_id}/{c['name']}", "created": created,
+                        "source_url": src.get("url"), "autopilot": bool(src.get("autopilot"))})
+    return out
+
+
+@app.get("/api/queue")
+async def queue_list():
+    _local_only()
+    import autopilot_local
+    import post_queue
+    import youtube_account
+    times = autopilot_local.settings()["post_times"]
+    items = await _in_thread(post_queue.plan, _queue_clips(), times, youtube_account.next_slots)
+    return {"items": items, "post_times": times, "keep_days": post_queue.KEEP_DAYS,
+            "ready": sum(1 for x in items if x["status"] == "ready")}
+
+
+@app.get("/api/queue/summary")
+async def queue_summary():
+    _local_only()
+    import post_queue
+    state = post_queue._load()
+    clips = await _in_thread(_queue_clips)
+    ready = [c for c in clips if post_queue.status_of(c["job_id"], c["index"], state) == "ready"]
+    return {"ready": len(ready), "autopilot": sum(1 for c in ready if c["autopilot"])}
+
+
+@app.post("/api/queue/views")
+async def queue_views(request: Request):
+    """Views of posted Shorts, matched by title on the channel's Shorts tab."""
+    _local_only()
+    import channel_tools
+    import post_queue
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    handle = _channel_handle(body.get("handle"))
+    if not handle:
+        raise HTTPException(status_code=400, detail="Set your channel handle first.")
+    clips = await _in_thread(_queue_clips)
+    state = post_queue._load()
+    posted = [{**c, "id": post_queue.item_id(c["job_id"], c["index"])} for c in clips
+              if post_queue.status_of(c["job_id"], c["index"], state) == "posted"]
+    try:
+        shorts = await _in_thread(channel_tools.channel_shorts, handle, 100)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not read your channel: {type(e).__name__}")
+    return {"matched": post_queue.match_views(posted, shorts), "posted": len(posted)}
+
+
+@app.post("/api/queue/{iid}")
+async def queue_set(iid: str, request: Request):
+    _local_only()
+    import post_queue
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}:\d{1,3}", iid):
+        raise HTTPException(status_code=400, detail="Bad id")
+    body = await request.json()
+    try:
+        return post_queue.update(iid, status=body.get("status"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Bad status")
+
+
+def _clip_words(job_id, index):
+    metas = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
+    try:
+        with open(metas[0], encoding="utf-8") as f:
+            data = json.load(f)
+        c = data["shorts"][index]
+        a, b = float(c["start"]), float(c["end"])
+        return " ".join(w.get("word", "").strip() for s in (data.get("transcript") or {}).get("segments", [])
+                        for w in s.get("words") or [] if a <= float(w.get("start", -1)) < b)
+    except (IndexError, KeyError, OSError, ValueError, TypeError):
+        return ""
+
+
+@app.post("/api/queue/{iid}/pinned")
+async def queue_pinned(iid: str):
+    """An AI pinned comment for one Short (cached)."""
+    _local_only()
+    import post_queue
+    import short_kit
+    m = re.fullmatch(r"([A-Za-z0-9_-]{1,80}):(\d{1,3})", iid)
+    if not m:
+        raise HTTPException(status_code=400, detail="Bad id")
+    job_id, index = m.group(1), int(m.group(2))
+    _state, clips = _job_clips(job_id)
+    clip = next((c for c in clips if c["index"] == index), None)
+    if not clip:
+        raise HTTPException(status_code=404, detail="That Short is no longer on this computer.")
+    clip = {**clip, "job_id": job_id, "words": _clip_words(job_id, index)}
+    try:
+        text = await _in_thread(post_queue.pinned_comment, short_kit.gemini(), short_kit.text_model(),
+                                clip, _channel_handle())
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(e)[:200])
+    return {"pinned_comment": text}
+
+
+@app.post("/api/queue/{iid}/retitle")
+async def queue_retitle(iid: str):
+    """3 better titles for a posted Short that is not getting views."""
+    _local_only()
+    import post_queue
+    import short_kit
+    import what_works
+    m = re.fullmatch(r"([A-Za-z0-9_-]{1,80}):(\d{1,3})", iid)
+    if not m:
+        raise HTTPException(status_code=400, detail="Bad id")
+    job_id, index = m.group(1), int(m.group(2))
+    _state, clips = _job_clips(job_id)
+    clip = next((c for c in clips if c["index"] == index), None)
+    if not clip:
+        raise HTTPException(status_code=404, detail="That Short is no longer on this computer.")
+    row = post_queue._load().get(iid) or {}
+    report = what_works.load() or {}
+    winners = [r["title"] for r in report.get("top") or [] if r.get("title")]
+    clip = {**clip, "views": row.get("views"), "words": _clip_words(job_id, index)}
+    try:
+        titles = await _in_thread(post_queue.retitle, short_kit.gemini(), short_kit.text_model(), clip,
+                                  _channel_handle(), what_works.guidance(), winners)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(e)[:200])
+    return {"titles": titles}
+
+
+@app.post("/api/finder/batch")
+async def finder_batch(request: Request):
+    """Shorts from several videos at once: one normal job per link, with the
+    look of the last comedy job made by hand (like Autopilot)."""
+    _local_only()
+    import autopilot_local
+    import used_moments
+    body = await request.json()
+    urls = [str(u) for u in (body.get("urls") or []) if isinstance(u, str) and used_moments.video_id(u)]
+    urls = list(dict.fromkeys(urls))
+    if not 1 <= len(urls) <= 10:
+        raise HTTPException(status_code=400, detail="Pick 1 to 10 YouTube videos.")
+    try:
+        per = max(1, min(6, int(body.get("clips") or 3)))
+    except (TypeError, ValueError):
+        per = 3
+    started, failed = [], []
+    for u in urls:
+        try:
+            started.append(await _autopilot_submit({**autopilot_local.look("comedy"), "url": u, "genre": "comedy",
+                                                    "acknowledged": True, "target_clips": per}))
+        except Exception as e:  # noqa: BLE001 — one bad link must not stop the rest
+            failed.append({"url": u, "error": str(e)[:160]})
+    return {"started": started, "failed": failed}
+
+
+@app.get("/api/queue/pack")
+async def queue_pack():
+    """Every Short waiting in Ready to post, in posting order, as one zip with
+    a text file of its copy, for posting from a phone."""
+    _local_only()
+    import autopilot_local
+    import post_queue
+    import youtube_account
+    from starlette.background import BackgroundTask
+    times = autopilot_local.settings()["post_times"]
+    items = await _in_thread(post_queue.plan, _queue_clips(), times, youtube_account.next_slots)
+    ready = sorted((x for x in items if x["status"] == "ready"), key=lambda x: x.get("slot") or "")
+    if not ready:
+        raise HTTPException(status_code=404, detail="Nothing is waiting to be posted.")
+
+    def _zip():
+        # Built in a file and sent as one: a StreamingResponse over BytesIO
+        # iterates it line by line (every newline byte of an mp4), and 66 MB
+        # took 113 s on localhost (8-oct-2026).
+        path = os.path.join(OUTPUT_DIR, f".pack_{uuid.uuid4().hex}.zip")
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+            for k, x in enumerate(ready, 1):
+                src = os.path.join(OUTPUT_DIR, x["video_url"].split("/videos/", 1)[1].replace("/", os.sep))
+                when = x.get("slot", "")[:16].replace("T", " ")
+                stem = f"{k:02d}_{re.sub(r'[^A-Za-z0-9]+', '_', x['title'])[:40].strip('_') or 'short'}"
+                z.write(src, f"{stem}.mp4")
+                z.writestr(f"{stem}.txt", "\n\n".join(p for p in [
+                    f"POST AT: {when}", f"TITLE:\n{x['title']}", f"DESCRIPTION:\n{x['description']}",
+                    f"PINNED COMMENT:\n{x['pinned_comment']}" if x.get("pinned_comment") else "",
+                    f"TIKTOK:\n{x['tiktok']}" if x.get("tiktok") else "",
+                    f"INSTAGRAM / FACEBOOK:\n{x['instagram']}" if x.get("instagram") else ""] if p))
+        return path
+
+    path = await _in_thread(_zip)
+    return FileResponse(path, media_type="application/zip",
+                        filename=f"shortkaar_posting_pack_{time.strftime('%Y-%m-%d')}.zip",
+                        background=BackgroundTask(os.remove, path))
+
+
+@app.get("/api/rivals")
+async def rivals_get():
+    _local_only()
+    import rivals
+    data = rivals.load()
+    return {"channels": data.get("channels") or [], "report": data.get("report")}
+
+
+@app.put("/api/rivals")
+async def rivals_put(request: Request):
+    """Save the similar channels to watch (each checked to be a YouTube channel)."""
+    _local_only()
+    import channel_tools
+    import rivals
+    body = await request.json()
+    channels = []
+    for c in (body.get("channels") or [])[:rivals.MAX_CHANNELS]:
+        url = channel_tools.channel_url(str((c or {}).get("url") or ""))
+        if url:
+            channels.append({"url": url, "name": str(c.get("name") or "")[:80]})
+    return {"channels": rivals.save_channels(channels).get("channels")}
+
+
+@app.post("/api/rivals/scan")
+async def rivals_scan():
+    """Read the channels' Shorts and say what is working for them (~30 s)."""
+    _local_only()
+    import rivals
+    import short_kit
+    try:
+        report = await _in_thread(rivals.build, short_kit.gemini(), short_kit.text_model(), _channel_handle())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not read those channels: {str(e)[:160]}")
+    return {"report": report}
+
+
+def _plan_items():
+    """Ready to post with posting times (Telegram, Autopilot)."""
+    import autopilot_local
+    import post_queue
+    import youtube_account
+    return post_queue.plan(_queue_clips(), autopilot_local.settings()["post_times"], youtube_account.next_slots)
+
+
+def _send_to_phone(item):
+    """One Short + its copy to the owner's Telegram; remembered as sent."""
+    import post_queue
+    import telegram_notify
+    path = os.path.join(OUTPUT_DIR, item["video_url"].split("/videos/", 1)[1].replace("/", os.sep))
+    when = (item.get("slot") or "")[:16].replace("T", " ")
+    telegram_notify.send_short(path, item["title"], item.get("description", ""), item.get("pinned_comment") or "",
+                               when, item.get("tiktok", ""))
+    post_queue.update(item["id"], telegram_sent=True)
+
+
+@app.get("/api/telegram/status")
+async def telegram_status():
+    _local_only()
+    import telegram_notify
+    return telegram_notify.status()
+
+
+@app.post("/api/telegram/connect")
+async def telegram_connect():
+    _local_only()
+    import telegram_notify
+    try:
+        return await _in_thread(telegram_notify.connect)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(e)[:200])
+
+
+@app.post("/api/telegram/disconnect")
+async def telegram_disconnect():
+    _local_only()
+    import telegram_notify
+    telegram_notify.disconnect()
+    return telegram_notify.status()
+
+
+# Not under /api/queue/: POST /api/queue/{iid} is declared first and would take it.
+@app.post("/api/phone/send")
+async def queue_to_phone(request: Request):
+    """Send waiting Shorts to Telegram: one ({"id"}) or every one not sent yet."""
+    _local_only()
+    import telegram_notify
+    if not telegram_notify.status()["connected"]:
+        raise HTTPException(status_code=400, detail="Connect Telegram first (My channel).")
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    items = [x for x in await _in_thread(_plan_items) if x["status"] == "ready"]
+    if body.get("id"):
+        items = [x for x in items if x["id"] == body["id"]]
+    else:
+        state = __import__("post_queue")._load()
+        items = [x for x in items if not (state.get(x["id"]) or {}).get("telegram_sent")]
+    if not items:
+        raise HTTPException(status_code=404, detail="Nothing new to send.")
+
+    def _send_all():
+        sent = 0
+        for x in sorted(items, key=lambda i: i.get("slot") or ""):
+            try:
+                _send_to_phone(x)
+                sent += 1
+            except Exception as e:  # noqa: BLE001
+                print(f"⚠️ Telegram: {x['title'][:40]}: {e}")
+        return sent
+
+    if body.get("id"):
+        try:
+            await _in_thread(_send_all)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=str(e)[:200])
+        return {"sending": 1}
+    asyncio.get_event_loop().run_in_executor(None, _send_all)
+    return {"sending": len(items)}
+
+
+@app.get("/api/take-voice/sample")
+async def take_voice_sample(voice: str):
+    """A 4-second sample of a take voice (made once, then kept)."""
+    _local_only()
+    import ai_take
+    import short_kit
+    if voice not in short_kit.MALE_VOICES + short_kit.FEMALE_VOICES:
+        raise HTTPException(status_code=400, detail="Unknown voice")
+    folder = os.path.join(THUMBNAILS_DIR, "voice_samples")     # never swept, like thumbnails
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{voice}.wav")
+    if not os.path.isfile(path):
+        try:
+            secs = await _in_thread(ai_take.speak, short_kit.gemini(),
+                                    "Yeh banda shaadi mein bhi aisa hi karta hoga? Comment mein batao!", path, voice)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Could not make the sample: {str(e)[:120]}")
+        if not secs:
+            raise HTTPException(status_code=502, detail="The voice service did not answer. Try again.")
+    return {"url": f"/thumbnails/voice_samples/{voice}.wav"}
+
+
+@app.get("/api/system-check")
+async def system_check_run():
+    """Plain-words health of a local install (system_check.py)."""
+    _local_only()
+    import system_check
+    rows = await _in_thread(system_check.run_all, OUTPUT_DIR, OUTPUT_MAX_GB, JOB_RETENTION_SECONDS)
+    return {"checks": rows}
+
+
+@app.get("/api/comments")
+async def comments_list(handle: str = ""):
+    """New comments on the latest Shorts, each with a drafted reply."""
+    _local_only()
+    import comment_replies
+    import short_kit
+    h = _channel_handle(handle)
+    if not h:
+        raise HTTPException(status_code=400, detail="Set your channel handle first.")
+    try:
+        got = await _in_thread(comment_replies.fetch, h)
+        if got["comments"]:
+            got["comments"] = await _in_thread(comment_replies.draft, short_kit.gemini(),
+                                               short_kit.text_model(), got["comments"], h)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not read the comments: {e}")
+    import youtube_account
+    return {**got, "handle": h, "can_send": youtube_account.status()["connected"]}
+
+
+@app.post("/api/comments/{cid}")
+async def comments_set(cid: str, request: Request):
+    """Hide a comment, mark it answered by hand, or send the reply (connected)."""
+    _local_only()
+    import comment_replies
+    import youtube_account
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{5,120}", cid):
+        raise HTTPException(status_code=400, detail="Bad id")
+    body = await request.json()
+    action = body.get("action")
+    if action == "send":
+        text = str(body.get("text") or "").strip()[:1000]
+        if not text:
+            raise HTTPException(status_code=400, detail="Write a reply first.")
+        try:
+            await _in_thread(youtube_account.reply, cid, text)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=str(e)[:200])
+        comment_replies.mark(cid, status="sent", draft=text)
+    elif action in ("hidden", "answered"):
+        comment_replies.mark(cid, status="hidden" if action == "hidden" else "sent")
+    else:
+        raise HTTPException(status_code=400, detail="Unknown action")
+    return {"ok": True}
+
+
+_long_builds = {}   # job_id -> {"status", "step", "error", "started"} while a build runs
+
+
+def _long_candidates():
+    """Comedy Shorts of the last 7 days not skipped, best first (views, then newest)."""
+    import post_queue
+    clips = _queue_clips()
+    rows = post_queue.plan(clips, [], lambda times, n: [])
+    week = time.time() - 7 * 86400
+    rows = [r for r in rows if r["genre"] in ("comedy", "movies") and r["status"] != "skipped" and r["created"] >= week]
+    rows.sort(key=lambda r: (r.get("views") if r.get("views") is not None else -1, r["created"]), reverse=True)
+    return rows
+
+
+def _long_builds_view():
+    out = []
+    for job_id in os.listdir(OUTPUT_DIR):
+        job_path = os.path.join(OUTPUT_DIR, job_id)
+        if not os.path.isdir(job_path) or _job_source(job_path).get("genre") != "long":
+            continue
+        metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
+        if not metas:
+            continue
+        try:
+            with open(metas[0], encoding="utf-8") as f:
+                c = json.load(f)["shorts"][0]
+        except (OSError, ValueError, KeyError, IndexError):
+            continue
+        base = os.path.basename(metas[0]).replace("_metadata.json", "")
+        try:
+            with open(os.path.join(job_path, "thumbs.json"), encoding="utf-8") as f:
+                thumbs = json.load(f)
+        except (OSError, ValueError):
+            thumbs = []
+        out.append({"job_id": job_id, "status": "done", "created": os.path.getmtime(metas[0]),
+                    "thumbnails": thumbs,
+                    "title": c.get("seo_title"), "description": c.get("seo_description"),
+                    "tags": c.get("seo_tags") or [], "seconds": c.get("end"),
+                    "video_url": f"/videos/{job_id}/{base}_clip_1.mp4"})
+    for job_id, b in _long_builds.items():
+        if b["status"] != "done":
+            out.append({"job_id": job_id, **b})
+    out.sort(key=lambda b: b.get("created") or b.get("started") or 0, reverse=True)
+    return out
+
+
+def _start_long_video(ids):
+    """Start building one long video from these Shorts (best first). Returns the job id."""
+    import long_video
+    import short_kit
+    cands = {c["id"]: c for c in _long_candidates()}
+    picked = [cands[i] for i in ids if i in cands]
+    if not long_video.MIN_SHORTS <= len(picked) <= long_video.MAX_SHORTS:
+        raise ValueError(f"Pick {long_video.MIN_SHORTS} to {long_video.MAX_SHORTS} Shorts from the last 7 days.")
+    job_id = str(uuid.uuid4())
+    job_dir = os.path.join(OUTPUT_DIR, job_id)
+    state = {"status": "building", "step": "starting", "error": None, "started": time.time(),
+             "title": f"Top {len(picked)} of the week"}
+    _long_builds[job_id] = state
+
+    def _run():
+        try:
+            shorts = []
+            for c in picked:
+                src_dir = os.path.join(OUTPUT_DIR, c["job_id"])
+                try:
+                    with open(os.path.join(src_dir, "frame.json"), encoding="utf-8") as f:
+                        cfg = json.load(f)
+                except (OSError, ValueError):
+                    cfg = {}
+                path = os.path.join(OUTPUT_DIR, c["video_url"].split("/videos/", 1)[1].replace("/", os.sep))
+                src = _job_source(src_dir)
+                shorts.append({"id": c["id"], "path": path, "hook": c["hook"] or c["title"], "title": c["title"],
+                               "keep_seconds": long_video.keep_seconds(path, cfg), "bg": cfg.get("bg"),
+                               "sources": src.get("urls") or ([src["url"]] if src.get("url") else [])})
+            bg = next((x["bg"] for x in shorts if x.get("bg")), "#2B0F3D")
+            try:
+                client, model = short_kit.gemini(), short_kit.text_model()
+            except Exception:  # noqa: BLE001 — a plain title still ships the video
+                client = model = None
+            # Countdown: the best Short plays last, as #1.
+            long_video.build(job_dir, list(reversed(shorts)), _channel_handle(), bg, client, model,
+                             progress=lambda step: state.update(step=step))
+            state.update(status="done", step="done")
+        except Exception as e:  # noqa: BLE001
+            state.update(status="failed", error=str(e)[:300])
+            print(f"⚠️ Long video failed: {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+    return job_id
+
+
+@app.get("/api/long-video")
+async def long_video_list():
+    _local_only()
+    import long_video
+    cands = await _in_thread(_long_candidates)
+    return {"candidates": cands, "builds": await _in_thread(_long_builds_view),
+            "min": long_video.MIN_SHORTS, "max": long_video.MAX_SHORTS}
+
+
+@app.post("/api/long-video")
+async def long_video_start(request: Request):
+    _local_only()
+    body = await request.json()
+    ids = [str(i) for i in (body.get("ids") or []) if isinstance(i, str)][:50]
+    try:
+        job_id = await _in_thread(_start_long_video, ids)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"job_id": job_id}
+
+
+@app.post("/api/long-video/{job_id}/thumbnail")
+async def long_video_thumbnail(job_id: str):
+    """Two thumbnails for a long video (thumbnail.generate_thumbnail): its own
+    title, and a frame of its #1 Short as the person reference, the way
+    Thumbnail Studio offers the creator's frames."""
+    _local_only()
+    import thumbnail
+    if not re.fullmatch(r"[0-9a-f-]{36}", job_id):
+        raise HTTPException(status_code=400, detail="Bad id")
+    job_path = os.path.join(OUTPUT_DIR, job_id)
+    src = _job_source(job_path)
+    metas = glob.glob(os.path.join(job_path, "*_metadata.json"))
+    if src.get("genre") != "long" or not metas:
+        raise HTTPException(status_code=404, detail="That long video is no longer on this computer.")
+    with open(metas[0], encoding="utf-8") as f:
+        clip = json.load(f)["shorts"][0]
+    session = f"long_{job_id[:8]}"
+    ref = None
+    best = (src.get("shorts") or [None])[-1]           # built in countdown order: #1 is last
+    if best and ":" in best:
+        jid, idx = best.rsplit(":", 1)
+        _st, clips = _job_clips(jid)
+        hit = next((c for c in clips if str(c["index"]) == idx), None)
+        if hit:
+            ref = os.path.join(THUMBNAILS_DIR, session, "reference.jpg")
+            os.makedirs(os.path.dirname(ref), exist_ok=True)
+            # 40% in: past the title pop-in, before the take and end card.
+            r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{max(1.0, hit['seconds'] * 0.4):.1f}",
+                                "-i", hit["path"], "-frames:v", "1", ref], capture_output=True)
+            if r.returncode != 0 or not os.path.exists(ref):
+                ref = None
+    intro = (clip.get("seo_description") or "").split("\n\n")[0]
+    try:
+        thumbs = await _in_thread(functools.partial(
+            thumbnail.generate_thumbnail, os.environ.get("GEMINI_API_KEY", ""), clip.get("seo_title") or "Top Shorts",
+            session, face_image_path=ref, video_context=intro, count=2,
+            language="Roman Urdu (Latin letters, everyday words)"))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Thumbnails failed: {str(e)[:200]}")
+    try:
+        with open(os.path.join(job_path, "thumbs.json"), encoding="utf-8") as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        old = []
+    with open(os.path.join(job_path, "thumbs.json"), "w", encoding="utf-8") as f:
+        json.dump(thumbs + old, f, ensure_ascii=False)
+    return {"thumbnails": thumbs + old}
+
+
+def _autopilot_weekly():
+    """Sunday's long video: the week's top 10 Shorts, if there are 3 or more."""
+    picks = [c["id"] for c in _long_candidates()[:10]]
+    if len(picks) < 3:
+        return None
+    return _start_long_video(picks)
+
+
+def _autopilot_view():
+    import autopilot_local
+    cfg = autopilot_local.settings()
+    for run in cfg.get("runs", []):
+        for job in run["jobs"]:
+            state, clips = _job_clips(job["job_id"])
+            build = _long_builds.get(job["job_id"])
+            if build and build["status"] != "done":
+                state = build["status"]
+            job["status"] = state
+            job["ready"] = len(clips)
+    return {"settings": cfg, "looks": autopilot_local.looks_saved()}
+
+
+@app.get("/api/local-autopilot")
+async def local_autopilot_get():
+    _local_only()
+    return _autopilot_view()
+
+
+@app.put("/api/local-autopilot")
+async def local_autopilot_put(request: Request):
+    _local_only()
+    import autopilot_local
+    autopilot_local.save(await request.json())
+    return _autopilot_view()
+
+
+@app.post("/api/local-autopilot/run")
+async def local_autopilot_run():
+    """Make today's Shorts now (button), whatever the clock says."""
+    _local_only()
+    import autopilot_local
+    run = await autopilot_local.run_now(_autopilot_submit, reason="manual")
+    return {"run": run, **_autopilot_view()}
+
 
 async def _probe_youtube_quality(url: str) -> dict:
     """Run quality_probe.py in a worker thread; {} on any failure (fail-open)."""
@@ -2933,6 +5266,65 @@ async def process_endpoint(
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
     max_minutes: Optional[str] = Form(None),
+    frame_bg_color: Optional[str] = Form(None),
+    frame_crop: Optional[str] = Form(None),
+    frame_zoom: Optional[str] = Form(None),
+    frame_title: Optional[str] = Form(None),
+    caption_script: Optional[str] = Form(None),
+    frame_outro: Optional[str] = Form(None),
+    frame_handle: Optional[str] = Form(None),
+    frame_outro_seconds: Optional[str] = Form(None),
+    urls: Optional[str] = Form(None),
+    compile_seconds: Optional[str] = Form(None),
+    genre: Optional[str] = Form(None),
+    ai_take: Optional[str] = Form(None),
+    song_owned: Optional[str] = Form(None),
+    cricket_match: Optional[str] = Form(None),
+    cricket_mode: Optional[str] = Form(None),
+    bg_music: Optional[str] = Form(None),
+    moments: Optional[str] = Form(None),
+    take_voice: Optional[str] = Form(None),
+    quiz_format: Optional[str] = Form(None),
+    quiz_timer_add: Optional[str] = Form(None),
+    broll_cut: Optional[str] = Form(None),
+    hook_lessons: Optional[str] = Form(None),
+    niche_playbook: Optional[str] = Form(None),
+    owner_notes: Optional[str] = Form(None),
+    quiz_topic: Optional[str] = Form(None),
+    quiz_avoid: Optional[str] = Form(None),
+    quiz_number: Optional[str] = Form(None),
+    music_style: Optional[str] = Form(None),
+    music_theme: Optional[str] = Form(None),
+    music_mood: Optional[str] = Form(None),
+    music_brief: Optional[str] = Form(None),
+    music_mix: Optional[str] = Form(None),
+    music_avoid: Optional[str] = Form(None),
+    controversy_topic: Optional[str] = Form(None),
+    money_topic: Optional[str] = Form(None),
+    toon_premise: Optional[str] = Form(None),
+    toon_shape: Optional[str] = Form(None),
+    toon_mix: Optional[str] = Form(None),
+    toon_series: Optional[str] = Form(None),
+    toon_part: Optional[str] = Form(None),
+    toon_parts: Optional[str] = Form(None),
+    toon_length: Optional[str] = Form(None),
+    history_topic: Optional[str] = Form(None),
+    history_minutes: Optional[str] = Form(None),
+    history_lang: Optional[str] = Form(None),
+    history_mode: Optional[str] = Form(None),
+    history_thumb: Optional[str] = Form(None),
+    history_teaser_of: Optional[str] = Form(None),
+    history_video_id: Optional[str] = Form(None),
+    history_teaser_part: Optional[str] = Form(None),
+    history_series: Optional[str] = Form(None),
+    history_part: Optional[str] = Form(None),
+    history_parts: Optional[str] = Form(None),
+    history_before: Optional[str] = Form(None),
+    history_today: Optional[str] = Form(None),
+    history_avoid: Optional[str] = Form(None),
+    music_dance: Optional[str] = Form(None),
+    quran_plan: Optional[str] = Form(None),
+    channel: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2950,8 +5342,11 @@ async def process_endpoint(
 
     # Handle JSON body manually for URL payload
     content_type = request.headers.get("content-type", "")
+    body_json = None
+    mix_extra = {}           # a mood mix's settings (JSON bodies only: Autopilot's my_channels jobs)
     if "application/json" in content_type:
         body = await request.json()
+        body_json = body
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
         force_low = bool(body.get("force_low_quality"))
@@ -2968,9 +5363,134 @@ async def process_endpoint(
         captions = body.get("captions")
         upload_id = body.get("upload_id")
         max_minutes = body.get("max_minutes")
+        frame_bg_color = body.get("frame_bg_color")
+        frame_crop = body.get("frame_crop")
+        frame_zoom = body.get("frame_zoom")
+        frame_title = body.get("frame_title")
+        caption_script = body.get("caption_script")
+        frame_outro = body.get("frame_outro")
+        frame_handle = body.get("frame_handle")
+        frame_outro_seconds = body.get("frame_outro_seconds")
+        urls = body.get("urls")
+        compile_seconds = body.get("compile_seconds")
+        genre = body.get("genre")
+        ai_take = body.get("ai_take")
+        song_owned = body.get("song_owned")
+        cricket_match = body.get("cricket_match")
+        cricket_mode = body.get("cricket_mode")
+        bg_music = body.get("bg_music")
+        moments = body.get("moments")
+        take_voice = body.get("take_voice")
+        quiz_format = body.get("quiz_format")
+        quiz_timer_add = body.get("quiz_timer_add")
+        broll_cut = body.get("broll_cut")
+        hook_lessons = body.get("hook_lessons")
+        niche_playbook = body.get("niche_playbook")
+        owner_notes = body.get("owner_notes")
+        quiz_topic = body.get("quiz_topic")
+        quiz_avoid = body.get("quiz_avoid")
+        quiz_number = body.get("quiz_number")
+        music_style = body.get("music_style")
+        music_theme = body.get("music_theme")
+        music_mood = body.get("music_mood")
+        music_brief = body.get("music_brief")
+        music_mix = body.get("music_mix")
+        mix_extra = {k: body.get(k) for k in ("music_mix_mood", "music_mix_songs", "music_mix_minutes",
+                                               "music_mix_budget", "music_mix_vol")}
+        music_avoid = body.get("music_avoid")
+        controversy_topic = body.get("controversy_topic")
+        money_topic = body.get("money_topic")
+        toon_premise = body.get("toon_premise")
+        toon_shape = body.get("toon_shape")
+        toon_mix = body.get("toon_mix")
+        toon_series = body.get("toon_series")
+        toon_part = body.get("toon_part")
+        toon_parts = body.get("toon_parts")
+        toon_length = body.get("toon_length")
+        history_topic = body.get("history_topic")
+        history_minutes = body.get("history_minutes")
+        history_lang = body.get("history_lang")
+        history_mode = body.get("history_mode")
+        history_thumb = body.get("history_thumb")
+        history_teaser_of = body.get("history_teaser_of")
+        history_video_id = body.get("history_video_id")
+        history_teaser_part = body.get("history_teaser_part")
+        history_series = body.get("history_series")
+        history_part = body.get("history_part")
+        history_parts = body.get("history_parts")
+        history_before = body.get("history_before")
+        history_today = body.get("history_today")
+        history_avoid = body.get("history_avoid")
+        music_dance = body.get("music_dance")
+        quran_plan = body.get("quran_plan")
+        channel = body.get("channel")
+
+    # Two or more links: one short made of their best moments (compilation.py),
+    # always in the framed style. One link stays a normal job.
+    compile_urls = []
+    if urls:
+        if isinstance(urls, list):
+            raw = urls
+        else:
+            try:
+                raw = json.loads(urls)
+            except (TypeError, ValueError):
+                raw = re.split(r"[\s,]+", str(urls))
+        raw = ([url] if url else []) + [str(u) for u in (raw if isinstance(raw, list) else [raw])]
+        compile_urls = list(dict.fromkeys(u.strip() for u in raw if u and u.strip()))
+        if len(compile_urls) > 5:
+            raise HTTPException(status_code=400, detail="At most 5 links can be combined into one short.")
+        if len(compile_urls) >= 2:
+            url = compile_urls[0]
+            output_format = "framed"
+            for extra_url in compile_urls[1:]:
+                await _validate_source_url(extra_url)
+        else:
+            url = compile_urls[0] if compile_urls else url
+            compile_urls = []
+
+    # What kind of video this is (comedy unless asked). Songs, movie dubs and
+    # cricket have their own flows in main.py, always in the framed look;
+    # cricket has no source link at all (cricket_shorts.py).
+    genre_val = str(genre or "comedy").strip().lower()
+    if genre_val not in CONTENT_GENRES:
+        raise HTTPException(status_code=400, detail=f"Unknown video type: {genre}")
+    channel_id = str(channel or "").strip() or None
+    if channel_id == "main":
+        channel_id = None
+    if channel_id:
+        import my_channels
+        if BILLING_ENABLED or not my_channels.get(channel_id):
+            raise HTTPException(status_code=400, detail="Unknown channel.")
+    song_urls = []
+    owned_music = str(song_owned).lower() in ("1", "true", "yes")
+    cricket_mode = str(cricket_mode or "").strip().lower()
+    cricket_mode = cricket_mode if cricket_mode in ("topic", "versus", "ranking") else "match"
+    if genre_val != "comedy":
+        output_format = "framed"
+        if genre_val == "cricket":
+            cricket_match = re.sub(r"\s+", " ", str(cricket_match or "")).strip()
+            if not 3 <= len(cricket_match) <= 300:
+                raise HTTPException(status_code=400, detail=(
+                    "Write a cricket topic." if cricket_mode == "topic" else
+                    "Write which match (teams, tournament and date) or paste its video link."))
+            if re.match(r"https?://", cricket_match):
+                await _validate_source_url(cricket_match)
+            url, compile_urls = None, []
+        elif genre_val in GENERATED_GENRES:
+            url, compile_urls = None, []
+        elif compile_urls:
+            if genre_val == "songs" and owned_music:
+                song_urls = compile_urls  # a mashup of music the user owns
+            else:
+                raise HTTPException(status_code=400, detail=(
+                    "Several song links make a mashup, which needs music you own: tick "
+                    "'I own this music'." if genre_val == "songs" else
+                    "Use one link for a movie dub."))
+            compile_urls = []
 
     # Normalize output format (auto = keep pipeline default).
-    if output_format not in ("vertical", "horizontal", "square"):
+    if output_format not in ("vertical", "horizontal", "square", "framed"):
         output_format = "auto"
 
     # Accepts a JSON list or a comma-separated form field.
@@ -2997,7 +5517,7 @@ async def process_endpoint(
     if upload_id and not url and not file and not thumb_session:
         upload_slot = _take_pending_upload(upload_id, await _owner_id(request))
 
-    if not url and not file and not thumb_session and not upload_slot:
+    if not url and not file and not thumb_session and not upload_slot and genre_val not in GENERATED_GENRES:
         raise HTTPException(status_code=400, detail="Must provide URL, File or upload_id")
 
     # Completion callback: reject unsafe targets NOW (clear 400) — delivery
@@ -3100,8 +5620,10 @@ async def process_endpoint(
         return int(val) if integer else val
 
     n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
-    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
-    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
+    # Without a range clips stay under 2 minutes (main.MAX_CLIP_SECONDS); a
+    # chosen range may reach 177 s (Shorts' 3 minutes minus the end card).
+    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 172)
+    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 177)
     if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
         raise HTTPException(status_code=400,
                             detail="clip_max_seconds must be at least 5s above clip_min_seconds")
@@ -3121,12 +5643,213 @@ async def process_endpoint(
         env["AUTO_CAPTIONS"] = "0"
         print(f"[captions] job={job_id} auto-captions off")
 
+    # Caption/title language (caption_script.py): roman (Roman Urdu /
+    # Hinglish), english or original.
+    if caption_script in ("roman", "english", "original"):
+        env["CAPTION_SCRIPT"] = caption_script
+
+    # Video type (validated above): main.py hands songs, movies and cricket
+    # to their own modules.
+    env["CONTENT_GENRE"] = genre_val
+    if genre_val in GENERATED_GENRES and not BILLING_ENABLED:
+        # The owner's choice of voice and footage (Today tab) for every generated video.
+        import my_channels
+        env.update(my_channels.look_env())
+    if genre_val == "songs":
+        env["SONG_OWNED"] = "1" if owned_music else "0"
+        if song_urls:
+            env["SONG_URLS"] = json.dumps(song_urls)
+    if genre_val == "cricket":
+        env["CRICKET_MATCH"] = cricket_match
+        env["CRICKET_MODE"] = cricket_mode
+    if genre_val in ("cricket", "quiz", "controversy", "history", "money", "toons") and str(bg_music).lower() in ("1", "true", "yes"):
+        env["BG_MUSIC"] = "1"
+    if genre_val == "controversy":
+        env["CONTROVERSY_TOPIC"] = re.sub(r"\s+", " ", str(controversy_topic or ""))[:200]
+    if genre_val == "money":
+        env["MONEY_TOPIC"] = re.sub(r"\s+", " ", str(money_topic or ""))[:200]
+    if genre_val == "toons":
+        # The cartoon series (toon_shorts.py): the planner's premise and comic shape; none = it plans one.
+        env["TOON_PREMISE"] = re.sub(r"\s+", " ", str(toon_premise or ""))[:240]
+        env["TOON_SHAPE"] = re.sub(r"[^a-z]", "", str(toon_shape or "").lower())[:20]
+        if str(toon_length or "").lower() in ("short", "long"):
+            env["TOON_LENGTH"] = str(toon_length).lower()      # the episode-length A/B side (toon_shorts.LENGTHS)
+        if toon_series:
+            # One part of a two-part cartoon story (toon_shorts.series_part).
+            env["TOON_SERIES"] = re.sub(r"[^A-Za-z0-9 ]", "", str(toon_series))[:40]
+            env["TOON_PART"] = re.sub(r"[^0-9]", "", str(toon_part or "1"))[:1] or "1"
+            env["TOON_PARTS"] = re.sub(r"[^0-9]", "", str(toon_parts or "2"))[:1] or "2"
+        if str(toon_mix or "").lower() in ("1", "true", "yes"):
+            env["TOON_MIX_JOB"] = "1"          # the weekly compilation of kept episodes (toon_mix.py)
+    if genre_val == "history":
+        # A long 16:9 documentary (history_videos.py): 2-30 minutes, Urdu or English.
+        env["HISTORY_TOPIC"] = re.sub(r"\s+", " ", str(history_topic or ""))[:200]
+        try:
+            env["HISTORY_MINUTES"] = str(max(2, min(30, int(float(history_minutes or 10)))))
+        except (TypeError, ValueError):
+            env["HISTORY_MINUTES"] = "10"
+        env["HISTORY_LANG"] = "english" if str(history_lang or "").lower() == "english" else "urdu"
+        # "explainer": trending topics explained (trend_explainer.py) instead of history.
+        # "horror": original horror stories (horror_stories.py).
+        mode_in = str(history_mode or "").lower()
+        env["HISTORY_MODE"] = mode_in if mode_in in ("explainer", "horror") else "history"
+        # The thumbnail A/B test's side (my_channels EXPERIMENTS["thumb"]): where the thumbnail's text sits.
+        if str(history_thumb or "").lower() in ("left", "right"):
+            env["HISTORY_THUMB"] = str(history_thumb).lower()
+        if str(history_today or "").lower() in ("1", "true", "yes"):
+            # The daily "on this day" Short (history_today.py), with the events already made.
+            env["HISTORY_TODAY"] = "1"
+            env["HISTORY_TOPIC"] = env["HISTORY_TOPIC"] or "aaj ki tareekh"
+            avoid = history_avoid
+            if isinstance(avoid, str):
+                try:
+                    avoid = json.loads(avoid)
+                except ValueError:
+                    avoid = []
+            env["HISTORY_AVOID"] = json.dumps([str(a)[:120] for a in (avoid or [])][-40:] if isinstance(
+                avoid, list) else [], ensure_ascii=False)
+        if history_series:
+            # One part of a series (history_videos.series_env checks the numbers).
+            env["HISTORY_SERIES"] = re.sub(r"\s+", " ", str(history_series)).strip()[:120]
+            env["HISTORY_PART"] = str(history_part or "")[:2]
+            env["HISTORY_PARTS"] = str(history_parts or "")[:2]
+            before = history_before
+            if isinstance(before, str):
+                try:
+                    before = json.loads(before)
+                except ValueError:
+                    before = []
+            env["HISTORY_BEFORE"] = json.dumps([str(b)[:120] for b in (before or [])][:4] if isinstance(
+                before, list) else [], ensure_ascii=False)
+        if history_teaser_of:
+            # The teaser Short of a finished long video: its job dir, and its YouTube id for the link.
+            src = str(history_teaser_of)
+            if not re.fullmatch(r"[A-Za-z0-9-]{8,64}", src) or not os.path.isdir(os.path.join(OUTPUT_DIR, src)):
+                raise HTTPException(status_code=400, detail="That long video is no longer on this computer.")
+            env["HISTORY_TEASER_OF"] = os.path.join(OUTPUT_DIR, src)
+            vid = str(history_video_id or "")
+            env["HISTORY_VIDEO_ID"] = vid if re.fullmatch(r"[A-Za-z0-9_-]{11}", vid) else ""
+            env["HISTORY_TOPIC"] = env["HISTORY_TOPIC"] or "teaser"
+            # 0 = the opening teaser, 1-2 = a Short of one of its best moments.
+            part = str(history_teaser_part or "0")
+            env["HISTORY_TEASER_PART"] = part if part in ("0", "1", "2") else "0"
+    # The channel's own openings ranked by viewers who stayed (my_channels.hook_lessons).
+    if hook_lessons:
+        env["HOOK_LESSONS"] = " ".join(str(hook_lessons).split())[:1500]
+    # What wins in the channel's niche now (niche_research.playbook_text); line breaks kept.
+    if niche_playbook:
+        # 2700: since 5-nov-2026 the measured gaps (teardown.py) come first, the playbook after them.
+        env["NICHE_PLAYBOOK"] = "\n".join(" ".join(l.split()) for l in str(niche_playbook).splitlines())[:2700]
+    # The "pace" test's side (my_channels.EXPERIMENTS): the footage cut length of the niche's winners.
+    try:
+        if broll_cut and 1.0 <= float(broll_cut) <= 6.0:
+            env["BROLL_CUT"] = f"{float(broll_cut):.1f}"
+    except (TypeError, ValueError):
+        pass
+    # A remake the owner asked for from Studio's AI editor, with what to change (script_craft.owner_notes).
+    if owner_notes:
+        env["OWNER_NOTES"] = " ".join(str(owner_notes).split())[:600]
+    # The channel kinds of my_channels.py; avoid lists keep a channel from
+    # asking a question or making a song title twice.
+    if genre_val == "quiz":
+        env["QUIZ_FORMAT"] = str(quiz_format or "mcq")[:20]
+        # The countdown A/B side (my_channels.EXPERIMENTS "timer"): 0 or 1 extra second.
+        if str(quiz_timer_add or "") in ("0", "1"):
+            env["QUIZ_TIMER_ADD"] = str(quiz_timer_add)
+        env["QUIZ_TOPIC"] = re.sub(r"\s+", " ", str(quiz_topic or ""))[:80]
+        if str(quiz_number or "").isdigit():
+            env["QUIZ_NUMBER"] = str(min(int(quiz_number), 99999))
+    if genre_val == "music":
+        env["MUSIC_STYLE"] = re.sub(r"\s+", " ", str(music_style or ""))[:60]
+        env["MUSIC_THEME"] = re.sub(r"\s+", " ", str(music_theme or ""))[:60]
+        # The playlist mood the song is made for (music_moods.py) and its brief for the song writer.
+        env["MUSIC_MOOD"] = re.sub(r"[^a-z0-9_]", "", str(music_mood or "").lower())[:30]
+        env["MUSIC_BRIEF"] = re.sub(r"\s+", " ", str(music_brief or ""))[:300]
+        mix = re.sub(r"[^a-z0-9_]", "", str(music_mix or "").lower())[:30]
+        if mix:
+            env.update(_mix_env(mix, mix_extra))
+        if str(music_dance or "").lower() in ("1", "true", "yes"):
+            env["MUSIC_DANCE"] = "1"       # the channel's AI singer dances (ai_influencer.py)
+    if genre_val == "quran":
+        # The passage and the channel's choices (quran_videos.py checks every value).
+        plan = quran_plan
+        if isinstance(plan, str):
+            try:
+                plan = json.loads(plan)
+            except ValueError:
+                plan = {}
+        env["QURAN_PLAN"] = json.dumps(plan if isinstance(plan, dict) else {})[:4000]
+    for name, raw in (("QUIZ_AVOID", quiz_avoid), ("MUSIC_AVOID", music_avoid)):
+        if raw:
+            try:
+                got = raw if isinstance(raw, list) else json.loads(str(raw))
+                env[name] = json.dumps([str(x)[:140] for x in got if x][-80:])
+            except ValueError:
+                pass
+    # Your own moments (comedy, one link): main.manual_clips cuts exactly these.
+    if moments and str(moments).strip():
+        if genre_val != "comedy" or compile_urls:
+            raise HTTPException(status_code=400, detail="Your own moments work for one comedy link.")
+        import used_moments
+        try:
+            env["MANUAL_CLIPS"] = json.dumps(used_moments.parse_ranges(str(moments)[:500]))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        print(f"[moments] job={job_id} {env['MANUAL_CLIPS']}")
+    if genre_val != "comedy":
+        print(f"[genre] job={job_id} {genre_val}"
+              + (f" owned={owned_music} links={len(song_urls) or 1}" if genre_val == "songs" else ""))
+    # The channel's spoken take after each clip (ai_take.py): on unless off.
+    if ai_take is not None and str(ai_take).lower() in ("0", "false", "no"):
+        env["AI_TAKE"] = "0"
+    # Its voice (dashboard "take voice"); only Gemini's own voice names pass.
+    if take_voice:
+        import short_kit
+        if str(take_voice) not in short_kit.MALE_VOICES + short_kit.FEMALE_VOICES:
+            raise HTTPException(status_code=400, detail="Unknown voice")
+        env["AI_TAKE_VOICE"] = str(take_voice)
+
+    # FRAMED look (framed_layout.py): bad values fall back to its defaults
+    # there, so only shape-check here.
+    if output_format == "framed":
+        if frame_bg_color and re.fullmatch(r"#?[0-9A-Fa-f]{6}", str(frame_bg_color).strip()):
+            env["FRAME_BG_COLOR"] = "#" + str(frame_bg_color).strip().lstrip("#")
+        if frame_crop in ("wide", "classic", "square"):
+            env["FRAME_CROP"] = frame_crop
+        zoom = _gen_control(frame_zoom, "frame_zoom", 1.0, 1.5)
+        if zoom is not None:
+            env["FRAME_ZOOM"] = str(zoom)
+        if frame_title is not None and str(frame_title).lower() in ("0", "false", "no"):
+            env["FRAME_TITLE"] = "0"
+        if frame_outro is not None and str(frame_outro).lower() in ("0", "false", "no"):
+            env["FRAME_OUTRO"] = "0"
+        outro_secs = _gen_control(frame_outro_seconds, "frame_outro_seconds", 1, 3)
+        if outro_secs is not None:
+            env["FRAME_OUTRO_SECONDS"] = str(outro_secs)
+        if frame_handle:
+            import framed_layout
+            handle = framed_layout.clean_handle(frame_handle)
+            if handle:
+                env["FRAME_HANDLE"] = handle
+        print(f"[framed] job={job_id} bg={env.get('FRAME_BG_COLOR', 'default')} "
+              f"crop={env.get('FRAME_CROP', 'classic')} zoom={env.get('FRAME_ZOOM', 'default')}")
+
+    if compile_urls:
+        env["COMPILE_URLS"] = json.dumps(compile_urls)
+        # Shorts stop at 3 minutes; compilation.py also leaves room for the end card.
+        secs = _gen_control(compile_seconds, "compile_seconds", 30, 178)
+        if secs is not None:
+            env["COMPILE_SECONDS"] = str(secs)
+        print(f"[compilation] job={job_id} videos={len(compile_urls)} seconds={secs or 'auto'}")
+
     input_path = None
     if url:
         # Keep the downloaded source inside the job dir: the clip editor's
         # re-render path cuts new segments from it, and it ages out with the
         # rest of the job (retention window + OUTPUT_MAX_GB cap) either way.
         cmd.extend(["-u", url, "--keep-original"])
+    elif genre_val in GENERATED_GENRES:
+        cmd.append("--generate")  # no source video (cricket / quiz / music_shorts.py)
     elif thumb_session:
         # Hardlink (or copy) the session's video under the job's name so source
         # lookup, the clip editor and the preview treat it exactly like a normal
@@ -3265,6 +5988,20 @@ async def process_endpoint(
         'user_plan': user_plan,
     }
 
+    # Self-host: what the job was made from, for Ready to post / "part 2".
+    if not BILLING_ENABLED:
+        try:
+            os.makedirs(job_output_dir, exist_ok=True)
+            with open(os.path.join(job_output_dir, ".source.json"), "w", encoding="utf-8") as f:
+                json.dump({"url": url, "urls": compile_urls or None, "genre": genre_val,
+                           "cricket": cricket_match if genre_val == "cricket" else None,
+                           "autopilot": bool(request.headers.get("x-shortkaar-autopilot")),
+                           # Which of the owner's channels it is for (my_channels.py);
+                           # None is the main channel and its Ready to post.
+                           "channel": channel_id}, f)
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️ Could not save the job's source: {e}")
+
     # Persist the owner so recovered jobs keep their multi-tenant guard after a
     # restart (see _recover_jobs_from_disk).
     if user_id is not None:
@@ -3284,6 +6021,15 @@ async def process_endpoint(
                            source_cap_minutes=source_cap, skip_statics=skip_statics)
 
     _enqueue_job(job_id, priority)
+
+    # Self-host: the look of a job made by hand is what Autopilot copies
+    # (autopilot_local.py); Autopilot's own jobs carry the header.
+    if not BILLING_ENABLED and body_json and not request.headers.get("x-shortkaar-autopilot"):
+        try:
+            import autopilot_local
+            autopilot_local.remember_look(body_json)
+        except Exception as e:  # noqa: BLE001 — never fails a job
+            print(f"⚠️ Could not save the job's look for Autopilot: {e}")
 
     return {"job_id": job_id, "status": "queued", "partial": partial,
             "first_video": bool(getattr(request.state, "first_video", False))}
@@ -3323,6 +6069,64 @@ def _presented_status(job_id, job):
         if m and _manifest_busy_elsewhere(m):
             return 'processing'
     return job['status']
+
+
+@app.get("/api/library")
+async def local_library():
+    """Finished jobs on this machine, newest first.
+
+    Feeds the self-host History and Gallery tabs (Shortkaar): the cloud ones
+    read the database and R2, which a local install does not have. Clips
+    disappear from here when the retention sweep deletes their job.
+    """
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not available")
+    try:
+        entries = os.listdir(OUTPUT_DIR)
+    except FileNotFoundError:
+        entries = []
+    out = []
+    for job_id in entries:
+        job_path = os.path.join(OUTPUT_DIR, job_id)
+        if not os.path.isdir(job_path) or os.path.isfile(os.path.join(job_path, _RESUME_FILE)):
+            continue
+        if (jobs.get(job_id) or {}).get('status') in ('queued', 'processing'):
+            continue
+        json_files = glob.glob(os.path.join(job_path, "*_metadata.json"))
+        if not json_files:
+            continue
+        try:
+            with open(json_files[0], encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+        clips = []
+        for i, clip in enumerate(data.get('shorts') or []):
+            name = _canonical_clip_file(job_path, base_name, i)
+            if not name or not os.path.isfile(os.path.join(job_path, name)):
+                continue
+            clips.append({
+                "index": i,
+                "title": clip.get('seo_title') or clip.get('video_title_for_youtube_short') or f"Clip {i + 1}",
+                "on_screen_title": clip.get('video_title_for_youtube_short') or "",
+                "video_url": f"/videos/{job_id}/{name}",
+                "seconds": round(float(clip.get('end', 0)) - float(clip.get('start', 0)), 1),
+                "score": clip.get('predicted_score'),
+            })
+        if not clips:
+            continue
+        source = data.get('source_video')
+        out.append({
+            "job_id": job_id,
+            "created": os.path.getmtime(json_files[0]),
+            "compilation": bool(data.get('compilation')),
+            "output_format": data.get('output_format'),
+            "has_source": bool(source and os.path.isfile(os.path.join(job_path, source))),
+            "clips": clips,
+        })
+    out.sort(key=lambda j: j["created"], reverse=True)
+    return {"jobs": out, "retention_seconds": JOB_RETENTION_SECONDS}
 
 
 @app.get("/api/status/{job_id}")
@@ -3365,7 +6169,7 @@ def _locate_source(job_id: str):
     try:
         meta_files = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
         if meta_files:
-            with open(meta_files[0], 'r') as f:
+            with open(meta_files[0], 'r', encoding='utf-8') as f:
                 name = json.load(f).get('source_video')
             if name:
                 candidate = os.path.join(OUTPUT_DIR, job_id, os.path.basename(name))
@@ -3628,7 +6432,7 @@ async def _restore_job_files(job_id: str, proj, user_id: str) -> bool:
         json_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
         if not json_files:
             raise HTTPException(status_code=502, detail="Project metadata missing")
-        with open(json_files[0], 'r') as f:
+        with open(json_files[0], 'r', encoding='utf-8') as f:
             data = json.load(f)
         base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
         clips = data.get('shorts', [])
@@ -3645,7 +6449,8 @@ async def _restore_job_files(job_id: str, proj, user_id: str) -> bool:
             'logs': _TimedLog(["♻️ Project restored from your library."]),
             'output_dir': job_dir,
             'user_id': user_id,
-            'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
+            'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis'),
+                       'output_format': data.get('output_format')},
         }
     if pulled:
         print(f"♻️  Restored {job_id} from the library (working files were gone).")
@@ -3811,7 +6616,7 @@ async def edit_clip(
                 try:
                     meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
                     if meta_files:
-                        with open(meta_files[0], 'r') as f:
+                        with open(meta_files[0], 'r', encoding='utf-8') as f:
                             data = json.load(f)
                             transcript = data.get('transcript')
                 except Exception as e:
@@ -3865,13 +6670,13 @@ async def edit_clip(
         try:
             meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
             if meta_files:
-                with open(meta_files[0], 'r') as f:
+                with open(meta_files[0], 'r', encoding='utf-8') as f:
                     meta = json.load(f)
                 shorts = meta.get('shorts', [])
                 if req.clip_index < len(shorts):
                     shorts[req.clip_index]['video_url'] = new_video_url
                     meta['shorts'] = shorts
-                    with open(meta_files[0], 'w') as f:
+                    with open(meta_files[0], 'w', encoding='utf-8') as f:
                         json.dump(meta, f, indent=4)
         except Exception as e:
             print(f"⚠️ Failed to update metadata.json: {e}")
@@ -3891,6 +6696,119 @@ async def edit_clip(
             await _metering.release_reservation(reservation_id)
         print(f"❌ Edit Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class CustomEditRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    speed: float = 1.03
+    pitch_shift: bool = True
+    color_shift: bool = True
+    micro_zoom: bool = True
+    flip_horizontal: bool = False
+    vignette: bool = True
+    background_style: str = "keep"  # keep, blur, solid
+    bg_color: str = "black"
+    watermark_text: Optional[str] = None
+    input_filename: Optional[str] = None
+
+
+@app.post("/api/clip/custom-edit")
+async def custom_edit_clip(req: CustomEditRequest, request: Request):
+    """
+    Applies custom editing and anti-copyright transformations to a clip:
+    - Speed/tempo shift (1.02x - 1.05x)
+    - Audio pitch/frequency shift to evade Content ID
+    - Color histogram alteration (contrast, saturation, gamma)
+    - Micro-zoom / dynamic breathing
+    - Optional horizontal flip (mirroring)
+    - Background changing (blur, solid)
+    - Optional watermark text
+    """
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    if 'result' not in job or 'clips' not in job['result']:
+        raise HTTPException(status_code=400, detail="Job result not available")
+
+    # Resolve input path
+    if req.input_filename:
+        safe_name = os.path.basename(req.input_filename)
+        input_path = os.path.join(OUTPUT_DIR, req.job_id, safe_name)
+        filename = safe_name
+    else:
+        clip = job['result']['clips'][req.clip_index]
+        filename = clip['video_url'].split('/')[-1]
+        input_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
+
+    if not os.path.exists(input_path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
+
+    clean_name = _strip_burned_captions(os.path.join(OUTPUT_DIR, req.job_id), filename)
+    had_captions = clean_name != filename
+    if had_captions:
+        filename = clean_name
+        input_path = os.path.join(OUTPUT_DIR, req.job_id, clean_name)
+
+    transformed_filename = f"custom_{filename}"
+    output_path = os.path.join(OUTPUT_DIR, req.job_id, transformed_filename)
+
+    import custom_editor
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        None,
+        custom_editor.apply_custom_edit,
+        input_path,
+        output_path,
+        req.speed,
+        req.pitch_shift,
+        req.color_shift,
+        req.micro_zoom,
+        req.flip_horizontal,
+        req.vignette,
+        req.background_style,
+        req.bg_color,
+        None,
+        req.watermark_text
+    )
+
+    if had_captions:
+        recap = await loop.run_in_executor(
+            None, _reapply_captions, req.job_id, req.clip_index, output_path)
+        if recap:
+            transformed_filename = os.path.basename(recap)
+
+    transformed_filename = await _deliver(request, req.job_id, transformed_filename)
+    new_video_url = f"/videos/{req.job_id}/{transformed_filename}"
+
+    if req.clip_index < len(job['result']['clips']):
+        job['result']['clips'][req.clip_index]['video_url'] = new_video_url
+
+    try:
+        meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
+        if meta_files:
+            with open(meta_files[0], 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            shorts = meta.get('shorts', [])
+            if req.clip_index < len(shorts):
+                shorts[req.clip_index]['video_url'] = new_video_url
+                meta['shorts'] = shorts
+                with open(meta_files[0], 'w', encoding='utf-8') as f:
+                    json.dump(meta, f, indent=4)
+    except Exception as e:
+        print(f"⚠️ Failed to update metadata.json: {e}")
+
+    _archive_clip_edit_bg(req.job_id, req.clip_index, transformed_filename)
+
+    return {
+        "success": True,
+        "new_video_url": new_video_url,
+        "message": "Custom editing and anti-copyright transformations applied successfully."
+    }
+
 
 class CaptionWordIn(BaseModel):
     """One user-edited caption word, clip-relative ms — the same shape the
@@ -3946,7 +6864,7 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
 
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     transcript = data.get('transcript')
@@ -4040,7 +6958,7 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -4166,7 +7084,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -4280,7 +7198,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             updates['crop_overrides'] = None
         clip.update(updates)
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
+        with open(json_files[0], 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         mem_clips = (job.get('result') or {}).get('clips') or []
         if req.clip_index < len(mem_clips):
@@ -4364,7 +7282,7 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -4375,6 +7293,10 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
         raise HTTPException(
             status_code=400,
             detail="Horizontal clips keep the full frame; there is no crop to reframe.")
+    if data.get('output_format') == 'framed':
+        raise HTTPException(
+            status_code=400,
+            detail="Framed clips show the whole picture on a colour background; there is no crop to reframe.")
 
     clip = clips[clip_index]
     segments, _canonical_range = _clip_recipe_parts(clip)
@@ -4553,7 +7475,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -4565,6 +7487,10 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
         raise HTTPException(
             status_code=400,
             detail="Horizontal clips keep the full frame; there is no crop to reframe.")
+    if data.get('output_format') == 'framed':
+        raise HTTPException(
+            status_code=400,
+            detail="Framed clips show the whole picture on a colour background; there is no crop to reframe.")
 
     segments, canonical_range = _clip_recipe_parts(clip)
     source_path = _locate_source(req.job_id)
@@ -4629,7 +7555,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
         }
         clip.update(updates)
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
+        with open(json_files[0], 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         mem_clips = (job.get('result') or {}).get('clips') or []
         if req.clip_index < len(mem_clips):
@@ -4791,7 +7717,7 @@ async def generate_effects_config(
                 try:
                     meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
                     if meta_files:
-                        with open(meta_files[0], 'r') as f:
+                        with open(meta_files[0], 'r', encoding='utf-8') as f:
                             data = json.load(f)
                             transcript = data.get('transcript')
                 except Exception as e:
@@ -4854,7 +7780,7 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
         
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
         
     transcript = data.get('transcript')
@@ -5038,7 +7964,7 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
             data['shorts'] = clips
             
             # Write back
-            with open(json_files[0], 'w') as f:
+            with open(json_files[0], 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
                 print(f"✅ Metadata updated with subtitled video for clip {req.clip_index}")
     except Exception as e:
@@ -5078,7 +8004,7 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
     clips = data.get('shorts', [])
     if req.clip_index >= len(clips):
@@ -5106,7 +8032,7 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     try:
         clips[req.clip_index]['video_url'] = new_url
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
+        with open(json_files[0], 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
@@ -5142,7 +8068,7 @@ async def add_hook(req: HookRequest, request: Request):
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
         
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
         
     clips = data.get('shorts', [])
@@ -5248,7 +8174,7 @@ async def add_hook(req: HookRequest, request: Request):
         if req.clip_index < len(clips):
             clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
             data['shorts'] = clips
-            with open(json_files[0], 'w') as f:
+            with open(json_files[0], 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
                 print(f"✅ Metadata updated with hook video for clip {req.clip_index}")
     except Exception as e:
@@ -5296,7 +8222,7 @@ async def translate_clip(
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
 
-    with open(json_files[0], 'r') as f:
+    with open(json_files[0], 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -5359,7 +8285,7 @@ async def translate_clip(
         if req.clip_index < len(clips):
             clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
             data['shorts'] = clips
-            with open(json_files[0], 'w') as f:
+            with open(json_files[0], 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
                 print(f"✅ Metadata updated with translated video for clip {req.clip_index}")
     except Exception as e:
@@ -5904,6 +8830,15 @@ async def thumbnail_analyze(
 
         if url:
             from main import download_youtube_video
+            # The video's own YouTube captions replace Whisper here too, as in
+            # the clip pipeline (youtube_captions.py, YT_CAPTIONS=0 off): on a
+            # CPU laptop Whisper takes ~7 min per hour of audio, captions ~4 s.
+            try:
+                import youtube_captions
+                pre_transcript = await asyncio.get_event_loop().run_in_executor(
+                    None, youtube_captions.fetch, url)
+            except Exception as e:  # noqa: BLE001 — Whisper still runs
+                print(f"   ℹ️ Thumbnail: no captions shortcut ({type(e).__name__}).")
             video_path, _ = download_youtube_video(url, UPLOAD_DIR)
         else:
             safe_name = os.path.basename(file.filename or "upload") or "upload"

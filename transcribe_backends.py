@@ -32,6 +32,14 @@ import tempfile
 import threading
 import time
 
+for _s in ("stdout", "stderr"):
+    _stream = getattr(sys, _s, None)
+    if _stream and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 from subtitles import (
     get_whisper_config,
     WHISPER_TRANSCRIBE_PARAMS,
@@ -173,7 +181,13 @@ def _get_whisper_model():
     with _whisper_lock:
         if _whisper_model is None or _whisper_key != key:
             from faster_whisper import WhisperModel
-            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
+            kwargs = {}
+            if key[1] == "cpu":
+                # 4 beat 8 on an i7-1360P (35 s vs 55 s for 5 min of audio,
+                # 5-oct-2026): past the 4 performance cores the extra threads
+                # land on efficiency cores and the whole batch waits for them.
+                kwargs["cpu_threads"] = int(os.environ.get("WHISPER_CPU_THREADS", "4"))
+            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2], **kwargs)
             _whisper_key = key
     return _whisper_model, cfg["device"]
 
@@ -188,8 +202,20 @@ def _run_whisper_once(media_path, **params):
     # before unloading, so a transcription can never start on a model that is
     # being dropped underneath it.
     with gate:
-        model, _device = _get_whisper_model()
-        segments, info = model.transcribe(media_path, **params)
+        model, device = _get_whisper_model()
+        if device == "cpu" and os.environ.get("WHISPER_BATCHED", "1").strip() != "0":
+            # Sequential beam-5 decoding ran slower than real time on a laptop
+            # CPU (5 min of Hindi audio: >10 min; greedy: 359 s). The batched
+            # pipeline did it in 35 s. Plain batched decoding looped on one word
+            # ("agar agar agar..."); the n-gram block and penalty stop that.
+            from faster_whisper import BatchedInferencePipeline
+            segments, info = BatchedInferencePipeline(model=model).transcribe(
+                media_path, batch_size=8, beam_size=1,
+                word_timestamps=params.get("word_timestamps", True),
+                no_repeat_ngram_size=3, repetition_penalty=1.1,
+                condition_on_previous_text=False)
+        else:
+            segments, info = model.transcribe(media_path, **params)
         progress = _TranscribeProgress(getattr(info, "duration", 0))
         materialized = []
         for segment in segments:

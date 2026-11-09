@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Search, BarChart3, Send, MessageCircle, Film, Eye, Layers, Sun, Clapperboard } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
@@ -25,6 +25,20 @@ import LoginModal from './components/LoginModal';
 import TrialGate from './components/TrialGate';
 import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
+import LocalLibrary from './components/LocalLibrary';
+import FinderTab from './components/FinderTab';
+import AutopilotLocal from './components/AutopilotLocal';
+import ChannelTab from './components/ChannelTab';
+import ChannelsTab from './components/ChannelsTab';
+import TodayTab from './components/TodayTab';
+import StudioTab from './components/StudioTab';
+import PostPlan from './components/PostPlan';
+import CommentsTab from './components/CommentsTab';
+import ReadyBanner from './components/ReadyBanner';
+import LongVideoTab from './components/LongVideoTab';
+import SystemCheck from './components/SystemCheck';
+import RivalsTab from './components/RivalsTab';
+import { Logo, Wordmark, ThemePicker } from './components/Brand';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
@@ -269,7 +283,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, serverGeminiKey } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   // Free plan: "want the watermark off?" once per job, when the clips land.
@@ -567,6 +581,24 @@ function App() {
     setActiveTab('dashboard');
   };
 
+  // Reopen a finished job from the local History tab. /api/status rebuilds
+  // a job from disk after a restart, so it answers for any job still kept.
+  const openLocalJob = async (job) => {
+    const data = await apiJson(`/api/status/${job.job_id}`);
+    if (!data?.result?.clips?.length) throw new Error('This job has no clips left on disk.');
+    flushClipState();
+    setProjectState(null);
+    setNoSource(!job.has_source);
+    setJobId(job.job_id);
+    setResults(data.result);
+    setLogs(data.logs?.length ? data.logs : ['Reopened from History.']);
+    setLogTimes([Date.now() / 1000]);
+    setProcessingMedia(null);
+    setQualityGate(null);
+    setStatus('complete');
+    setActiveTab('dashboard');
+  };
+
   // Apply one subtitle style to every clip of the job, sequentially.
   const handleBulkSubtitles = async (options) => {
     const clips = results?.clips || [];
@@ -628,7 +660,7 @@ function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `openshorts_clips_${(jobId || '').slice(0, 8)}.zip`;
+      a.download = `shortkaar_clips_${(jobId || '').slice(0, 8)}.zip`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -850,8 +882,10 @@ function App() {
   // `keysMissing` now means "self-host BYOK keys missing" — it never fires on hosted.
   // A self-hosted server running the moment picker on a local LLM
   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
-  const geminiOk = !!apiKey || !!localLlm;
-  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
+  // The server's own GEMINI_API_KEY (.env) counts too: the backend uses it
+  // whenever the browser sends no key.
+  const geminiOk = !!apiKey || !!localLlm || serverGeminiKey;
+  const keysMissing = !billingEnabled && !geminiOk;
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial
@@ -915,8 +949,12 @@ function App() {
   // connect page's return URL). Read once per hash change, then the query is
   // dropped so a reload does not keep forcing the tab.
   const [autopilotConnected, setAutopilotConnected] = useState(false);
+  const [channelNotice, setChannelNotice] = useState(null);
+  const [channelsNotice, setChannelsNotice] = useState(null);
   useEffect(() => {
-    const DEEP_LINK_TABS = ['autopilot', 'history', 'settings', 'thumbnails', 'dashboard'];
+    const DEEP_LINK_TABS = ['autopilot', 'history', 'gallery', 'settings', 'thumbnails', 'dashboard',
+      'finder', 'local-autopilot', 'channel', 'post-plan', 'comments', 'long-video', 'rivals', 'channels', 'today',
+      'studio'];
     const apply = () => {
       const hash = window.location.hash || '';
       if (!hash.startsWith('#app?')) return;
@@ -925,11 +963,25 @@ function App() {
       if (!tab || !DEEP_LINK_TABS.includes(tab)) return;  // e.g. #app?tutorial=1
       setActiveTab(tab);
       if (tab === 'autopilot' && params.get('connected') === '1') setAutopilotConnected(true);
+      // Back from Google (youtube_account.py): tell the My channel tab how it went.
+      if (tab === 'channel') setChannelNotice({ connected: params.get('connected') === '1', error: params.get('yt_error') || '' });
+      if (tab === 'channels') setChannelsNotice({ connected: params.get('connected') === '1', error: params.get('yt_error') || '' });
       try { window.history.replaceState(null, '', '#app'); } catch (_) { /* ignore */ }
     };
     apply();
     window.addEventListener('hashchange', apply);
     return () => window.removeEventListener('hashchange', apply);
+  }, []);
+
+  // Self-host opens on Today (every channel at a glance). /api/today answers
+  // only on a self-hosted server, so the hosted product keeps Make Shorts.
+  useEffect(() => {
+    if ((window.location.hash || '').startsWith('#app?')) return undefined;
+    let live = true;
+    fetch(getApiUrl('/api/today')).then((r) => {
+      if (live && r.ok) setActiveTab((tab) => (tab === 'dashboard' ? 'today' : tab));
+    }).catch(() => { /* not self-hosted, or the server is still starting */ });
+    return () => { live = false; };
   }, []);
 
   useEffect(() => {
@@ -1051,6 +1103,28 @@ function App() {
         // Set when the user took the quota wall's "clip the first N minutes"
         // offer: the server reserves N minutes and cuts the source to them.
         max_minutes: data.maxMinutes || null,
+        // Framed look (colour background, title, captions under the video).
+        ...(data.outputFormat === 'framed' ? {
+          frame_bg_color: data.frameBg || null,
+          frame_crop: data.frameCrop || null,
+          frame_zoom: data.frameZoom || null,
+          frame_title: data.frameTitle === false ? '0' : '1',
+          frame_outro: data.frameOutro === false ? '0' : '1',
+          frame_outro_seconds: data.frameOutro === false ? null : (data.frameOutroSeconds || null),
+          frame_handle: data.frameHandle || null,
+        } : {}),
+        caption_script: data.captionScript || null,
+        genre: data.genre || null,
+        ai_take: data.aiTake === false ? false : null,
+        // Songs: keep the sound + lyrics (music the user owns). Cricket: the match.
+        song_owned: data.genre === 'songs' ? (data.songOwned ? '1' : '0') : null,
+        cricket_match: data.genre === 'cricket' ? (data.cricketMatch || null) : null,
+        cricket_mode: data.genre === 'cricket' ? (data.cricketMode || 'match') : null,
+        bg_music: data.genre === 'cricket' && data.bgMusic ? '1' : null,
+        // Your own moments (comedy): "12:30-13:20, 45:10-46:00".
+        moments: data.genre === 'comedy' && data.moments ? data.moments : null,
+        // The AI take's voice; absent = the default (Puck), as before.
+        take_voice: data.genre === 'comedy' && data.aiTake !== false && data.takeVoice ? data.takeVoice : null,
       };
 
       if (data.type === 'url') {
@@ -1061,6 +1135,9 @@ function App() {
           output_format: data.outputFormat || 'auto',
           force_low_quality: forceLowQuality,
           ...Object.fromEntries(Object.entries(advanced).filter(([, v]) => v != null)),
+          // Several links -> one compilation short; absent for a normal job.
+          ...(data.urls && data.urls.length > 1
+            ? { urls: data.urls, compile_seconds: data.compileSeconds || null } : {}),
         });
       } else if (data.type === 'thumbnail_session') {
         // Handover from Thumbnail Studio (issue #68): the video and transcript
@@ -1191,16 +1268,34 @@ function App() {
   // One nav definition drives all three surfaces: the desktop rail, the mobile
   // drawer, and the bottom tab bar. `short` is the tab-bar label — the full one
   // wraps to two lines in a 5-up bar on a 360px phone.
+  // Shortkaar shows the sections it uses. Hidden, code kept: Autopilot
+  // (cloud only), AI Shorts, AI Agent and UGC Gallery; to bring one back,
+  // add its entry here again.
+  //   { id: 'autopilot', icon: Rocket, label: 'Autopilot', short: 'autopilot' },
+  //   { id: 'saasshorts', icon: Sparkles, label: 'AI Shorts', short: 'ai shorts', byok: true },
+  //   { id: 'ai-agent', icon: Bot, label: 'AI Agent', short: 'agent', byok: true },
+  //   { id: 'ugc-gallery', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery' },
   const navItems = [
-    { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Clip Generator', short: 'clips', primary: true },
-    // Cloud only: it runs on the managed pipeline and the Upload-Post connection.
-    ...(billingEnabled ? [{ id: 'autopilot', ord: '02', icon: Rocket, label: 'Autopilot', short: 'autopilot', isNew: true }] : []),
-    { id: 'saasshorts', ord: '03', icon: Sparkles, label: 'AI Shorts', short: 'ai shorts', byok: true, primary: true },
-    { id: 'ai-agent', ord: '04', icon: Bot, label: 'AI Agent', short: 'agent', byok: true },
-    { id: 'ugc-gallery', ord: '05', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery', primary: true },
-    { id: 'thumbnails', ord: '06', icon: Image, label: 'YouTube Studio', short: 'studio', primary: true },
-    ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '07', icon: History, label: 'History', short: 'history' }] : []),
-    { id: 'settings', ord: '08', icon: Settings, label: 'Settings', short: 'settings' },
+    // Self-host: Today first (every channel at a glance).
+    ...(billingEnabled ? [] : [{ id: 'today', ord: '00', icon: Sun, label: 'Today', short: 'today', primary: true },
+      // Studio (studio.py): check, fix and approve the channels' videos before they go up.
+      { id: 'studio', ord: 'ST', icon: Clapperboard, label: 'Studio', short: 'studio', primary: true }]),
+    { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Make Shorts', short: 'create', primary: true },
+    { id: 'history', ord: '02', icon: History, label: 'History', short: 'history', primary: true },
+    { id: 'gallery', ord: '03', icon: LayoutGrid, label: 'Gallery', short: 'gallery', primary: true },
+    { id: 'thumbnails', ord: '04', icon: Image, label: 'Thumbnail Studio', short: 'thumbs', primary: true },
+    // Local-only tools (self-host): finder, daily autopilot, own channel.
+    ...(billingEnabled ? [] : [
+      { id: 'post-plan', ord: '05', icon: Send, label: 'Ready to post', short: 'post' },
+      { id: 'finder', ord: '06', icon: Search, label: 'Find videos', short: 'find' },
+      { id: 'local-autopilot', ord: '07', icon: Rocket, label: 'Autopilot', short: 'autopilot' },
+      { id: 'comments', ord: '08', icon: MessageCircle, label: 'Comments', short: 'comments' },
+      { id: 'long-video', ord: '09', icon: Film, label: 'Long video', short: 'long' },
+      { id: 'rivals', ord: '10', icon: Eye, label: 'Similar channels', short: 'rivals' },
+      { id: 'channel', ord: '11', icon: BarChart3, label: 'My channel', short: 'channel' },
+      { id: 'channels', ord: '12', icon: Layers, label: 'Channels', short: 'channels' },
+    ]),
+    { id: 'settings', ord: billingEnabled ? '05' : '13', icon: Settings, label: 'Settings', short: 'settings' },
   ];
   const activeNav = navItems.find((n) => n.id === activeTab);
 
@@ -1222,55 +1317,29 @@ function App() {
 
   // Shared footer links (landing, repo, pricing, contact) — same list in the
   // desktop rail and the mobile drawer, so they can never drift apart.
+  // Rail footer: the brand line. The OpenShorts landing, repo and contact
+  // links were removed in the Shortkaar rebrand.
   const NavFooterLinks = ({ collapsed = false }) => (
-    <>
-      <a
-        href="#landing"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-      >
-        <Globe size={14} className="shrink-0" />
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>landing page</span>
-      </a>
-      <a
-        href="https://github.com/mutonby/openshorts"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-      >
-        <svg height="14" viewBox="0 0 16 16" version="1.1" width="14" aria-hidden="true" fill="currentColor" className="shrink-0"><path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>open source</span>
-      </a>
-      {billingEnabled && (
-        <a
-          href="#/pricing"
-          className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-        >
-          <Sparkles size={14} className="shrink-0" />
-          <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>plans &amp; pricing</span>
-        </a>
-      )}
-      <a
-        href="mailto:info@openshorts.app"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-      >
-        <Mail size={14} className="shrink-0" />
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>info@openshorts.app</span>
-      </a>
-    </>
+    <div className={`px-3 py-2 space-y-3 ${collapsed ? 'hidden lg:block' : ''}`}>
+      <ThemePicker />
+      <p className="text-[11px] text-muted leading-snug">
+        <Wordmark className="text-ink2" /> · long videos in, viral shorts out
+      </p>
+    </div>
   );
 
   // Desktop rail: icon-only from md, labelled from lg. Below md it is gone
   // entirely — an unlabelled 80px rail ate a fifth of a phone screen.
   const Sidebar = () => (
     <div className="hidden md:flex w-20 lg:w-64 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-all duration-300">
-      <a href="#landing" className="p-6 flex items-center gap-3" title="go to landing page">
-        <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
-          <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
-        </div>
-        <span className="font-display lowercase text-lg text-ink hidden lg:block">openshorts</span>
+      <a href="#app" onClick={() => goToTab('dashboard')} className="p-6 flex items-center gap-3 shrink-0" title="Shortkaar">
+        <Logo size={36} className="shrink-0 drop-shadow-[0_0_14px_var(--color-glow)]" />
+        <Wordmark className="text-xl text-ink hidden lg:block" />
       </a>
 
-      <nav className="flex-1 px-4 py-4 space-y-1">
+      {/* min-h-0 + its own scroll: inside the overflow-hidden shell a taller list was cut off with no
+          way to reach the last tabs on a laptop screen (owner, 29-oct-2026). */}
+      <nav className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 py-4 space-y-1">
         {navItems.map((item) => {
           const NavIcon = item.icon;
           const isActive = activeTab === item.id;
@@ -1298,7 +1367,7 @@ function App() {
         })}
       </nav>
 
-      <div className="p-4 border-t border-rule space-y-1">
+      <div className="p-4 border-t border-rule space-y-1 shrink-0">
         <NavFooterLinks collapsed />
       </div>
     </div>
@@ -1319,11 +1388,9 @@ function App() {
       />
       <div className="relative w-[17rem] max-w-[82vw] h-full bg-paper2 border-r border-rule flex flex-col animate-slide-in-left">
         <div className="flex items-center justify-between px-5 h-14 border-b border-rule shrink-0">
-          <a href="#landing" className="flex items-center gap-2.5" onClick={() => setNavOpen(false)}>
-            <div className="w-7 h-7 bg-paper3 rounded-input overflow-hidden border border-rule shrink-0">
-              <img src="/logo-openshorts.png" alt="" className="w-full h-full object-cover" />
-            </div>
-            <span className="font-display lowercase text-lg text-ink">openshorts</span>
+          <a href="#app" className="flex items-center gap-2.5" onClick={() => goToTab('dashboard')}>
+            <Logo size={32} className="shrink-0" />
+            <Wordmark className="text-lg text-ink" />
           </a>
           <button
             onClick={() => setNavOpen(false)}
@@ -1413,13 +1480,13 @@ function App() {
     /* h-dvh where supported: on mobile Safari/Chrome `100vh` is the tallest the
        viewport ever gets, so a h-screen shell hides its own bottom bar behind
        the browser chrome until the user scrolls. */
-    <div className="flex h-screen supports-[height:100dvh]:h-[100dvh] bg-paper overflow-hidden">
+    <div className="flex h-screen supports-[height:100dvh]:h-[100dvh] app-aurora overflow-hidden">
       <Sidebar />
       {navOpen && <MobileNavDrawer />}
 
       <main className="flex-1 min-w-0 flex flex-col h-full overflow-hidden relative">
         {/* Top Header */}
-        <header className="h-14 border-b border-rule bg-paper flex items-center justify-between gap-2 px-3 sm:px-6 shrink-0 z-10">
+        <header className="h-14 border-b border-rule bg-transparent backdrop-blur-sm flex items-center justify-between gap-2 px-3 sm:px-6 shrink-0 z-10">
           <div className="flex items-center gap-2 sm:gap-4 min-w-0">
             {/* Mobile: the drawer handle, and the section name the icon rail
                 used to carry. Without it a phone has no "where am I". */}
@@ -1431,7 +1498,7 @@ function App() {
               <Menu size={20} />
             </button>
             <span data-tutorial="nav-clips" className="md:hidden font-display lowercase text-base text-ink truncate">
-              {activeNav?.label || 'openshorts'}
+              {activeNav?.label || 'shortkaar'}
             </span>
             {status !== 'idle' && (
               <button
@@ -1488,13 +1555,9 @@ function App() {
               >
                 <AlertTriangle size={12} />
                 <span className="hidden md:inline">
-                  {!geminiOk && !uploadPostKey
-                    ? 'Gemini & Upload-Post keys missing'
-                    : !geminiOk
-                      ? 'Gemini API Key Missing'
-                      : 'Upload-Post API Key Missing'}
+                  Gemini API Key Missing
                 </span>
-                <span className="md:hidden">keys missing</span>
+                <span className="md:hidden">key missing</span>
               </button>
             )}
           </div>
@@ -1506,13 +1569,9 @@ function App() {
             <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 text-sm text-ink2 min-w-0 flex-1">
               <KeyRound size={16} className="shrink-0 text-warn mt-0.5 sm:mt-0" />
               <div className="min-w-0">
-                <span className="font-medium text-ink">Required API keys missing.</span>{' '}
+                <span className="font-medium text-ink">Gemini API key missing.</span>{' '}
                 <span className="text-muted">
-                  {!geminiOk && !uploadPostKey
-                    ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
-                    : !geminiOk
-                      ? 'Set your Gemini API key to use OpenShorts.'
-                      : 'Set your Upload-Post API key to use OpenShorts.'}
+                  Set your Gemini API key in Settings to generate and download clips.
                 </span>
               </div>
             </div>
@@ -1557,16 +1616,18 @@ function App() {
             <div className="h-full overflow-y-auto p-4 sm:p-8 max-w-2xl mx-auto animate-fade">
               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
                 <div>
-                  <p className="eyebrow mb-1.5">08 · SETTINGS</p>
+                  <p className="eyebrow mb-1.5">05 · SETTINGS</p>
                   <h1 className="font-display lowercase text-2xl text-ink">Settings</h1>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted mt-1">
                   <Shield size={12} className="text-ok shrink-0" /> Privacy: keys only live in your browser (sent to backend just to process)
                 </div>
               </div>
+              {!billingEnabled && <SystemCheck />}
               {/* Self-hosted installs have no account page, so the agent
                   how-to lives here; cloud users get it (with OAuth) in Account. */}
-              {!billingEnabled && <div className="mb-6"><McpConnectCard cloud={false} /></div>}
+              {/* AI-agent (MCP) connection card: hidden with the AI Agent section.
+              {!billingEnabled && <div className="mb-6"><McpConnectCard cloud={false} /></div>} */}
               {isManaged ? (
                 <div className="card p-6 mb-2">
                   <div className="flex items-center justify-between mb-3">
@@ -1622,11 +1683,10 @@ function App() {
                     </div>
                     <h2 className="text-base font-medium text-ink lowercase">Social Integration</h2>
                   </div>
-                  <span className="badge-warn">Required</span>
+                  <span className="badge-quiet text-xs">Optional</span>
                 </div>
                 <p className="text-xs text-muted mb-6 leading-relaxed">
-                  Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>.
-                  Includes a <strong>free tier</strong> (no credit card required).
+                  Optional. Only needed if you want to publish your clips directly to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>.
                 </p>
                 <div className="space-y-4">
                   <label className="block text-sm text-muted">Upload-Post API Key</label>
@@ -1942,7 +2002,7 @@ function App() {
           )}
 
           {/* View: History */}
-          {activeTab === 'history' && (
+          {activeTab === 'history' && billingEnabled && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
                 <HistoryTab onReopenProject={restoreProject} />
@@ -1965,10 +2025,65 @@ function App() {
             />
           )}
 
-          {/* View: Gallery */}
-          {/* {activeTab === 'gallery' && (
-            <Gallery />
-          )} */}
+          {/* Local tools: video finder, daily autopilot, own channel (self-host). */}
+          {activeTab === 'finder' && !billingEnabled && (
+            <FinderTab onMakeShorts={(link) => {
+              try { localStorage.setItem('os_pending_url', link); localStorage.setItem('os_genre', 'comedy'); } catch { /* ignore */ }
+              setActiveTab('dashboard');
+            }} />
+          )}
+          {activeTab === 'post-plan' && !billingEnabled && (
+            <PostPlan
+              onMakeShorts={(link) => {
+                try { localStorage.setItem('os_pending_url', link); localStorage.setItem('os_genre', 'comedy'); } catch { /* ignore */ }
+                setActiveTab('dashboard');
+              }}
+              onOpenAutopilot={() => setActiveTab('local-autopilot')}
+              onNewShorts={() => setActiveTab('finder')}
+              onOpenChannel={() => setActiveTab('channel')}
+            />
+          )}
+          {activeTab === 'comments' && !billingEnabled && <CommentsTab />}
+          {activeTab === 'long-video' && !billingEnabled && <LongVideoTab />}
+          {activeTab === 'rivals' && !billingEnabled && (
+            <RivalsTab onSearch={(q) => {
+              try { localStorage.setItem('os_finder_q', q); } catch { /* ignore */ }
+              setActiveTab('finder');
+            }} />
+          )}
+          {activeTab === 'local-autopilot' && !billingEnabled && (
+            <AutopilotLocal onOpenChannelTab={() => setActiveTab('channel')} />
+          )}
+          {activeTab === 'channel' && !billingEnabled && (
+            <ChannelTab notice={channelNotice} />
+          )}
+          {/* Today and Channels render plain content, so they get the scrolling
+              frame every other tab has: inside this overflow-hidden shell,
+              without it nothing past the window's height could be reached. */}
+          {activeTab === 'today' && !billingEnabled && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-8 animate-fade">
+              <TodayTab onOpenTab={setActiveTab} />
+            </div>
+          )}
+          {activeTab === 'studio' && !billingEnabled && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-8 animate-fade">
+              <StudioTab />
+            </div>
+          )}
+          {activeTab === 'channels' && !billingEnabled && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-8 animate-fade">
+              <ChannelsTab notice={channelsNotice} onOpenAutopilot={() => setActiveTab('local-autopilot')} />
+            </div>
+          )}
+
+          {/* View: Gallery (local: every clip still on this machine) */}
+          {activeTab === 'gallery' && (
+            <LocalLibrary mode="gallery" onOpenJob={openLocalJob} />
+          )}
+          {/* View: History on a local install (the cloud one is below) */}
+          {activeTab === 'history' && !billingEnabled && (
+            <LocalLibrary mode="history" onOpenJob={openLocalJob} />
+          )}
 
           {/* View: Dashboard (Idle) */}
           {activeTab === 'dashboard' && status === 'idle' && (
@@ -1979,34 +2094,24 @@ function App() {
                   eyebrow, the display size and the gaps all shrink first. */}
               <div className="max-w-xl w-full text-center space-y-5 sm:space-y-8">
                 <div className="space-y-2.5 sm:space-y-4">
-                  <p className="eyebrow hidden sm:block">01 · CLIP GENERATOR</p>
-                  <h1 className="font-display lowercase text-3xl sm:text-4xl md:text-5xl text-ink">
-                    Create Viral Shorts
+                  <div className="flex justify-center">
+                    <Logo size={64} className="drop-shadow-[0_0_32px_var(--color-glow)]" />
+                  </div>
+                  <h1 className="font-display lowercase text-3xl sm:text-4xl md:text-5xl text-ink leading-tight">
+                    long videos in.<br /><span className="text-gradient">viral shorts</span> out.
                   </h1>
-                  <p className="text-muted text-[15px] sm:text-lg leading-snug sm:leading-normal max-w-sm sm:max-w-none mx-auto">
-                    Drop your long-form video below to instantly generate viral clips with AI.
+                  <p className="text-muted text-[15px] sm:text-lg leading-snug sm:leading-normal max-w-md mx-auto">
+                    Paste a YouTube link. Shortkaar finds the best moments, frames them in your
+                    brand, adds Roman Urdu captions and writes the SEO copy.
                   </p>
-                  {/* The same pipeline is an MCP server: point people at the
-                      one place that explains how to drive it from an agent. */}
-                  {!tutorialLock && (
-                  <p className="text-xs text-muted">
-                    Or let an agent do it:{' '}
-                    <a
-                      href={billingEnabled ? '#/account' : '#app'}
-                      onClick={(e) => { if (!billingEnabled) { e.preventDefault(); goToTab('settings'); } }}
-                      className="text-ink2 underline underline-offset-2 hover:text-brass transition-colors"
-                    >
-                      connect Claude, ChatGPT or n8n →
-                    </a>
-                  </p>
-                  )}
                 </div>
 
+                {!billingEnabled && <ReadyBanner onOpen={() => setActiveTab('post-plan')} />}
                 <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
 
                 <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-xs sm:text-sm">
-                  <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>
-                  <span className="flex items-center gap-2"><Instagram size={16} /> Instagram</span>
+                  <span className="flex items-center gap-2"><Youtube size={16} /> Shorts</span>
+                  <span className="flex items-center gap-2"><Instagram size={16} /> Reels</span>
                   <span className="flex items-center gap-2"><TikTokIcon size={16} /> TikTok</span>
                 </div>
               </div>
@@ -2077,13 +2182,9 @@ function App() {
                   </div>
                 )}
 
-                {/* The render is dead time: the user is watching a progress bar
-                    with nothing to do, so this is where the one star ask goes. */}
-                {status === 'processing' && (
-                  <div className="my-3">
-                    <StarBanner message="Got a minute while this renders?" />
-                  </div>
-                )}
+                {/* OpenShorts' GitHub star prompt during the render, removed in the
+                    Shortkaar rebrand:
+                    {status === 'processing' && <StarBanner message="Got a minute while this renders?" />} */}
 
                 {/* Logs Terminal */}
                 <div className={`bg-paper rounded-card border border-rule overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? `min-h-0 opacity-50 hover:opacity-100 ${logsVisible ? 'h-32' : 'h-auto'}` : `flex-1 ${logsVisible ? 'min-h-[160px] sm:min-h-[200px]' : 'min-h-0 flex-none'}`}`}>
@@ -2145,22 +2246,19 @@ function App() {
                       <button
                         onClick={handleDownloadAll}
                         disabled={downloadingAll}
-                        className="btn-ghost px-3 py-2 text-xs"
+                        className="btn-primary px-4 py-2 text-xs"
                         title="Download all clips as a ZIP"
                       >
                         {downloadingAll
                           ? <><Loader2 size={14} className="animate-spin" />zipping…</>
                           : <><Download size={14} />download all</>}
                       </button>
+                      {/* Hidden in Shortkaar (auto-posting via Upload-Post is not used):
                       {results.clips.length > 1 && (
-                        <button
-                          onClick={() => setShowScheduleWeek(true)}
-                          className="btn-primary px-4 py-2 text-xs"
-                        >
-                          <Calendar size={14} />
-                          schedule week
+                        <button onClick={() => setShowScheduleWeek(true)} className="btn-primary px-4 py-2 text-xs">
+                          <Calendar size={14} /> schedule week
                         </button>
-                      )}
+                      )} */}
                     </div>
                   )}
                 </div>
@@ -2264,7 +2362,8 @@ function App() {
                           index={i}
                           jobId={jobId}
                           onEditClip={(index) => setEditingClip(index)}
-                          onReframeClip={(index) => setReframingClip(index)}
+                          // Framed clips have no face-tracked crop to adjust (the server refuses it).
+                          onReframeClip={results?.output_format === 'framed' ? undefined : (index) => setReframingClip(index)}
                           onUpgrade={isManaged ? openUpsell : null}
                           initialState={projectState?.clips?.find((c) => c.index === i) || null}
                           onStateChange={handleClipStateChange}
@@ -2318,11 +2417,7 @@ function App() {
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
         eyebrow="SETUP"
-        title={!geminiOk && !uploadPostKey
-          ? 'Required API Keys Missing'
-          : !geminiOk
-            ? 'Gemini API Key Required'
-            : 'Upload-Post API Key Required'}
+        title="Gemini API Key Required"
         footer={
           <div className="flex gap-3">
             <button
@@ -2342,7 +2437,7 @@ function App() {
       >
         <div className="space-y-4">
           <p className="text-sm text-muted">
-            OpenShorts needs both a <strong className="text-ink2">Gemini</strong> API key and an <strong className="text-ink2">Upload-Post</strong> API key. Both have free tiers.
+            Shortkaar needs a <strong className="text-ink2">Gemini API Key</strong> to analyze video transcripts and extract viral moments.
           </p>
 
           {/* Gemini block */}
@@ -2374,15 +2469,15 @@ function App() {
           </div>
 
           {/* Upload-Post block */}
-          <div className={`rounded-input p-4 space-y-2 border ${!uploadPostKey ? 'border-rule2' : 'border-rule opacity-70'}`}>
+          <div className={`rounded-input p-4 space-y-2 border ${!uploadPostKey ? 'border-rule' : 'border-rule opacity-70'}`}>
             <p className="text-xs font-medium text-ink flex items-center gap-2">
-              {uploadPostKey ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
-              Upload-Post API Key {uploadPostKey && <span className="text-ok">— set</span>}
+              {uploadPostKey ? <Check size={12} className="text-ok" /> : <span className="text-muted">•</span>}
+              Upload-Post API Key <span className="text-muted">(Optional — only for auto-publishing)</span>
             </p>
             {!uploadPostKey && (
               <>
                 <p className="text-xs text-muted">
-                  Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts. Free tier available, no credit card needed.
+                  Optional: Only needed if you want to auto-post clips directly to TikTok, Instagram Reels, and YouTube Shorts.
                 </p>
                 <ol className="text-xs text-muted space-y-1 list-decimal list-inside">
                   <li>Register at <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="text-brass underline">app.upload-post.com</a></li>
