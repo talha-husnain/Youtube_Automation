@@ -45,8 +45,9 @@ def _client():
     key = os.getenv("GEMINI_API_KEY")
     if not key:
         return None, None
+    import ai_fallback
     import short_kit
-    return (genai.Client(api_key=key, http_options=short_kit.http_options()),
+    return (ai_fallback.wrap(genai.Client(api_key=key, http_options=short_kit.http_options())),
             os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite")
 
 

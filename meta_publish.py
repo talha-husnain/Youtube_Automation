@@ -197,22 +197,48 @@ def use_redirect_host(host, env_file=None):
     return url
 
 
+PAGE_FIELDS = ("id,name,access_token,instagram_business_account{id,username},"
+               "connected_instagram_account{id,username}")
+
+
+def _extra_file():
+    return os.path.join(STATE_DIR, "extra_pages.json")
+
+
+def _pages(user_id, user_token, http):
+    """The Pages the sign-in may post to. /accounts leaves out a Page that sits in a business portfolio
+    (7-nov-2026: Billo aur Gang, once its Instagram was linked through Business Suite), though the sign-in
+    still reaches it by id; such Pages are listed by id in state/meta/extra_pages.json and read one by one."""
+    got = _json(http.get(f"{GRAPH}/{user_id}/accounts", params={
+        "fields": PAGE_FIELDS, "access_token": user_token, "limit": 100}, timeout=30))
+    pages = [_page_row(p) for p in got.get("data") or []]
+    seen = {p["id"] for p in pages}
+    for pid in _read(_extra_file(), []):
+        pid = str(pid)
+        if pid in seen:
+            continue
+        r = http.get(f"{GRAPH}/{pid}", params={"fields": PAGE_FIELDS, "access_token": user_token}, timeout=30)
+        if r.status_code == 200 and (r.json() or {}).get("access_token"):
+            pages.append(_page_row(r.json()))
+            seen.add(pid)
+    return pages
+
+
 def refresh_pages(http=httpx):
     """Read the Pages and their linked Instagram accounts again with the saved sign-in (an Instagram linked
     after connecting shows up without signing in again). The status."""
     tok = _token() or {}
     if not tok.get("user_token"):
         raise RuntimeError("Connect Facebook first.")
-    got = _json(http.get(f"{GRAPH}/{tok['user_id']}/accounts", params={
-        "fields": "id,name,access_token,instagram_business_account{id,username}", "access_token": tok["user_token"],
-        "limit": 100}, timeout=30))
-    tok["pages"] = [_page_row(p) for p in got.get("data") or []] or tok.get("pages") or []
+    tok["pages"] = _pages(tok["user_id"], tok["user_token"], http) or tok.get("pages") or []
     _write(TOKEN_FILE, tok)
     return status()
 
 
 def _page_row(p):
-    ig = p.get("instagram_business_account") or {}
+    # An Instagram linked through Business Suite comes back as connected_instagram_account only (7-nov-2026,
+    # @talkingcartons); the same id takes Reels (its content_publishing_limit answers with the Page token).
+    ig = p.get("instagram_business_account") or p.get("connected_instagram_account") or {}
     return {"id": p["id"], "name": p.get("name"), "access_token": p["access_token"],
             "ig_id": ig.get("id"), "ig_username": ig.get("username")}
 
@@ -243,11 +269,20 @@ def back_for(state):
 
 def _err(r):
     """Meta's own message for a failed call; never the URL (it can carry a token)."""
+    # Instagram's own reason is in the codes and error_user_msg: a bare "Fatal" (code -1, subcode 2207001 is its
+    # anti-spam) or "{}" (rupload answers with debug_info, not error) told nothing on 7/8-nov-2026.
     try:
-        e = r.json().get("error") or {}
-        return f"Meta said {r.status_code}: {e.get('message') or e}"[:300]
+        body = r.json()
     except ValueError:
         return f"Meta said {r.status_code}"
+    e = body.get("error") or body.get("debug_info") or {}
+    if not isinstance(e, dict):
+        return f"Meta said {r.status_code}: {str(e)[:250]}"
+    codes = "/".join(str(e[k]) for k in ("code", "error_subcode") if e.get(k) is not None)
+    user = e.get("error_user_msg") or e.get("error_user_title") or ""
+    kind = e.get("type") if e.get("type") not in (None, "OAuthException") else ""
+    text = " ".join(x for x in (e.get("message") or "", kind, f"({codes})" if codes else "", user) if x)
+    return f"Meta said {r.status_code}: {text or body}"[:300]
 
 
 def _json(r):
@@ -268,10 +303,7 @@ def finish_connect(code, state, http=httpx):
         **app, "grant_type": "fb_exchange_token", "fb_exchange_token": short}, timeout=30))
     user_token = long["access_token"]
     me = _json(http.get(f"{GRAPH}/me", params={"fields": "id,name", "access_token": user_token}, timeout=30))
-    got = _json(http.get(f"{GRAPH}/{me['id']}/accounts", params={
-        "fields": "id,name,access_token,instagram_business_account{id,username}", "access_token": user_token,
-        "limit": 100}, timeout=30))
-    pages = [_page_row(p) for p in got.get("data") or []]
+    pages = _pages(me["id"], user_token, http)
     if not pages:
         raise RuntimeError("Facebook gave no Pages. Create a Page (and link Instagram to it), then connect again.")
     _write(TOKEN_FILE, {"user_id": me["id"], "user_name": me.get("name"), "user_token": user_token,
@@ -526,10 +558,16 @@ def post_instagram(p, path, caption, ai=True, http=httpx, sleep=time.sleep):
     if not p.get("ig_id"):
         raise RuntimeError("No Instagram account is linked to this Page.")
     tok = p["access_token"]
-    box = _json(http.post(f"{GRAPH}/{p['ig_id']}/media", data={
-        "media_type": "REELS", "upload_type": "resumable", "caption": caption, "share_to_feed": "true",
-        "is_ai_generated": "true" if ai else "false", "access_token": tok}, timeout=60))
-    _upload(box.get("uri") or f"{RUPLOAD}/ig-api-upload/{VERSION}/{box['id']}", tok, path, http)
+    try:
+        box = _json(http.post(f"{GRAPH}/{p['ig_id']}/media", data={
+            "media_type": "REELS", "upload_type": "resumable", "caption": caption, "share_to_feed": "true",
+            "is_ai_generated": "true" if ai else "false", "access_token": tok}, timeout=60))
+    except RuntimeError as e:
+        raise RuntimeError(f"creating the Reel: {e}") from e
+    try:
+        _upload(box.get("uri") or f"{RUPLOAD}/ig-api-upload/{VERSION}/{box['id']}", tok, path, http)
+    except RuntimeError as e:
+        raise RuntimeError(f"uploading the video: {e}") from e
     waited = 0
     while True:
         st = _json(http.get(f"{GRAPH}/{box['id']}", params={"fields": "status_code,status", "access_token": tok},
@@ -543,6 +581,9 @@ def post_instagram(p, path, caption, ai=True, http=httpx, sleep=time.sleep):
             raise RuntimeError("Instagram took too long to process the video.")
         sleep(POLL * 3)
         waited += POLL * 3
-    done = _json(http.post(f"{GRAPH}/{p['ig_id']}/media_publish", data={"creation_id": box["id"], "access_token": tok},
-                           timeout=60))
+    try:
+        done = _json(http.post(f"{GRAPH}/{p['ig_id']}/media_publish", data={"creation_id": box["id"],
+                                                                         "access_token": tok}, timeout=60))
+    except RuntimeError as e:
+        raise RuntimeError(f"publishing: {e}") from e
     return done.get("id")

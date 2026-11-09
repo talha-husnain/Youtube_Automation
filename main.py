@@ -1885,6 +1885,9 @@ def _run_gemini_stage(client, model_name, prompt, schema):
                 # small model that skipped a required field this time.
                 'ConnectError', 'ReadTimeout', 'RemoteProtocolError', '502', '504',
                 'validation error'))
+            # Out of prepaid credit is also RESOURCE_EXHAUSTED, but no retry can succeed (7-nov-2026).
+            if "credits are depleted" in msg:
+                transient = False
             if attempt == max_attempts or not transient:
                 raise
             wait = 5 * (2 ** (attempt - 1))
@@ -1987,7 +1990,8 @@ def get_viral_clips(transcript_result, video_duration, used=None):
             print("❌ Error: GEMINI_API_KEY not found in environment variables "
                   "(set it, or point LLM_BASE_URL at an OpenAI-compatible server).")
             return None
-        client = genai.Client(api_key=api_key)
+        import ai_fallback  # OpenAI, then Ollama, when Gemini is out of credit (7-nov-2026)
+        client = ai_fallback.wrap(genai.Client(api_key=api_key))
         model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
     print(f"\U0001f916  Model: {model_name} | language: {language}")
 

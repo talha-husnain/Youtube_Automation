@@ -306,8 +306,9 @@ def apply(clips, transcript, source_title="", context="", text_limit=1200):
                 "\n".join(niche) + "\n"
     try:
         from google import genai
+        import ai_fallback
         import short_kit
-        client = genai.Client(api_key=key, http_options=short_kit.http_options())
+        client = ai_fallback.wrap(genai.Client(api_key=key, http_options=short_kit.http_options()))
         model = os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
         got = _ask(client, model, items, handle, source, style, latin, note)
     except Exception as e:  # noqa: BLE001 — the old copy stays

@@ -296,6 +296,29 @@ def test_pages_are_read_again_and_checked_without_posting(state):
     assert "tok222" not in json.dumps(rows)
 
 
+class _PortfolioPage(FakeMeta):
+    """/accounts lists only 111; Page 333 sits in a business portfolio, reachable by id, its Instagram given
+    as connected_instagram_account (7-nov-2026, Billo aur Gang and @talkingcartons)."""
+
+    def get(self, url, params=None, timeout=None):
+        if url.endswith("/333"):
+            self.calls.append(("GET", url, dict(params or {})))
+            return _R({"id": "333", "name": "Billo aur Gang", "access_token": "tok333",
+                       "connected_instagram_account": {"id": "777", "username": "talkingcartons"}})
+        if url.endswith("/444"):
+            return _R({"error": {"message": "does not exist"}}, 400)
+        return super().get(url, params, timeout)
+
+
+def test_a_page_in_a_business_portfolio_is_read_by_id(state):
+    assert [p["id"] for p in _connect(_PortfolioPage())["pages"]] == ["111"]    # no list: as before
+    mp._write(mp._extra_file(), ["333", "444", "111"])                          # 444 unreachable, 111 already in
+    st = mp.refresh_pages(http=_PortfolioPage())
+    assert [(p["id"], p["instagram"]) for p in st["pages"]] == [("111", "cric_ig"), ("333", "talkingcartons")]
+    assert mp.page("333")["access_token"] == "tok333" and mp.page("333")["ig_id"] == "777"
+    assert "tok333" not in json.dumps(st)
+
+
 def test_the_sign_in_address_switches_between_localhost_and_127(state, monkeypatch):
     monkeypatch.delenv("META_REDIRECT", raising=False)
     env = state / ".env"
@@ -316,3 +339,25 @@ def test_reels_ask_to_be_sent_on_the_kinds_that_have_a_line():
     assert any(line in one for line in mp.SHARE_LINES["toons"]) and one.index("bhejo") < one.index("#cartoon")
     assert not any(line in mp.caption_for("t", "b", "quran") for lines in mp.SHARE_LINES.values() for line in lines)
     assert mp.caption_for("t", "b") == "t\n\nb"
+
+
+def test_instagram_errors_say_the_step_and_metas_codes():
+    """7/8-nov-2026: Billo's Reels failed as "Meta said 400: Fatal" and "Meta said 400: {}", which told nothing."""
+    fatal = _R({"error": {"message": "Fatal", "code": -1, "error_subcode": 2207001,
+                          "error_user_msg": "The account is temporarily restricted"}}, 400)
+    msg = mp._err(fatal)
+    assert "Fatal" in msg and "-1/2207001" in msg and "temporarily restricted" in msg
+    assert "ProcessingFailedError" in mp._err(_R({"debug_info": {"type": "ProcessingFailedError",
+                                                                "message": "Request processing failed"}}, 400))
+
+    class Http:
+        def post(self, url, **kw):
+            if url.endswith("/media"):
+                return _R({"id": "c1", "uri": "https://rupload/x"})
+            return _R({"success": True}) if "rupload" in url else fatal
+
+        def get(self, url, **kw):
+            return _R({"status_code": "FINISHED"})
+
+    with pytest.raises(RuntimeError, match="^publishing: Meta said 400: Fatal"):
+        mp.post_instagram({"ig_id": "9", "access_token": "t"}, __file__, "cap", http=Http(), sleep=lambda s: None)

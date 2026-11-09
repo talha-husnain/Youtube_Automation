@@ -19,6 +19,12 @@ def _row(name, status, detail, fix=""):
     return {"name": name, "status": status, "detail": detail, "fix": fix}
 
 
+def out_of_credit(msg):
+    """Gemini's answer when a prepaid account is at zero (402, "Your prepayment credits are depleted")."""
+    msg = str(msg)
+    return "credits are depleted" in msg or "'code': 402" in msg or '"code": 402' in msg
+
+
 def gemini():
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
@@ -33,6 +39,19 @@ def gemini():
         return _row("AI (Gemini)", "ok", f"The key works ({(r.text or '').strip()[:10] or 'answered'}).")
     except Exception as e:  # noqa: BLE001
         msg = str(e)
+        if out_of_credit(msg):
+            # 7-nov-2026: a prepaid AI Studio account at zero answers 402 RESOURCE_EXHAUSTED. Unlike a rate limit
+            # it never clears by waiting, and every channel stops (ideas, scripts, the cartoons' pictures).
+            import ai_fallback
+            if ai_fallback.openai_key():
+                return _row("AI (Gemini)", "warn",
+                            "Gemini's prepaid credits are used up: OpenAI writes instead and draws the cartoons only "
+                            "(paid per use); songs are made free on this PC; watching videos waits for Gemini.",
+                            "Top up the credits in Google AI Studio (Dashboard > Billing) to go back to Gemini.")
+            return _row("AI (Gemini)", "error",
+                        "Gemini's prepaid credits are used up: no channel can plan, write or draw a new video.",
+                        "Top up the credits in Google AI Studio (Dashboard > Billing), or put a key from a project "
+                        "without billing (free, much smaller daily limits) in .env as GEMINI_API_KEY.")
         if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
             return _row("AI (Gemini)", "warn", "The key works but the quota is used up for now.",
                         "Wait a while, or raise the quota in Google AI Studio.")
@@ -241,8 +260,52 @@ def heartbeat():
     return _row("Outside heartbeat", "ok" if st["last"] in (None, "ok") else "warn", f"On. Last ping: {last}.")
 
 
+def backups():
+    """The AIs ai_fallback asks when Gemini is out of credit or quota: OpenAI (a free model list call checks
+    the key), then Ollama on this laptop."""
+    import httpx
+    import ai_fallback
+    rows = []
+    key = ai_fallback.openai_key()
+    if not key:
+        rows.append(_row("Backup AI (OpenAI)", "warn", "No OPENAI_API_KEY: when Gemini stops, everything waits.",
+                         "Add OPENAI_API_KEY=sk-... to .env."))
+    else:
+        try:
+            r = httpx.get(f"{ai_fallback.OPENAI}/models", headers={"Authorization": f"Bearer {key}"}, timeout=30)
+            if r.status_code == 200:
+                st = ai_fallback.status()
+                now = (f" Standing in for Gemini now ({st['images_today']} picture(s) today)." if st["gemini_down"]
+                       else "")
+                rows.append(_row("Backup AI (OpenAI)", "ok",
+                                 f"The key works; {ai_fallback.openai_model()} writes and "
+                                 f"{ai_fallback.openai_image_model()} draws when Gemini cannot.{now}"))
+            else:
+                rows.append(_row("Backup AI (OpenAI)", "error", f"OpenAI refused the key ({r.status_code}).",
+                                 "Check OPENAI_API_KEY in .env."))
+        except Exception as e:  # noqa: BLE001
+            rows.append(_row("Backup AI (OpenAI)", "warn", f"Could not reach OpenAI ({type(e).__name__})."))
+    if ai_fallback.ollama_up():
+        rows.append(_row("Free AI (Ollama)", "ok", f"Running; {ai_fallback.ollama_model()} writes when Gemini "
+                                                   "and OpenAI both cannot (text only, slow on this laptop)."))
+    else:
+        rows.append(_row("Free AI (Ollama)", "warn", "Not running: the last, free backup is off.",
+                         f"Install Ollama (ollama.com) and run: ollama pull {ai_fallback.ollama_model()}"))
+    import free_song
+    if not free_song.enabled():
+        rows.append(_row("Free songs (ACE-Step)", "warn", "Turned off (ACESTEP=0): songs wait for Lyria."))
+    elif free_song.up(timeout=3):
+        rows.append(_row("Free songs (ACE-Step)", "ok", "Running; it sings when Lyria cannot (free, on this PC)."))
+    elif free_song.installed():
+        rows.append(_row("Free songs (ACE-Step)", "ok", "Installed; it starts by itself when Lyria cannot sing."))
+    else:
+        rows.append(_row("Free songs (ACE-Step)", "warn", "Not installed: when Lyria cannot sing, songs wait.",
+                         f"Install ACE-Step 1.5 into {free_song.home()}."))
+    return rows
+
+
 def run_all(output_dir, cap_gb, retention_seconds):
-    rows = [gemini(), *downloader(), ffmpeg(), disk(output_dir, cap_gb), *channel(), autopilot(),
+    rows = [gemini(), *backups(), *downloader(), ffmpeg(), disk(output_dir, cap_gb), *channel(), autopilot(),
             free_voice(), stock(), quota(), watchdog(), stay_awake(), encoder(), heartbeat()]
     import short_kit
     n = len(short_kit.music_tracks())

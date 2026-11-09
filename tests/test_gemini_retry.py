@@ -82,6 +82,36 @@ def test_non_transient_errors_are_not_retried():
     assert _Boom.calls == 1
 
 
+OUT_OF_CREDIT = ("402 RESOURCE_EXHAUSTED. {'error': {'code': 402, 'message': 'Your prepayment credits are "
+                 "depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing.'")
+
+
+def test_out_of_credit_is_not_retried_and_the_check_says_so(monkeypatch):
+    # 7-nov-2026: every channel stopped on this answer, and the system check called it a passing quota.
+    class _Broke:
+        calls = 0
+
+        def generate_content(self, **kwargs):
+            _Broke.calls += 1
+            raise RuntimeError(OUT_OF_CREDIT)
+
+    with pytest.raises(RuntimeError):
+        main._run_gemini_stage(_client(_Broke()), "m", "prompt", object)
+    assert _Broke.calls == 1
+
+    import system_check
+    from google import genai
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(genai, "Client", lambda **kw: _client(_Broke()))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    row = system_check.gemini()
+    assert row["status"] == "error" and "credits" in str(row)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")                 # the backup stands in: a warning only
+    row = system_check.gemini()
+    assert row["status"] == "warn" and "OpenAI" in str(row)
+    assert not system_check.out_of_credit("429 RESOURCE_EXHAUSTED: You exceeded your current quota")
+
+
 def test_succeeds_without_retrying_when_the_first_call_is_fine():
     models = _FakeModels(blips=0)
     main._run_gemini_stage(_client(models), "m", "prompt", object)

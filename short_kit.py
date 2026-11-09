@@ -99,11 +99,14 @@ def http_options():
 
 
 def gemini():
+    """Gemini's client, with OpenAI and then Ollama behind it for when Gemini is out of credit or quota
+    (ai_fallback.py, 7-nov-2026)."""
     from google import genai
+    import ai_fallback
     key = os.getenv("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("This video type needs GEMINI_API_KEY in .env.")
-    return genai.Client(api_key=key, http_options=http_options())
+    return ai_fallback.wrap(genai.Client(api_key=key, http_options=http_options()))
 
 
 def text_model():

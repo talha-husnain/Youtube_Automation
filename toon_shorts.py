@@ -660,11 +660,13 @@ def _image(client, contents, out, size="1K", aspect="9:16"):
     last = None
     for attempt in range(3):
         try:
-            r = client.models.generate_content(
-                model=model, contents=contents,
-                config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"],
-                                                   image_config=types.ImageConfig(aspect_ratio=aspect,
-                                                                                  image_size=size)))
+            import ai_fallback
+            with ai_fallback.allow_images():        # the one channel the paid backup draws for (7-nov-2026)
+                r = client.models.generate_content(
+                    model=model, contents=contents,
+                    config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"],
+                                                       image_config=types.ImageConfig(aspect_ratio=aspect,
+                                                                                      image_size=size)))
             for part in r.parts or []:
                 if part.inline_data is not None and part.inline_data.data:
                     Image.open(io.BytesIO(part.inline_data.data)).convert("RGB").save(out)
@@ -676,7 +678,8 @@ def _image(client, contents, out, size="1K", aspect="9:16"):
             last = RuntimeError("the image model returned no picture" + (f": {said[:160]}" if said else ""))
         except Exception as e:  # noqa: BLE001 — a transient error gets another try
             last = e
-            if not any(m in f"{type(e).__name__} {e}" for m in kit.TRANSIENT + ("429", "500", "503")):
+            if "credits are depleted" in str(e) or not any(
+                    m in f"{type(e).__name__} {e}" for m in kit.TRANSIENT + ("429", "500", "503")):
                 break
         time.sleep(4 * (attempt + 1))
     raise last
@@ -1412,6 +1415,10 @@ def run(output_dir, pipeline):
     import toon_mix
     if os.environ.get("TOON_MIX_JOB") == "1":
         return toon_mix.run(output_dir, pipeline)       # the weekly compilation of kept episodes
+    if os.environ.get("TOON_MOTION", "1") != "0":
+        # Real animated scenes with lip-sync (owner, 9-nov-2026): toon_motion.py. TOON_MOTION=0: the pictures below.
+        import toon_motion
+        return toon_motion.run(output_dir, pipeline)
     premise = re.sub(r"\s+", " ", os.environ.get("TOON_PREMISE") or "").strip()[:240]
     shape = (os.environ.get("TOON_SHAPE") or "").strip().lower() or None
     os.environ["STOCK_FOOTAGE"] = "0"          # our own pictures only (broll reads this in this job's process)

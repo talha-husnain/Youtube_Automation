@@ -247,8 +247,9 @@ def apply(clips, transcript, job_dir, clip_names, outro_seconds=0.0, source_titl
     print(f"🎙️ Writing the channel's take for {len(clips)} clip(s)...")
     try:
         from google import genai
+        import ai_fallback
         import short_kit
-        client = genai.Client(api_key=key, http_options=short_kit.http_options())
+        client = ai_fallback.wrap(genai.Client(api_key=key, http_options=short_kit.http_options()))
         model = os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
         texts = write_takes(client, model, clips, transcript, handle, genre, source_title)
     except Exception as e:  # noqa: BLE001 — clips go out without a take

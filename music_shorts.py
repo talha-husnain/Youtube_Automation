@@ -163,8 +163,7 @@ def lyria_prompt(p):
     return "\n".join(parts)
 
 
-def sing(client, p, out_path):
-    """Lyria makes the song; returns the mp3 path."""
+def _lyria(client, p, out_path):
     it = client.interactions.create(model=LYRIA_MODEL, input=lyria_prompt(p))
     audio = it.output_audio
     if not audio or not audio.data:
@@ -172,6 +171,38 @@ def sing(client, p, out_path):
     with open(out_path, "wb") as f:
         f.write(base64.b64decode(audio.data))
     return out_path
+
+
+def free_sing(p, out_path):
+    """The same song by ACE-Step on this PC (free_song.py)."""
+    import free_song
+    style = (f"{p.lyria_style} Vocals start right away, no long intro; verse, pre-chorus, then a big catchy "
+             "chorus, ending cleanly.")
+    lyrics = free_song.lyrics_text([("Verse", p.verse), ("Pre-Chorus", p.pre_chorus), ("Chorus", p.chorus)])
+    # ACE-Step plays an intro whatever the prompt says (22 s in the first test, 8-nov-2026); window() starts the
+    # Short at the first sung line, so the song is made longer to leave ~45-50 s after the intro.
+    return free_song.make(style, lyrics, out_path, seconds=free_song._int_env("ACESTEP_SECONDS", 70))
+
+
+def sing(client, p, out_path):
+    """Lyria makes the song; when it cannot (no Gemini credit, an outage), ACE-Step makes it free on
+    this PC (owner, 7-nov-2026). Lyria's content-filter refusals still go back to the caller, which
+    writes another song. Returns the mp3 path."""
+    import ai_fallback
+    import free_song
+    if ai_fallback.status().get("gemini_down") and free_song.enabled() and free_song.installed():
+        print("   ℹ️ Gemini is out of credit for now, so the free song maker sings it.")
+        return free_sing(p, out_path)
+    try:
+        return _lyria(client, p, out_path)
+    except Exception as e:  # noqa: BLE001
+        if "policy" in str(e).lower() or "blocked" in str(e).lower() or not free_song.enabled():
+            raise
+        print(f"   ⚠️ Lyria could not sing ({str(e)[:90]}); the free song maker sings it.")
+        try:
+            return free_sing(p, out_path)
+        except Exception as e2:  # noqa: BLE001
+            raise RuntimeError(f"{e} | free song maker: {e2}") from e
 
 
 def cover(client, p, out_path):
