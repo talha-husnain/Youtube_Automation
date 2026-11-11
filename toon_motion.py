@@ -7,8 +7,8 @@ scenes from Google's video model, Gemini Omni Flash, through the same Gemini key
 together); the character reference pictures (state/toons/cast) keep Billo, Sheru, Mithu and Guddu the same from scene
 to scene. The model takes at most 2 characters with references per request, so a scene shows 1-2 of them.
 
-Cost (owner chose 9-nov-2026: 360p, one episode a day): Omni bills per second of video, ~$0.03 at 360p (third-party
-price pages, Nov 2026; $0.10 at 720p). An episode of ~30-40 s is ~$1-1.2; the 360x640 video is made 1080x1920 on this
+Cost (owner chose 9-nov-2026: 360p, one episode a day): Omni 1.2 Flash bills per second of video: $0.023 at 360p,
+~$0.07 at 720p (Google's pricing page, 10-nov-2026). An episode of ~24 s is ~$0.55; the 360x640 video is made 1080x1920 on this
 laptop by Real-ESRGAN's anime model (upscale.py, free). TOON_VIDEO_SECONDS_PER_DAY caps the seconds made a day.
 
 Language: Omni's docs (Nov 2026) call English "fully supported" and other languages "not evaluated", so the first
@@ -34,7 +34,7 @@ import short_kit as kit
 import toon_shorts as ts
 
 MODEL = os.environ.get("TOON_VIDEO_MODEL") or "gemini-omni-1.2-flash"
-PRICE = {"360p": 0.03, "720p": 0.10, "1080p": 0.15}       # $ per second of video (estimates, see above)
+PRICE = {"360p": 0.023, "720p": 0.07, "1080p": 0.104}     # $ per second, Omni 1.2 Flash (Google pricing page, 10-nov-2026)
 SIZE = {"360p": (360, 640), "720p": (720, 1280), "1080p": (1080, 1920)}
 MIN_SCENES, MAX_SCENES = 3, 5
 MIN_SECONDS, MAX_SECONDS = 24, 44                           # the whole episode
@@ -370,10 +370,10 @@ def _seconds(path):
     return float(r.stdout.strip() or 0)
 
 
-def join(clips, out):
-    """The scenes one after another at one size, 30 fps, 48 kHz stereo (a clip without sound gets silence).
-    Returns [(start, end)] of each scene in the joined video."""
-    w, h = SIZE[resolution()]
+def join(clips, out, size=None):
+    """The scenes one after another at one size (``size`` or this resolution's), 30 fps, 48 kHz stereo (a clip
+    without sound gets silence). Returns [(start, end)] of each scene in the joined video."""
+    w, h = size or SIZE[resolution()]
     cmd, graph, cat, times, t = ["ffmpeg", "-nostdin", "-y", "-v", "error"], [], "", [], 0.0
     for i, c in enumerate(clips):
         secs = _seconds(c)

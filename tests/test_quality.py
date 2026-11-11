@@ -75,9 +75,14 @@ def test_scripts_are_shorter_and_open_on_the_hook():
     assert "beats: 3 to 4" in controversy_shorts.STORY_PROMPT
 
 
-def test_every_song_starts_on_its_chorus_and_runs_about_half_a_minute():
-    lines = [("verse", 3.0, 6.0), ("verse two", 7.0, 10.0), ("the chorus", 20.0, 23.0), ("chorus 2", 24.0, 27.0),
-             ("chorus 3", 28.0, 31.0), ("chorus 4", 32.0, 35.0), ("verse three", 40.0, 50.0), ("end", 52.0, 56.0)]
-    start, end = music_shorts.window(lines, 60.0, music_shorts.SHORT_SONG, "the chorus")
-    assert start == 19.2 and end - start <= music_shorts.SHORT_SONG and music_shorts.FADE < 0.5
-    assert json.dumps(music_shorts.window(lines, 60.0)) == json.dumps([0.0, 57.5])  # the old window is still there
+def test_every_song_short_is_the_whole_song_opening_on_its_chorus():
+    # Owner, 10-nov-2026: songs of 20-40 s cut "in the middle of the sentence". The song itself opens on its
+    # chorus (music_shorts.sections), and the Short runs from the first sung word to the song's own end.
+    lines = [("the chorus", 3.0, 6.0), ("chorus 2", 7.0, 10.0), ("verse", 20.0, 23.0), ("verse 2", 24.0, 27.0),
+             ("the chorus", 40.0, 43.0), ("end", 52.0, 56.0)]
+    start, end, fade = music_shorts.song_span(lines, [], 61.0)
+    assert (start, end) == (2.4, 61.0) and fade < 0.5
+    # A song that opens on its first word is used from 0.
+    assert music_shorts.song_span([("a", 0.4, 2.0), ("b", 40.0, 47.0)], [], 50.0)[:2] == (0.0, 50.0)
+    # The dance Short (chorus only, as long as the dance) still has its window.
+    assert json.dumps(music_shorts.window(lines, 60.0, 15.0, "the chorus")) == json.dumps([2.2, 11.5])

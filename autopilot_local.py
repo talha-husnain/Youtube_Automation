@@ -30,7 +30,9 @@ from datetime import datetime
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(ROOT, "output", ".autopilot.json")
 LAST_SETTINGS_FILE = os.path.join(ROOT, "output", ".last_settings.json")
-CLIPS_PER_VIDEO = 3
+# Two, not three (11-nov-2026): the replay peaks give a video's two best moments, and 8 Shorts a day then
+# come from four videos instead of the same two or three.
+CLIPS_PER_VIDEO = 2
 MAX_CHANNELS = 10
 # Auto upload walks Ready to post this often; after the channel's daily
 # upload limit it waits UPLOAD_PAUSE_SECONDS (one refused call per tick
@@ -43,6 +45,9 @@ CLAIM_CHECK_EVERY = 1800
 # (14-oct-2026). A podcast's "EP 29" is the creator's own and stays.
 SERIES_TITLE = re.compile(r"\b(drama|serial|natak|film|movie|trailer|web ?series|season \d+)\b", re.I)
 EPISODE_TITLE = re.compile(r"\b(episode|epi|ep\.? ?\d+)\b", re.I)
+# Reaction channels re-show someone else's video (11-nov-2026: "OUR STUPID REACTIONS" took 26 of the
+# top Creative Commons stand-up results); the vet drops them too, this keeps them out of its 40 slots.
+REACTION_TITLE = re.compile(r"\breact(?:ion|ions|ing|s)?\b", re.I)
 MAX_QUERIES = 8
 RESEARCH_PER_CHANNEL = 2
 RESEARCH_QUERIES = ["pakistani stand up comedy", "urdu stand up comedy", "pakistani comedy show",
@@ -65,7 +70,8 @@ DEFAULTS = {
     # Match watch: a result Short within hours of a followed team's match.
     "match_watch": False, "match_team": "Pakistan", "last_match_check": 0,
     # Research: find viral reuse-allowed videos by search, not only the channels.
-    "research": True, "research_queries": RESEARCH_QUERIES, "min_views": 20000,
+    # 100k (was 20k, 11-nov-2026): a source nobody watched gave Shorts nobody watched.
+    "research": True, "research_queries": RESEARCH_QUERIES, "min_views": 100_000,
     "last_auto_post": 0, "upload_paused_until": 0,
     # Sources a Content ID claim blocked: research and channels never use them again.
     "blocked_sources": [], "last_claim_check": 0,
@@ -213,13 +219,18 @@ def run_claim_check(check_claims, log=print):
 
 
 def research_videos(cfg, log):
-    """Most-viewed Creative Commons videos for the research searches, unused
-    first, at most RESEARCH_PER_CHANNEL per channel. Search results carry
-    the CC filter; pick_videos still checks each licence before a job."""
+    """Most-viewed Creative Commons videos of the research searches and of the
+    known comedians' own channels (comedy_sources.py), unused first, at most
+    RESEARCH_PER_CHANNEL per channel. Search results carry the CC filter and
+    the comedians' videos their own licence; pick_videos still checks each
+    licence before a job."""
     import channel_tools
+    import comedy_sources
+    import learning
     import used_moments
     lo, hi = cfg["min_minutes"] * 60, cfg["max_minutes"] * 60
-    queries = cfg.get("research_queries") or RESEARCH_QUERIES
+    queries = list(dict.fromkeys((cfg.get("research_queries") or RESEARCH_QUERIES) + comedy_sources.queries_today()))
+    learned = learning.load()
 
     def _one(q):
         try:
@@ -230,10 +241,13 @@ def research_videos(cfg, log):
             log(f"Search failed for '{q}': {type(e).__name__}")
             return []
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        found = [v for vs in pool.map(_one, queries) for v in vs]
-    import learning
-    learned = learning.load()
+    # One search at a time: parallel yt-dlp reads trip YouTube's bot check.
+    found = [v for q in queries for v in _one(q)]
+
+    def resting(url):
+        return (any(b.get("channel_url") == url for b in cfg.get("blocked_sources") or [])
+                or learning.source_factor(url, learned) <= 0)
+    found += comedy_sources.videos(log, skip=resting)
 
     def weight(v):
         # A source whose Shorts did well for this channel ranks up, a poor one
@@ -248,14 +262,18 @@ def research_videos(cfg, log):
         seen.add(v["id"])
         if (v.get("views") or 0) < cfg.get("min_views", 0):
             continue
-        if is_blocked(cfg, v) or looks_like_a_series(v.get("title")):
+        if is_blocked(cfg, v) or looks_like_a_series(v.get("title")) or REACTION_TITLE.search(v.get("title") or ""):
             continue
         used = used_moments.summary(v["url"])
         if used["count"] and used["seconds"] >= 0.4 * v["seconds"]:
             continue
+        key = v.get("channel_url") or v.get("channel")
+        if sum(1 for c in cands if (c.get("channel_url") or c.get("channel")) == key) >= VET_PER_CHANNEL:
+            continue   # one big comedian must not fill the whole check
         v["_partly"] = bool(used["count"])
         cands.append(v)
     cands = vet(cands[:VET_MAX], log)
+    comedy_sources.remember(cands)
     per_channel, fresh, partly = {}, [], []
     for v in cands:
         key = v.get("channel_url") or v.get("channel")
@@ -263,19 +281,22 @@ def research_videos(cfg, log):
             continue
         per_channel[key] = per_channel.get(key, 0) + 1
         (partly if v.pop("_partly") else fresh).append(v)
-    log(f"Research: {len(fresh)} new and {len(partly)} partly used videos from {len(queries)} searches.")
+    log(f"Research: {len(fresh)} new and {len(partly)} partly used videos from {len(queries)} searches "
+        f"and the known comedians.")
     return fresh, partly
 
 
 VET_MAX = 40
+VET_PER_CHANNEL = 4
 VET_PROMPT = """You choose source videos for "Punchline Bazaar", a Pakistani comedy Shorts
 channel: short funny clips with Roman Urdu titles for a Pakistani audience.
 
 Every candidate below is marked Creative Commons on YouTube, but many of those
 are re-uploads by channels that do not own them, and a re-upload gets the
 channel copyright claims. Keep a video only when ALL of these are true:
-- it is talking comedy: stand-up, a comedy or talk show, funny mushaira or
-  poetry, a comedy podcast or interview with a comedian;
+- it is comedy people laugh at: stand-up or crowd work, a comedy or talk show,
+  funny mushaira or poetry, a comedy podcast or interview with a comedian, or
+  a comedy sketch the channel made itself (not a film, serial or TV show);
 - it is in Urdu, Hindi or Punjabi;
 - the channel looks like the original creator or the show's own channel (the
   comedian's or the show's own name), not a channel re-uploading a TV

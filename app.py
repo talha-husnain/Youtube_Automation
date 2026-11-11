@@ -5297,6 +5297,7 @@ async def process_endpoint(
     music_theme: Optional[str] = Form(None),
     music_mood: Optional[str] = Form(None),
     music_brief: Optional[str] = Form(None),
+    music_lang: Optional[str] = Form(None),
     music_mix: Optional[str] = Form(None),
     music_avoid: Optional[str] = Form(None),
     controversy_topic: Optional[str] = Form(None),
@@ -5394,6 +5395,7 @@ async def process_endpoint(
         music_theme = body.get("music_theme")
         music_mood = body.get("music_mood")
         music_brief = body.get("music_brief")
+        music_lang = body.get("music_lang")
         music_mix = body.get("music_mix")
         mix_extra = {k: body.get(k) for k in ("music_mix_mood", "music_mix_songs", "music_mix_minutes",
                                                "music_mix_budget", "music_mix_vol")}
@@ -5765,6 +5767,8 @@ async def process_endpoint(
         # The playlist mood the song is made for (music_moods.py) and its brief for the song writer.
         env["MUSIC_MOOD"] = re.sub(r"[^a-z0-9_]", "", str(music_mood or "").lower())[:30]
         env["MUSIC_BRIEF"] = re.sub(r"\s+", " ", str(music_brief or ""))[:300]
+        # The song's language (music_moods.pick_lang): English or Urdu.
+        env["MUSIC_LANG"] = "urdu" if str(music_lang or "").lower() == "urdu" else "english"
         mix = re.sub(r"[^a-z0-9_]", "", str(music_mix or "").lower())[:30]
         if mix:
             env.update(_mix_env(mix, mix_extra))

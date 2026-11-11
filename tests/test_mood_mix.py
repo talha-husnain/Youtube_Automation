@@ -193,3 +193,22 @@ def test_a_song_mix_renders_one_chapter_per_song_with_its_lyrics(tmp_path, archi
     assert clip["ai_made"] is True and finished["extra"]["format"] == "16:9" and clip["mix"]["tracks"] == 2
     assert os.path.isfile(os.path.join(str(out), "thumbnail.jpg"))
     assert all(r.get("mixed") == "job" for r in mm.archived())                # never in a second mix
+
+
+def test_without_gemini_credit_the_instrumental_tracks_come_through_fal(tmp_path, monkeypatch):
+    # Every sleep/study mix failed with "Only 0:00 of music" from 6-nov-2026: Lyria on the Gemini API had no credit.
+    import ai_fallback
+    import mood_mix
+    import music_shorts as ms
+    import talkies
+    monkeypatch.setattr(ai_fallback, "status", lambda: {"gemini_down": True})
+    monkeypatch.setattr(ms, "fal_enabled", lambda: True)
+    asked = []
+    monkeypatch.setattr(talkies, "fal_job", lambda endpoint, payload: asked.append(payload["prompt"]) or
+                        {"audio": {"url": "https://fal.media/t.mp3"}})
+    monkeypatch.setattr(talkies, "_download", lambda url, out: open(out, "wb").write(b"ID3") and out)
+    monkeypatch.setattr(ms, "media_seconds", lambda path: 150.0)
+    mood = {"name": "Sleep music", "sound": ["slow ambient piano"]}
+    tracks = mood_mix.make_tracks(None, mood, 30, 0.35, str(tmp_path), log=lambda m: None)
+    assert len(tracks) == 3 and len(asked) == 3                 # $0.35 buys three $0.10 tracks
+    assert all(p.startswith("Instrumental only") for p in asked)

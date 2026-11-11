@@ -17,14 +17,35 @@ import shutil
 import time
 
 OFTEN = {"less": 1, "normal": 2, "more": 4}
-# Romance and heartbreak are what the channel's viewers click (owner, 19-oct-2026: 75% love themes before moods):
-# sad and romantic start at "more often", so about half the songs stay love songs while the other playlists grow.
-DEFAULT_OFTEN = {"sad": 4, "romantic": 4}
+# Romance and heartbreak are what the channel's viewers click (owner, 19-oct-2026: 75% love themes before moods;
+# 10-nov-2026: "make more romantic songs"): sad and romantic "more often", the other song moods "less", so two
+# songs in three are love songs and every playlist still grows.
+DEFAULT_OFTEN = {"sad": 4, "romantic": 4, "workout": 1, "gym": 1, "chill": 1, "party": 1}
+
+# Songs in English and in Urdu (owner, 10-nov-2026: "one playlist will be English one and one will be for Urdu one,
+# and inside them... sad songs, romantic song, workout song"). YouTube has no playlist inside a playlist, so each
+# language has its all-songs playlist plus one per mood ("Urdu Sad Songs 💔..."), and engage.py groups them under
+# the language as a shelf on the channel page. Songs made before 10-nov-2026 are all English.
+LANGS = {
+    "english": {"name": "English", "playlist": "English Songs 🎧 New AI Songs Every Day",
+                "about": "Every English song of the channel, newest first: original AI songs (lyrics by AI, music and "
+                         "vocals by Google Lyria).",
+                "shelf": "English Songs 🎧"},
+    "urdu": {"name": "Urdu", "playlist": "Urdu Songs 🎧 Naye AI Gaane",
+             "about": "Har naya Urdu gaana: original AI songs in Urdu (lyrics by AI, music and vocals by Google "
+                      "Lyria). Sad, romantic, workout aur party gaane.",
+             "shelf": "Urdu Songs 🎧"},
+}
+URDU_SHARE = 0.5                  # songs in Urdu; the channel card can change it (0 = English only, 1 = Urdu only)
+# The playlists' titles before the language split; engage.py renames them on YouTube (their songs, views and links
+# stay) since every song in them is English.
+OLD_ALL_SONGS = "New AI songs"
 
 # key -> mood. ``styles`` are music_shorts.STYLES entries (learning picks the best of them by views);
 # ``themes`` what the songs are about; ``brief`` goes into the song writer's prompt.
 MOODS = {
-    "sad": {"name": "Sad songs", "emoji": "💔", "playlist": "Sad Songs 💔 Heartbreak AI Songs",
+    "sad": {"name": "Sad songs", "emoji": "💔", "playlist": "English Sad Songs 💔 Heartbreak AI Songs",
+            "old_playlist": "Sad Songs 💔 Heartbreak AI Songs", "urdu_playlist": "Urdu Sad Songs 💔 Dard Bhare AI Gaane",
             "picture": "a lonely window at night with rain streaks on the glass, blurred city lights, one candle, melancholic deep blue tones",
             "styles": ["sad piano ballad", "heartbreak pop ballad", "acoustic love song", "lo-fi chill"],
             "themes": ["heartbreak", "she left without a goodbye", "missing her at 3 am", "one-sided love",
@@ -33,7 +54,9 @@ MOODS = {
             "brief": "A SAD song: slow, aching and honest, the kind people play alone at night; a soft opening, "
                      "a chorus that breaks the heart.",
             "tags": ["sad songs", "sad song", "heartbreak song", "broken heart", "sad music"]},
-    "romantic": {"name": "Romantic songs", "emoji": "❤️", "playlist": "Romantic Love Songs ❤️ AI Songs",
+    "romantic": {"name": "Romantic songs", "emoji": "❤️", "playlist": "English Romantic Love Songs ❤️ AI Songs",
+                 "old_playlist": "Romantic Love Songs ❤️ AI Songs",
+                 "urdu_playlist": "Urdu Romantic Songs ❤️ Pyar Bhare AI Gaane",
                  "picture": "a warm sunset over a quiet beach, two small silhouettes holding hands far away, soft golden light",
                  "styles": ["romantic slow pop", "acoustic love song", "R&B slow jam", "indie folk"],
                  "themes": ["falling in love", "first crush", "love at first sight", "first date butterflies",
@@ -42,7 +65,9 @@ MOODS = {
                  "brief": "A ROMANTIC love song: warm, tender and sweet, one to send to the person you love; a "
                           "chorus that feels like a hug.",
                  "tags": ["romantic songs", "love song", "love songs 2026", "romantic music", "couple song"]},
-    "workout": {"name": "Workout songs", "emoji": "💪", "playlist": "Workout Motivation Songs 💪 AI Music",
+    "workout": {"name": "Workout songs", "emoji": "💪", "playlist": "English Workout Motivation Songs 💪 AI Music",
+                "old_playlist": "Workout Motivation Songs 💪 AI Music",
+                "urdu_playlist": "Urdu Workout Songs 💪 Josh Bhare AI Gaane",
                 "picture": "an empty running track at sunrise, long shadows, dramatic sky, energetic and bright",
                 "styles": ["motivational anthem", "EDM dance pop", "upbeat pop", "pop punk"],
                 "themes": ["no days off", "chasing dreams", "stronger every day", "one more rep",
@@ -50,15 +75,18 @@ MOODS = {
                 "brief": "A WORKOUT song: high energy, 125-150 BPM, a driving beat and a chant-along chorus about "
                          "pushing harder; great for running, cardio and training.",
                 "tags": ["workout music", "workout songs", "motivation song", "running music", "fitness music"]},
-    "gym": {"name": "Gym songs", "emoji": "🔥", "playlist": "Gym Phonk & Beast Mode Songs 🔥 AI Music",
+    "gym": {"name": "Gym songs", "emoji": "🔥", "playlist": "English Gym Phonk & Beast Mode Songs 🔥 AI Music",
+            "old_playlist": "Gym Phonk & Beast Mode Songs 🔥 AI Music", "urdu_playlist": "Urdu Gym Songs 🔥 Beast Mode AI Gaane",
             "picture": "a dark industrial gym with dramatic red and blue light, heavy barbells, haze, intense",
             "styles": ["gym phonk", "aggressive trap anthem", "motivational anthem"],
             "themes": ["beast mode", "gym motivation", "heavy lifting", "built different", "no pain no gain",
                        "silent grind", "they doubted me", "lion mindset"],
             "brief": "A GYM song: aggressive and heavy, phonk or trap energy (distorted 808 bass, cowbell, hard "
-                     "drums), short punchy lines and a shouted, chant-like chorus; made for lifting heavy.",
+                     "drums), the beat hitting in the first seconds; a 1-3 word chant hook repeated through the "
+                     "chorus, lines of 2-4 words, commands (lift, rise, go); made for lifting heavy.",
             "tags": ["gym music", "gym phonk", "phonk", "gym motivation", "beast mode", "workout phonk"]},
-    "chill": {"name": "Lo-fi chill", "emoji": "🌙", "playlist": "Lo-fi Chill Songs 🌙 Late Night AI Songs",
+    "chill": {"name": "Lo-fi chill", "emoji": "🌙", "playlist": "English Lo-fi Chill Songs 🌙 Late Night AI Songs",
+              "old_playlist": "Lo-fi Chill Songs 🌙 Late Night AI Songs", "urdu_playlist": "Urdu Lo-fi Songs 🌙 Raat Ke AI Gaane",
               "picture": "a quiet city street at night after rain, neon reflections, cozy lo-fi mood",
               "styles": ["lo-fi chill", "synthwave", "indie folk", "R&B slow jam"],
               "themes": ["late night drive", "rainy days", "city lights", "midnight thoughts", "study night",
@@ -66,13 +94,15 @@ MOODS = {
               "brief": "A CHILL lo-fi song: relaxed, dreamy and soft, 70-90 BPM, warm keys and a gentle beat; for "
                        "late nights, studying and driving.",
               "tags": ["lofi", "lofi songs", "chill music", "late night songs", "study music"]},
-    "party": {"name": "Party songs", "emoji": "🪩", "playlist": "Party & Dance Songs 🪩 AI Music",
+    "party": {"name": "Party songs", "emoji": "🪩", "playlist": "English Party & Dance Songs 🪩 AI Music",
+              "old_playlist": "Party & Dance Songs 🪩 AI Music", "urdu_playlist": "Urdu Party Songs 🪩 Dance & Shaadi AI Gaane",
               "picture": "a colourful dance floor with lights and confetti, festive, seen from above, no faces",
               "styles": ["EDM dance pop", "afrobeats", "upbeat pop", "country pop"],
               "themes": ["dancing all night", "summer nights", "best friends", "weekend vibes", "main character energy",
                          "road trip"],
-              "brief": "A PARTY song: bright, bouncy and fun, 115-128 BPM, a hook everyone shouts back; for dancing "
-                       "with friends.",
+              "brief": "A PARTY song: bright, bouncy and fun, 115-128 BPM, a call-and-response or counted chant in "
+                       "the first seconds and a dance move word in the hook everyone shouts back; for dancing with "
+                       "friends.",
               "tags": ["party songs", "dance music", "party music", "dance songs 2026", "happy songs"]},
 }
 # Instrumental moods are MIX ONLY (research 5-nov-2026: study/lofi music earns $3-6 RPM and sleep $4-8 in long
@@ -100,8 +130,44 @@ MOODS.update({
               "themes": ["sleep", "calm"], "brief": "", "tags": ["sleep music", "relaxing music", "calm piano",
                                                                    "deep sleep music", "ambient music"]},
 })
+# Urdu songs of each mood: Pakistani moments to write about, the sounds that suit them, what people search for.
+URDU = {
+    "sad": {"themes": ["she married someone else", "judaai at the railway station", "waiting for his call every night",
+                       "her mehndi was for someone else", "his last voice note", "yaadein in the monsoon rain",
+                       "a promise he broke", "one-sided love (ek tarfa pyar)", "the letter I never sent",
+                       "she blocked me everywhere"],
+            "styles": ["Pakistani sad ballad", "sad piano ballad", "acoustic love song"],
+            "tags": ["urdu sad song", "sad song urdu", "pakistani sad song", "dard bhare gaane", "hindi sad song"]},
+    "romantic": {"themes": ["love at first sight (pehli nazar)", "chai and you on a rainy evening",
+                            "mehndi ki raat", "her dupatta in the wind", "a long drive on a winter night",
+                            "the first time she smiled at me", "bas tum (only you)", "meeting in the rain",
+                            "our nikah dream", "her eyes (tumhari aankhein)"],
+                 "styles": ["Pakistani romantic pop", "Sufi pop love song", "romantic slow pop", "acoustic love song"],
+                 "tags": ["urdu love song", "romantic urdu song", "pakistani romantic song", "pyar bhare gaane",
+                          "hindi love song"]},
+    "workout": {"themes": ["believe in yourself (khud pe yaqeen)", "never give up (haar nahi maanni)",
+                           "the morning run", "hard work pays (mehnat)", "proving them wrong", "zid (determination)"],
+                "styles": ["desi hip hop anthem", "motivational anthem"],
+                "tags": ["urdu motivational song", "motivation song urdu", "pakistani motivational song",
+                         "workout song"]},
+    "gym": {"themes": ["lion heart (sher ka dil)", "beast mode", "silent grind (khamosh mehnat)", "they doubted me",
+                       "iron and sweat"],
+            "styles": ["desi gym rap", "gym phonk"],
+            "tags": ["desi gym song", "gym song urdu", "gym motivation", "urdu rap"]},
+    "chill": {"themes": ["raat ki chai", "Lahore winter nights", "a late night drive on the motorway",
+                         "the moon from the rooftop (chhat pe chaand)", "a monsoon evening"],
+              "styles": ["Urdu lo-fi", "lo-fi chill"],
+              "tags": ["urdu lofi", "lofi urdu song", "slowed reverb urdu", "hindi lofi"]},
+    "party": {"themes": ["shaadi ki dholki", "mehndi dance night", "best friends (yaari)", "baraat entry",
+                         "weekend with friends"],
+              "styles": ["dhol dance pop", "desi dance pop"],
+              "tags": ["shaadi song", "mehndi song", "dhol song", "pakistani party song", "urdu dance song"]},
+}
+for _k, _u in URDU.items():
+    MOODS[_k].update(urdu_themes=_u["themes"], urdu_styles=_u["styles"], urdu_tags=_u["tags"])
+
 # Styles a mood needs that the older style list did not have (music_shorts.STYLES takes them in).
-NEW_STYLES = ["gym phonk", "aggressive trap anthem"]
+NEW_STYLES = ["gym phonk", "aggressive trap anthem"] + sorted({s for u in URDU.values() for s in u["styles"]})
 
 # ------------------------------------------------------------------ mood mixes (mood_mix.py makes them)
 MIX_MIN_SONGS = 8                 # a song mood's mix: at least this many uploaded songs not mixed before (~8 min)
@@ -208,16 +274,84 @@ def pick(settings, recent, rnd=random):
     return rnd.choice(sorted(k for k, g in gap.items() if g >= best - 1e-9))
 
 
-def song_choice(mood, styles_ok, pick_style, rnd=random):
+def song_choice(mood, styles_ok, pick_style, rnd=random, lang="english"):
     """(style, theme, brief) for a song of ``mood``. ``pick_style(options)`` chooses among the mood's styles
-    (my_channels.pick_format: views decide once each was tried); a custom mood has its own sound instead."""
-    options = [s for s in mood.get("styles") or [] if s in styles_ok]
+    (my_channels.pick_format: views decide once each was tried); a custom mood has its own sound instead.
+    An Urdu song takes the mood's Urdu styles and themes when it has them."""
+    urdu = lang == "urdu"
+    options = [s for s in ((mood.get("urdu_styles") if urdu else None) or mood.get("styles") or []) if s in styles_ok]
     if options:
         style = pick_style(options)
     else:
         style = (mood.get("sound") or mood["name"])[:60]
-    theme = rnd.choice(mood.get("themes") or [mood["name"]])[:60]
+    theme = rnd.choice((mood.get("urdu_themes") if urdu else None) or mood.get("themes") or [mood["name"]])[:60]
     return style, theme, mood.get("brief") or ""
+
+
+# ------------------------------------------------------------------ languages
+def lang_of(row):
+    """A song's language: the one it was made in; every song before 10-nov-2026 is English."""
+    lang = (row or {}).get("lang")
+    return lang if lang in LANGS else "english"
+
+
+def urdu_share(ch):
+    """The channel card's share of Urdu songs (0 to 1)."""
+    try:
+        return max(0.0, min(1.0, float((ch or {}).get("urdu_share", URDU_SHARE))))
+    except (TypeError, ValueError):
+        return URDU_SHARE
+
+
+LANG_WINDOW = 6
+
+
+def pick_lang(share, recent, rnd=random):
+    """The next song's language: the one furthest below its share of the last LANG_WINDOW songs (ties at random),
+    so at half and half the two alternate instead of running in streaks. ``recent``: the latest songs' languages,
+    newest last (None = an English song made before languages)."""
+    if share <= 0:
+        return "english"
+    if share >= 1:
+        return "urdu"
+    window = [x if x in LANGS else "english" for x in (recent or [])][-LANG_WINDOW:]
+    n = len(window) + 1
+    urdu = share * n - window.count("urdu")
+    english = (1 - share) * n - window.count("english")
+    if abs(urdu - english) < 1e-9:
+        # A tie: the other language from the last song (none yet: either).
+        return ({"urdu": "english", "english": "urdu"}[window[-1]] if window
+                else rnd.choice(["english", "urdu"]))
+    return "urdu" if urdu > english else "english"
+
+
+def lang_playlist(lang):
+    return LANGS.get(lang, LANGS["english"])["playlist"]
+
+
+def lang_about(lang):
+    return LANGS.get(lang, LANGS["english"])["about"]
+
+
+def renames(settings=None):
+    """{old title: new title} of the playlists made before the language split (all their songs are English)."""
+    out = {OLD_ALL_SONGS: LANGS["english"]["playlist"]}
+    for m in all_moods(settings).values():
+        if m.get("old_playlist"):
+            out[m["old_playlist"]] = m["playlist"]
+    return out
+
+
+def shelf_lists(settings, lists):
+    """{lang: (shelf title, [playlist ids])}: each language's all-songs playlist, then its mood playlists in
+    the moods' order, those that exist on the channel (``lists``: title -> id)."""
+    out = {}
+    for lang, info in LANGS.items():
+        titles = [info["playlist"]] + [playlist_title(settings, k, lang) for k in song_moods(settings)]
+        ids = [lists[t] for t in dict.fromkeys(titles) if t and lists.get(t)]
+        if ids:
+            out[lang] = (info["shelf"], ids)
+    return out
 
 
 # Words of a song's style or theme -> its mood, for the songs made before moods (and for any upload without one).
@@ -246,13 +380,21 @@ def mood_of(row):
     return row.get("mood") or infer(row.get("format"), row.get("topic"))
 
 
-def playlist_title(settings, key):
+def playlist_title(settings, key, lang="english"):
+    """The mood's playlist for songs in ``lang`` (an instrumental mix-only mood has one, in no language)."""
     m = all_moods(settings).get(key)
-    return m["playlist"] if m else None
+    if not m:
+        return None
+    if lang == "urdu" and not m.get("mix_only"):
+        return m.get("urdu_playlist") or f"Urdu {m['name']} {m.get('emoji', '🎵')} AI Gaane"[:150]
+    return m["playlist"]
 
 
-def playlist_about(settings, key):
+def playlist_about(settings, key, lang="english"):
     m = all_moods(settings).get(key) or {}
+    if lang == "urdu" and not m.get("mix_only"):
+        return (f"{m.get('name', 'AI songs')} {m.get('emoji', '')} in Urdu: original AI gaane (lyrics by AI, music "
+                f"and vocals by Google Lyria). Har hafte naye gaane.").replace("  ", " ")
     return (f"{m.get('name', 'AI songs')} {m.get('emoji', '')}: original AI songs (lyrics by AI, music and vocals "
             f"by Google Lyria). A new one every week.").replace("  ", " ")
 
@@ -275,7 +417,9 @@ def summary(settings, jobs, playlists=None):
     rows = []
     for k, m in all_moods(settings).items():
         pid = playlists.get(m["playlist"])
+        urdu_pid = playlists.get(playlist_title(settings, k, "urdu") or "") if not m.get("mix_only") else None
         rows.append({"key": k, "name": m["name"], "emoji": m.get("emoji", "🎵"), "on": k not in off,
+                     "urdu_url": f"https://www.youtube.com/playlist?list={urdu_pid}" if urdu_pid else None,
                      "often": {v: n for n, v in OFTEN.items()}.get(often.get(k, DEFAULT_OFTEN.get(k, 2)), "normal"),
                      "songs": counts.get(k, 0), "playlist": m["playlist"], "custom": bool(m.get("custom")),
                      "sound": m.get("sound", "") if m.get("custom") else "",
@@ -349,9 +493,11 @@ def mark_mixed(dirs, mix_id):
 
 
 def mix_songs(mood, uploaded, songs=None):
-    """The archived songs of ``mood`` that went up (job id in ``uploaded``) and were in no mix yet, oldest first."""
+    """The archived songs of ``mood`` that went up (job id in ``uploaded``) and were in no mix yet, oldest first.
+    English songs only: a mix is one language (Urdu mood mixes are not made yet)."""
     songs = archived() if songs is None else songs
-    return [s for s in songs if s.get("mood") == mood and s.get("job_id") in uploaded and not s.get("mixed")]
+    return [s for s in songs if s.get("mood") == mood and s.get("job_id") in uploaded and not s.get("mixed")
+            and lang_of(s) == "english"]
 
 
 def next_mix(settings, jobs, songs=None, now=None, wanted=""):

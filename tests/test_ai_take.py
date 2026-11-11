@@ -65,7 +65,7 @@ def test_long_clip_gets_no_take_and_short_one_does(monkeypatch, tmp_path):
     monkeypatch.setenv("AI_TAKE", "1")
     monkeypatch.setattr(ai_take, "write_takes", lambda *a, **k: {0: "Ek", 1: "Do"})
 
-    def fake_speak(client, text, path, voice):
+    def fake_speak(client, text, path, voice, style=None, **k):
         open(path, "wb").close()
         return 4.0
     monkeypatch.setattr(ai_take, "speak", fake_speak)

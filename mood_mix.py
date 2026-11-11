@@ -35,6 +35,7 @@ W, H, FPS = 1920, 1080, 24
 GAP = 0.6                     # silence between two songs
 FADE_IN, FADE_OUT = 0.4, 1.2
 TRACK_USD = 0.08              # one Lyria 3.5 song (music_shorts: ~$0.08)
+FAL_TRACK_USD = 0.10          # the same through fal.ai when the Gemini API has no credit (10-nov-2026)
 TRACK_TRIES = 3               # Lyria refusals in a row before the instrumental mix stops adding tracks
 MIX_MIN_SECONDS = 8 * 60      # a mix shorter than this is not made (it would be a playlist of Shorts)
 MIN_TRACK_SECONDS = 15        # a broken or cut song file is left out of a mix
@@ -172,11 +173,40 @@ def _track_audio(src, out, seconds):
     return out
 
 
+def _fal_route():
+    """True when the tracks are made through fal.ai: the Gemini API has no credit (every mix failed with "Only 0:00
+    of music" from 6-nov-2026) and fal.ai has a key."""
+    import ai_fallback
+    import music_shorts as ms
+    return bool(ai_fallback.status().get("gemini_down")) and ms.fal_enabled()
+
+
+def _lyria_track(client, prompt, out, fal):
+    import music_shorts as ms
+    if fal:
+        import talkies
+        body = talkies.fal_job(ms.FAL_MODEL, {"prompt": prompt})
+        url = ((body or {}).get("audio") or {}).get("url") if isinstance(body, dict) else None
+        if not url:
+            raise RuntimeError("no audio")
+        talkies._download(url, out)
+        return
+    it = client.interactions.create(model=ms.LYRIA_MODEL, input=prompt)
+    audio = it.output_audio
+    if not audio or not audio.data:
+        raise RuntimeError("no audio")
+    with open(out, "wb") as f:
+        f.write(base64.b64decode(audio.data))
+
+
 def make_tracks(client, mood, minutes, budget, job_dir, log=print):
     """Instrumental tracks for a mix-only mood, by Lyria, until ``minutes`` or ``budget`` (USD): [track]."""
     import music_shorts as ms
     want = minutes * 60
-    most = max(0, int(budget / TRACK_USD))
+    fal = _fal_route()
+    if fal:
+        log("   ℹ️ Gemini is out of credit, so Lyria makes the tracks through fal.ai ($0.10 each).")
+    most = max(0, int(budget / (FAL_TRACK_USD if fal else TRACK_USD)))
     sounds = mood.get("sound") or [mood["name"]]
     sounds = sounds if isinstance(sounds, list) else [sounds]
     try:
@@ -193,12 +223,7 @@ def make_tracks(client, mood, minutes, budget, job_dir, log=print):
         out = os.path.join(job_dir, f".mix_t{k + 1:02d}.mp3")
         k += 1
         try:
-            it = client.interactions.create(model=ms.LYRIA_MODEL, input=prompt)
-            audio = it.output_audio
-            if not audio or not audio.data:
-                raise RuntimeError("no audio")
-            with open(out, "wb") as f:
-                f.write(base64.b64decode(audio.data))
+            _lyria_track(client, prompt, out, fal)
         except Exception as e:  # noqa: BLE001 — a refused or failed track: try the next sound
             refused += 1
             log(f"   ℹ️ Track {k} not made ({type(e).__name__}: {str(e)[:80]}).")

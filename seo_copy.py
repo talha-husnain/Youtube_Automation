@@ -14,7 +14,8 @@ Fields added to each clip: ``seo_title``, ``seo_description`` (hashtags line
 included, ready to paste), ``hashtags`` (list), ``seo_tags`` (list). The
 TikTok / Instagram descriptions are replaced with the new copy, so the posting
 flow uses it unchanged. ``video_title_for_youtube_short`` (the title burned on
-screen) becomes a short on-screen hook of at most 45 characters. Any failure
+screen) becomes a short on-screen hook of at most 6 words that never spoils the punchline
+(research 11-nov-2026: the first 2 seconds decide the swipe). Any failure
 keeps the old copy.
 """
 import json
@@ -72,8 +73,10 @@ other: no two youtube_titles may share the same opening words or the same patter
 no sentence may be reused across clips.
 
 For EACH clip below return:
-- on_screen_title: max 45 characters, the punchy hook burned on top of the video.
-  One language only, no hashtags, no emoji, no "|" separators.
+- on_screen_title: the hook burned on top of the video, read in the first second: at most 6
+  words and 40 characters. Set up the situation and make them want the payoff, NEVER give
+  away the punchline or the comeback ("Uncle ne comedian ko chup kara diya" teases; the
+  joke's own last line spoils it). One language only, no hashtags, no emoji, no "|".
 - hook: max 60 characters, the opening line that stops the scroll.
 - summary: one sentence, max 140 characters, why this moment works as a short.
 - youtube_title: 45-70 characters before hashtags, then " #shorts" and optionally one

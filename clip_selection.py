@@ -15,6 +15,10 @@ MODEL_PRICES = {
     "gemini-2.0-flash": (0.10, 0.40),  # deprecated (shut down 2026-06-01)
 }
 
+# Points (on the 0-100 score scale) a window or clip gains at the hottest spot of the source's
+# "Most replayed" graph (replay_heat.py, 0-1): the audience's replays outrank a guess from the words.
+REPLAY_WEIGHT = 60
+
 
 def lookup_model_prices(model_name):
     """Longest-prefix match against MODEL_PRICES; None if unknown."""
@@ -154,8 +158,9 @@ def trim_to_best(shorts, max_clips):
         return list(shorts)
 
     def score(item):
+        # ``replay_heat`` (0-1, main.get_viral_clips): on the source's "Most replayed" peak.
         try:
-            return float(item[1].get("predicted_score") or 0)
+            return float(item[1].get("predicted_score") or 0) + REPLAY_WEIGHT * float(item[1].get("replay_heat") or 0)
         except (TypeError, ValueError, AttributeError):
             return 0.0
 

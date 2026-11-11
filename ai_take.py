@@ -35,7 +35,6 @@ import re
 import subprocess
 import time
 import wave
-from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
 from pydantic import BaseModel
@@ -256,16 +255,21 @@ def apply(clips, transcript, job_dir, clip_names, outro_seconds=0.0, source_titl
         print(f"   ⚠️ AI take failed ({type(e).__name__}: {str(e)[:160]}) — no take this time.")
         return {}
 
-    def one(i):
+    def keep(i, got):
         text = texts[i]
         audio = os.path.join(job_dir, f"{os.path.splitext(clip_names[i])[0]}.take.wav")
-        secs = speak(client, text, audio, voice)
-        secs = _fit(audio, secs) if secs else None
-        if not secs:
+        path, secs = got if got else (None, 0.0)
+        if path and secs:
+            if os.path.abspath(path) != os.path.abspath(audio):
+                os.replace(path, audio)
+            if os.path.exists(path + ".words.json"):
+                os.remove(path + ".words.json")
+            secs = _fit(audio, secs)
+        if not (path and secs):
             if os.path.exists(audio):
                 os.remove(audio)
-            return i, {"text": text, "audio": None, "voice_seconds": 0.0}
-        return i, {"text": text, "audio": os.path.basename(audio), "voice_seconds": round(secs, 2)}
+            return {"text": text, "audio": None, "voice_seconds": 0.0}
+        return {"text": text, "audio": os.path.basename(audio), "voice_seconds": round(secs, 2)}
 
     todo = []
     for i in sorted(texts):
@@ -274,12 +278,20 @@ def apply(clips, transcript, job_dir, clip_names, outro_seconds=0.0, source_titl
             print(f"   ℹ️ Clip {i + 1} is {clip_s:.0f}s: no take, it would pass Shorts' 3 minutes.")
             continue
         todo.append(i)
+    # The free Microsoft Urdu voice first, then the local one, Gemini last (short_kit.voice_lines):
+    # from 6-nov-2026 Gemini had no credit and every take went out silent, text only.
+    try:
+        import short_kit
+        voiced = short_kit.voice_lines(client, [{"text": texts[i], "voice": voice, "style": DEFAULT_STYLE}
+                                                for i in todo], job_dir, "take")
+    except Exception as e:  # noqa: BLE001 — the takes still show as text
+        print(f"   ⚠️ Take voices failed ({type(e).__name__}: {str(e)[:120]}) — text only.")
+        voiced = [None] * len(todo)
     takes = {}
-    # Three at a time: the preview voice models have low per-minute limits.
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        for i, rec in pool.map(one, todo):
-            clips[i]["ai_take"] = rec["text"]
-            takes[clip_names[i]] = rec
+    for i, got in zip(todo, voiced):
+        rec = keep(i, got)
+        clips[i]["ai_take"] = rec["text"]
+        takes[clip_names[i]] = rec
     voiced = sum(1 for r in takes.values() if r["audio"])
     print(f"   ✅ Take ready for {len(takes)}/{len(clips)} clips ({voiced} voiced)")
     return takes

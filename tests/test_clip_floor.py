@@ -34,11 +34,13 @@ def _clip(start, window_id, score=80):
     }
 
 
-def _run(monkeypatch, detail_responses):
+def _run(monkeypatch, detail_responses, prompts=None):
     """Drive get_viral_clips with canned stage results; returns (clips, calls)."""
     calls = []
 
     def fake_stage(client, model, prompt, schema):
+        if prompts is not None:
+            prompts.append(prompt)
         payload = json.loads(prompt.split("WINDOWS_JSON:")[-1].split("Return only:")[0]
                              if "WINDOWS_JSON:" in prompt else "[]")
         if schema is main.gemini_worker.ScoreResponse:
@@ -99,3 +101,35 @@ def test_scoring_fills_the_shortlist_it_targets(monkeypatch):
                                        for i in range(6)]])
     detail_windows = [c[1] for c in calls if c[0] == "detail"][0]
     assert len(detail_windows) == 8
+
+
+def _graph(peak_at, duration=600.0):
+    # YouTube's "Most replayed" points (yt-dlp "heatmap"): a replayed intro, a flat body, one peak.
+    step = duration / 100
+    return [{"start_time": i * step, "end_time": (i + 1) * step,
+             "value": 1.0 if i * step <= peak_at < (i + 1) * step else (0.9 if i * step < 20 else 0.3)}
+            for i in range(100)]
+
+
+def test_the_replay_peak_reaches_the_prompts_and_wins_the_trim(monkeypatch):
+    # 11-nov-2026: the moment viewers of the original replayed most is named to the model, and a clip on
+    # it beats a slightly better-scored clip elsewhere when only one is wanted.
+    monkeypatch.setitem(main.SOURCE_HEAT, "points", _graph(peak_at=400))
+    monkeypatch.setitem(main.SOURCE_HEAT, "duration", 600.0)
+    monkeypatch.setenv("CLIP_TARGET_MIN", "1")
+    monkeypatch.setenv("CLIP_TARGET_MAX", "1")
+    prompts = []
+    clips, calls = _run(monkeypatch, [[_clip(30, "window_001", score=80), _clip(390, "window_005", score=70)]],
+                        prompts)
+    assert [round(c["start"]) for c in clips] == [390] and clips[0]["replay_heat"] == 1.0
+    assert len(prompts) == 3 and all("most_replayed" in p for p in prompts)   # the note rides both passes
+    detail = [p for p in prompts if "CANDIDATE_WINDOWS_JSON:" in p][0]
+    payload = json.loads(detail.split("CANDIDATE_WINDOWS_JSON:")[-1].split("Return only:")[0])
+    hot = [w for w in payload if "most_replayed" in w]
+    assert hot and all(w["start"] <= 400 <= w["end"] for w in hot)
+
+
+def test_no_graph_changes_nothing(monkeypatch):
+    monkeypatch.setitem(main.SOURCE_HEAT, "points", [])
+    clips, _calls = _run(monkeypatch, [[_clip(i * 60, f"window_{i + 1:03d}") for i in range(6)]])
+    assert len(clips) == 6 and not any("replay_heat" in c for c in clips)

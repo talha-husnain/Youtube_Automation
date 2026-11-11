@@ -534,6 +534,11 @@ function MoodPlaylists({ ch, save, onChanged }) {
                         ) : (
                             <span className="text-muted truncate max-w-[16rem]" title="made on YouTube with its first song">{m.playlist}</span>
                         )}
+                        {m.urdu_url && (
+                            <a href={m.urdu_url} target="_blank" rel="noreferrer" className="text-brass inline-flex items-center gap-1 hover:underline">
+                                Urdu <ExternalLink size={11} />
+                            </a>
+                        )}
                         {!m.mix_only && (
                             <button disabled={!m.on || !!making} onClick={() => makeNow(m.key)} className="btn-ghost px-2 py-0.5 text-[11px]">
                                 {making === m.key ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} make one now
@@ -576,6 +581,14 @@ function MoodPlaylists({ ch, save, onChanged }) {
             )}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink2 pt-1 border-t border-rule">
                 <label className="flex items-center gap-2">
+                    song language
+                    <select value={String(ch.urdu_share ?? 0.5)} onChange={(e) => save({ urdu_share: Number(e.target.value) })}
+                        className="input-field !w-auto text-xs py-0.5" aria-label="song language">
+                        {[[0, 'English only'], [0.25, 'mostly English'], [0.5, 'half English, half Urdu'], [0.75, 'mostly Urdu'], [1, 'Urdu only']]
+                            .map(([v, t]) => <option key={v} value={String(v)}>{t}</option>)}
+                    </select>
+                </label>
+                <label className="flex items-center gap-2">
                     long mood mixes
                     <select value={(ch.mix_settings || {}).mixes ?? 1} onChange={(e) => put({ mixes: Number(e.target.value) })}
                         className="input-field !w-auto text-xs py-0.5" aria-label="mood mixes a week">
@@ -598,8 +611,8 @@ function MoodPlaylists({ ch, save, onChanged }) {
                     of new tracks per study / sleep mix
                 </label>
             </div>
-            <p className="text-[11px] text-muted">Every song also stays in &quot;New AI songs&quot;. Songs made before moods are filed by their style and theme, a few each pass.
-                A song mood&apos;s mix uses its uploaded songs that were in no mix yet (8 minutes at least), with lyrics on screen; study and sleep mixes make their own instrumental tracks (about $0.08 each). Never slowed or sped-up copies.</p>
+            <p className="text-[11px] text-muted">Every song also goes into its language&apos;s list (&quot;English Songs&quot; or &quot;Urdu Songs&quot;), and each language&apos;s lists show as one shelf on the channel page. Songs made before moods are filed by their style and theme, a few each pass.
+                A song mood&apos;s mix uses its uploaded English songs that were in no mix yet (8 minutes at least), with lyrics on screen; study and sleep mixes make their own instrumental tracks (about $0.08 each, $0.10 through fal.ai while Gemini has no credit). Never slowed or sped-up copies.</p>
         </div>
     );
 }

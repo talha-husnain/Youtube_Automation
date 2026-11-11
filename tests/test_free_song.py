@@ -91,9 +91,11 @@ def test_out_of_credit_goes_to_ace_step_with_the_lyrics(tmp_path, monkeypatch):
     out = ms.sing(Lyria(broke), _plan(), str(tmp_path / "s.mp3"))
     assert open(out, "rb").read().startswith(b"ID3")
     t = ace.task
-    assert t["prompt"].startswith("Lo-fi chill pop") and t["audio_duration"] == 70 and t["thinking"] is False
-    assert t["lyrics"].index("[Verse]") < t["lyrics"].index("[Pre-Chorus]") < t["lyrics"].index("[Chorus]")
-    assert "Every street turns blue" in t["lyrics"] and t["inference_steps"] == 8
+    assert t["prompt"].startswith("Lo-fi chill pop") and t["audio_duration"] == 80 and t["thinking"] is False
+    # The song opens on its chorus and closes on it again (10-nov-2026).
+    assert t["lyrics"].index("[Chorus]") < t["lyrics"].index("[Verse]") < t["lyrics"].index("[Pre-Chorus]") \
+        < t["lyrics"].index("[Final Chorus]")
+    assert t["lyrics"].count("Every street turns blue") == 2 and t["inference_steps"] == 8
 
 
 def test_older_queued_songs_are_waited_for_first(tmp_path, monkeypatch):

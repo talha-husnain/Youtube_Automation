@@ -280,6 +280,16 @@ def _post(url, params, body):
     return r.json()
 
 
+def _put(url, params, body):
+    import httpx
+    import youtube_account as ya
+    r = httpx.put(url, params=params, headers={"Authorization": f"Bearer {ya._token()}"}, json=body, timeout=30)
+    ya.spend(50)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(ya._google_error(r))
+    return r.json()
+
+
 def first_comment_text(kind, row, rnd=random):
     """The channel's first comment: the Short's own question when it has one."""
     question = (row.get("question") or "").strip()
@@ -471,22 +481,36 @@ def _into_playlist(acct, title, about, video_id, found, mark="playlisted"):
 
 def add_to_playlists(acct, kind, log=print, moods=None):
     """Each new upload into its kind/format playlist (a series into its own). A song channel (``moods``: its
-    music_moods settings) also files EVERY song, old ones too, into its mood's playlist ("Sad Songs 💔...")."""
+    music_moods settings) also files EVERY song, old ones too, into its mood's playlist ("Sad Songs 💔...").
+    Songs go by language (owner, 10-nov-2026): "English Songs..." / "Urdu Songs..." and each mood's playlist in
+    that language, grouped as one shelf per language on the channel page."""
     import youtube_account as ya
+    found = {}            # playlists already on the channel: title -> id, and their videos
+    if kind == "music":
+        try:
+            _rename_old(acct, moods, found, log)
+        except RuntimeError as e:
+            log(f"   ℹ️ Playlist rename failed: {str(e)[:120]}")
     st = load(acct)
     done = st.get("playlisted") or {}
     ups = ya.uploads()
     todo = [r for r in ups if r.get("status") == "done" and r.get("video_id") and not r.get("elsewhere")
             and r["video_id"] not in done and r.get("created", 0) >= time.time() - COMMENT_DAYS * 86400]
     n = 0
-    found = {}            # playlists already on the channel: title -> id, and their videos
     for r in todo:
         # A history series gets its own playlist, parts in upload order, so
         # YouTube plays part 2 after part 1.
         # A surah in several parts is its own playlist, named like the surah.
-        title = ((r["series"][:150] if kind == "quran" else f"{r['series'][:120]} (series)") if r.get("series")
-                 else playlist_title(kind, r.get("format")))
-        about = f"{r['series'][:120]}: every part, in order." if r.get("series") else f"{title}: new Shorts every day."
+        if r.get("series"):
+            title = r["series"][:150] if kind == "quran" else f"{r['series'][:120]} (series)"
+            about = f"{r['series'][:120]}: every part, in order."
+        elif kind == "music":
+            import music_moods
+            title = music_moods.lang_playlist(music_moods.lang_of(r))
+            about = music_moods.lang_about(music_moods.lang_of(r))
+        else:
+            title = playlist_title(kind, r.get("format"))
+            about = f"{title}: new Shorts every day."
         if ya.quota_used() + 2 * PLAYLIST_UNITS > QUOTA_BUDGET:
             break
         try:
@@ -495,9 +519,89 @@ def add_to_playlists(acct, kind, log=print, moods=None):
             log(f"   ℹ️ Playlist add failed: {str(e)[:120]}")
             break
     m = _mood_playlists(acct, ups, moods, found, log) if kind == "music" and moods is not None else 0
+    if kind == "music" and moods is not None:
+        _language_shelves(acct, moods, log)
     if n:
         log(f"📃 Added {n} Short(s) to playlists.")
     return n + m
+
+
+def _rename_old(acct, moods, found, log=print):
+    """The song playlists made before the English/Urdu split (all their songs are English) get their English
+    title on YouTube, once each: their songs, views and links stay. playlists.update costs 50 units."""
+    import music_moods
+    import youtube_account as ya
+    about = {music_moods.lang_playlist("english"): music_moods.lang_about("english")}
+    for key, m in music_moods.all_moods(moods).items():
+        about[m["playlist"]] = music_moods.playlist_about(moods, key)
+    n = 0
+    for old, new in music_moods.renames(moods).items():
+        # Only playlists this channel made and remembers: looking old titles up on YouTube every pass would
+        # spend read quota on every song channel for nothing.
+        lists = load(acct).get("playlists") or {}
+        pid = lists.get(old)
+        if not pid or lists.get(new):
+            continue
+        if ya.quota_used() + PLAYLIST_UNITS > QUOTA_BUDGET:
+            break
+        _put(f"{ya.API}/playlists", {"part": "snippet"},
+             {"id": pid, "snippet": {"title": new, "description": about.get(new, f"{new}: new songs every day.")}})
+
+        def fn(s, old=old, new=new, pid=pid):
+            pl = s.setdefault("playlists", {})
+            pl.pop(old, None)
+            pl[new] = pid
+        _update(acct, fn)
+        if "lists" in found:
+            found["lists"].pop(old, None)
+            found["lists"][new] = pid
+        n += 1
+    if n:
+        log(f"📃 Renamed {n} song playlist(s) to their English titles (Urdu ones start with the first Urdu song).")
+    return n
+
+
+SHELF_RETRY = 7 * 86400
+
+
+def _language_shelves(acct, moods, log=print):
+    """Each language's playlists as one shelf on the channel page ("Urdu Songs 🎧": all Urdu songs, then Urdu
+    sad, Urdu romantic...): YouTube's nearest thing to playlists inside a playlist. Made once a language has its
+    all-songs list and a mood list, updated when it gets another. channelSections insert/update: 50 units."""
+    import music_moods
+    import youtube_account as ya
+    st = load(acct)
+    if time.time() - st.get("shelf_failed", 0) < SHELF_RETRY:
+        return 0
+    have = st.get("shelves") or {}
+    n = 0
+    for lang, (title, ids) in music_moods.shelf_lists(moods, st.get("playlists") or {}).items():
+        old = have.get(lang) or {}
+        if len(ids) < 2 or old.get("ids") == ids:
+            continue
+        if ya.quota_used() + PLAYLIST_UNITS > QUOTA_BUDGET:
+            break
+        body = {"snippet": {"type": "multiplePlaylists", "title": title}, "contentDetails": {"playlists": ids}}
+        try:
+            if old.get("id"):
+                got = _put(f"{ya.API}/channelSections", {"part": "snippet,contentDetails"}, {"id": old["id"], **body})
+            else:
+                got = _post(f"{ya.API}/channelSections", {"part": "snippet,contentDetails"}, body)
+        except RuntimeError as e:
+            if old.get("id") and re.search(r"not ?found|404", str(e), re.I):
+                # The owner removed the shelf in Studio: made again on the next pass.
+                _update(acct, lambda s, lang=lang: (s.get("shelves") or {}).pop(lang, None))
+            else:
+                _update(acct, lambda s: s.update(shelf_failed=int(time.time())))
+                log(f"   ℹ️ Channel page shelf not made ({str(e)[:120]}); trying again in a week.")
+            break
+        sid = (got or {}).get("id") or old.get("id")
+        _update(acct, lambda s, lang=lang, sid=sid, ids=ids: s.setdefault("shelves", {}).update(
+            {lang: {"id": sid, "ids": ids}}))
+        n += 1
+    if n:
+        log(f"🗂️ Channel page: {n} language shelf(s) made or updated.")
+    return n
 
 
 def _mood_playlists(acct, ups, moods, found, log=print):
@@ -509,12 +613,13 @@ def _mood_playlists(acct, ups, moods, found, log=print):
             and r["video_id"] not in listed and music_moods.mood_of(r) in music_moods.all_moods(moods)]
     n = 0
     for r in todo[:MOOD_PER_PASS]:
-        key = music_moods.mood_of(r)
+        key, lang = music_moods.mood_of(r), music_moods.lang_of(r)
         if ya.quota_used() + 2 * PLAYLIST_UNITS > QUOTA_BUDGET:
             break
         try:
-            n += _into_playlist(acct, music_moods.playlist_title(moods, key), music_moods.playlist_about(moods, key),
-                                r["video_id"], found, mark="mood_playlisted")
+            n += _into_playlist(acct, music_moods.playlist_title(moods, key, lang),
+                                music_moods.playlist_about(moods, key, lang), r["video_id"], found,
+                                mark="mood_playlisted")
         except RuntimeError as e:
             log(f"   ℹ️ Mood playlist add failed: {str(e)[:120]}")
             break

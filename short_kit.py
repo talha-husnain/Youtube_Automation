@@ -708,7 +708,7 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
     voices: [(wav, at)]  sfx: [(aevalsrc expr, seconds, at)]
     music: (path, start in file, volume)  silent: no sound at all (a song
     added later in the YouTube app goes on a silent track).
-    fades: (seconds, music length) fades the music in and out.
+    fades: (seconds, music length) fades the music in and out; (in, length, out) fades the end over ``out``.
     music_seconds: how long the music (and its wave) run; the end card after
     it is quiet.
     bed: (track, seconds) background music under the voices, looped, faded.
@@ -782,8 +782,11 @@ def render(out_path, seconds, colors, events, extra_styles=(), voices=(), sfx=()
         if silent:
             graph.append("[ma]anullsink")
         else:
-            fade = (f"afade=t=in:d={fades[0]:g},afade=t=out:st={max(0.0, fades[1] - fades[0]):.3f}"
-                    f":d={fades[0]:g}," if fades else "")
+            # (in, length) fades both ends alike; (in, length, out) gives the end its own fade (a song
+            # that had to end early fades out over a breath, music_shorts.song_span).
+            out_s = fades[2] if fades and len(fades) > 2 else (fades[0] if fades else 0)
+            fade = (f"afade=t=in:d={fades[0]:g},afade=t=out:st={max(0.0, fades[1] - out_s):.3f}"
+                    f":d={out_s:g}," if fades else "")
             graph.append(f"[ma]{fade}volume={vol},aresample=48000,aformat=channel_layouts=stereo[mus]")
             mix.append("[mus]")
     if bed:

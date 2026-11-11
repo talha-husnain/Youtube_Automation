@@ -112,6 +112,24 @@ def channel_uploads(channel_id, limit=30):
     return videos([i for i in ids if i])
 
 
+def uploads(channel_id, limit=200):
+    """Up to ``limit`` of the channel's uploads, newest first, with stats and licence: one
+    playlistItems unit and one videos unit per 50 (comedy_sources reads a comedian's whole channel)."""
+    if not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", channel_id or ""):
+        return []
+    ids, token = [], None
+    while len(ids) < limit:
+        params = {"part": "contentDetails", "playlistId": "UU" + channel_id[2:], "maxResults": 50}
+        if token:
+            params["pageToken"] = token
+        got = _call("playlistItems", params)
+        ids += [(i.get("contentDetails") or {}).get("videoId") for i in got.get("items") or []]
+        token = got.get("nextPageToken")
+        if not token:
+            break
+    return videos([i for i in ids[:limit] if i])
+
+
 def comments(vid, limit=60):
     """The video's most relevant top-level comments [{"text", "likes"}] (1 unit), [] when comments are off
     or the video is gone. Text only: the authors are never kept."""

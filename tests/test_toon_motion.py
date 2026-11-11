@@ -112,7 +112,7 @@ def test_scenes_are_animated_joined_and_made_1080x1920_within_the_budget(studio)
     spent = json.load(open(tm._spend_file()))
     day = next(iter(spent.values()))
     assert day["clips"] == 4 and day["seconds"] == sum(tm.seconds_of(s) for s in _ep().scenes)
-    assert abs(day["usd"] - day["seconds"] * 0.03) < 0.001
+    assert abs(day["usd"] - day["seconds"] * tm.PRICE["360p"]) < 0.001
 
 
 def test_the_daily_cap_stops_before_any_video_is_made(studio, monkeypatch):

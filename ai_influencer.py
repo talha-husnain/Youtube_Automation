@@ -89,11 +89,13 @@ STILL_PROMPT = ("The same woman as in the reference photo: exactly the same face
 def key():
     """The fal.ai key: the environment, else .env read now (a key added while
     the server runs works without a restart)."""
-    k = os.environ.get("FAL_KEY")
+    # The owner's .env names it FAL_API_TOKEN (found 10-nov-2026: FAL_KEY alone left fal unused).
+    k = os.environ.get("FAL_KEY") or os.environ.get("FAL_API_TOKEN")
     if not k:
         try:
             from dotenv import dotenv_values
-            k = dotenv_values(os.path.join(ROOT, ".env")).get("FAL_KEY")
+            env = dotenv_values(os.path.join(ROOT, ".env"))
+            k = env.get("FAL_KEY") or env.get("FAL_API_TOKEN")
         except Exception:  # noqa: BLE001 — no key then
             k = ""
     return (k or "").strip()

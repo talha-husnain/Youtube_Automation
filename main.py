@@ -39,8 +39,9 @@ import gemini_worker
 import hook_grounding
 import layout_picker
 import llm_backend
+import replay_heat
 import used_moments
-from clip_selection import (build_transcript_windows, clip_count_targets,
+from clip_selection import (REPLAY_WEIGHT, build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best)
@@ -845,6 +846,11 @@ def _content_block(error_text):
     return None
 
 
+# The source's "Most replayed" graph, kept from the download's info (replay_heat.py). One job is one
+# process, so this is the graph of this job's video, or empty (an uploaded file, a short video).
+SOURCE_HEAT = {"points": [], "duration": None}
+
+
 def download_youtube_video(url, output_dir=".", on_audio=None):
     """
     Downloads a YouTube video using yt-dlp.
@@ -1026,6 +1032,9 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
         # clients, API JSON, m3u8), 4-9 s of round trips per attempt.
         with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
             info = ydl.extract_info(url, download=False, process=False)
+        # Free with the info: what viewers of the original replayed most (get_viral_clips).
+        SOURCE_HEAT["points"] = list(info.get('heatmap') or [])
+        SOURCE_HEAT["duration"] = info.get('duration')
         sanitized = sanitize_filename(info.get('title', 'youtube_video'))
         # Only when the whole source is far bigger than what was paid for: a
         # ranged fetch goes through ffmpeg at ~1-2.5x realtime, while a native
@@ -1962,6 +1971,15 @@ def manual_clips(transcript_result, video_duration, ranges):
     return {"shorts": shorts} if shorts else None
 
 
+REPLAY_NOTE = """
+
+Some windows carry "most_replayed": the seconds (start-end) that viewers of the original video replayed
+most on YouTube. That is real audience behaviour, and on comedy it is usually the biggest laugh: rank such
+windows high, and a clip from such a window must contain that stretch, starting at its setup and ending
+just after the payoff.
+"""
+
+
 def get_viral_clips(transcript_result, video_duration, used=None):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
@@ -2032,14 +2050,28 @@ def get_viral_clips(transcript_result, video_duration, used=None):
         # shortlist at 3 * n_batches, under the target for any source shorter
         # than ~30 min. See clip_selection.score_batches.
         target = shortlist_target(video_duration)
+        # What viewers of the original replayed most (replay_heat.py): the transcript cannot hear a laugh.
+        heat_pts = replay_heat.clean(SOURCE_HEAT["points"], SOURCE_HEAT["duration"] or video_duration)
+        if heat_pts:
+            print("   🔥 Most replayed: " + ", ".join(
+                f"{replay_heat.clock(s)}-{replay_heat.clock(e)}" for s, e, _ in replay_heat.hottest(heat_pts)))
+        note = REPLAY_NOTE if heat_pts else ""
 
         def _payload(ws):
-            return [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in ws]
+            rows = []
+            for w in ws:
+                row = {"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]}
+                if heat_pts and replay_heat.heat(heat_pts, w["start"], w["end"]) >= replay_heat.HOT:
+                    span = replay_heat.peak_span(heat_pts, w["start"], w["end"])
+                    if span:
+                        row["most_replayed"] = f"{span[0]:.0f}-{span[1]:.0f}"
+                rows.append(row)
+            return rows
 
         def _score_prompt(ws):
             return gemini_worker.SCORE_PROMPT_TEMPLATE.format(
                 video_duration=video_duration, language=language,
-                windows_json=json.dumps(_payload(ws), ensure_ascii=False))
+                windows_json=json.dumps(_payload(ws), ensure_ascii=False)) + note
 
         for batch in score_batches(windows, SCORE_BATCH):
             scored.extend(_run_stage_split(
@@ -2048,8 +2080,12 @@ def get_viral_clips(transcript_result, video_duration, used=None):
 
         # Shortlist the top windows; scale with duration so long videos surface
         # more candidates without exploding the detail call.
-        scored.sort(key=lambda w: w.get("score", 0), reverse=True)
         by_id = {w["id"]: w for w in windows}
+        if heat_pts:
+            for w in scored:
+                src = by_id.get(w.get("id"))
+                w["heat"] = replay_heat.heat(heat_pts, src["start"], src["end"]) if src else 0.0
+        scored.sort(key=lambda w: (w.get("score") or 0) + REPLAY_WEIGHT * w.get("heat", 0), reverse=True)
         shortlist = [by_id[w["id"]] for w in scored[:target] if w.get("id") in by_id]
         if not shortlist:
             shortlist = windows[:target]  # scoring returned nothing usable
@@ -2066,7 +2102,7 @@ def get_viral_clips(transcript_result, video_duration, used=None):
                     video_duration=video_duration, language=language,
                     min_clips=lo, max_clips=hi,
                     min_secs=min_secs, max_secs=max_secs,
-                    windows_json=json.dumps(_payload(ws), ensure_ascii=False))
+                    windows_json=json.dumps(_payload(ws), ensure_ascii=False)) + note
             return build
 
         shorts = _run_stage_split(client, model_name, shortlist,
@@ -2095,6 +2131,14 @@ def get_viral_clips(transcript_result, video_duration, used=None):
                                     key=lambda s: float(s.get("start") or 0))
                     print(f"   Recovered {len(extra)} clip(s) from them.")
 
+        if heat_pts:
+            # Counts in trim_to_best: a clip on the replay peak beats an equal one off it.
+            for s in shorts:
+                try:
+                    s["replay_heat"] = round(replay_heat.heat(heat_pts, float(s.get("start") or 0),
+                                                              float(s.get("end") or 0)), 2)
+                except (TypeError, ValueError):
+                    pass
         if len(shorts) > max_clips:
             # By score, never by position: the results arrive in transcript
             # order, so slicing kept the earliest clips and silently dropped
@@ -2464,7 +2508,12 @@ if __name__ == '__main__':
         pre_cut = None  # clip index -> section file, see section_fetch.py
         if use_early and is_youtube_url(args.url):
             import youtube_captions
-            captions = youtube_captions.fetch(args.url)
+            _cap_info = {}
+            captions = youtube_captions.fetch(args.url, info_out=_cap_info)
+            if _cap_info.get("heatmap"):
+                # The clips are picked before any download here: the graph comes with the captions.
+                SOURCE_HEAT["points"] = list(_cap_info["heatmap"])
+                SOURCE_HEAT["duration"] = _cap_info.get("seconds") or None
             if captions:
                 early["started"] = True
 
@@ -2670,17 +2719,22 @@ if __name__ == '__main__':
             if args.url:
                 import credits
                 credits.apply(clips_data['shorts'], [args.url])
-            # The channel's spoken take after each clip (ai_take.py), framed only.
+            # The channel's own voice in each clip, framed only: Chacha Judge's laugh bubbles and
+            # verdict on comedy (clip_host.py), else the spoken take after the clip (ai_take.py).
             takes = {}
             if output_format == "framed" and transcript is not None:
                 import ai_take
+                import clip_host
                 import framed_layout
                 _look = framed_layout.settings()
-                takes = ai_take.apply(
-                    clips_data['shorts'], transcript, output_dir,
-                    [f"{video_title}_clip_{i+1}.mp4" for i in range(len(clips_data['shorts']))],
-                    outro_seconds=_look["outro_seconds"] if _look["outro"] else 0.0,
-                    source_title=video_title.replace("_", " "))
+                _names = [f"{video_title}_clip_{i+1}.mp4" for i in range(len(clips_data['shorts']))]
+                _outro = _look["outro_seconds"] if _look["outro"] else 0.0
+                if clip_host.enabled():
+                    takes = clip_host.apply(clips_data['shorts'], transcript, output_dir, _names,
+                                            outro_seconds=_outro, source_title=video_title.replace("_", " "))
+                if not takes:
+                    takes = ai_take.apply(clips_data['shorts'], transcript, output_dir, _names,
+                                          outro_seconds=_outro, source_title=video_title.replace("_", " "))
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).

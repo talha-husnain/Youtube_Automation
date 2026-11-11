@@ -363,6 +363,11 @@ def update(cid, patch):
         if ch["kind"] == "music" and isinstance(patch.get("moods"), dict):
             import music_moods                     # moods and their playlists (on/off, how often, the owner's own)
             ch["moods"] = music_moods.settings_of(patch["moods"])
+        if ch["kind"] == "music" and "urdu_share" in patch:
+            try:                                   # songs in Urdu: 0 (English only) to 1 (Urdu only)
+                ch["urdu_share"] = round(max(0.0, min(1.0, float(patch["urdu_share"]))), 2)
+            except (TypeError, ValueError):
+                pass
         if ch["kind"] == "music" and "next_mood" in patch:
             ch["next_mood"] = re.sub(r"[^a-z0-9_]", "", str(patch["next_mood"] or ""))[:30]
         if ch["kind"] == "music" and "next_mix" in patch:
@@ -827,6 +832,7 @@ def summary(ch):
             lists = {}
         out.update(moods=music_moods.summary(settings, ch.get("jobs"), lists), mood_settings=settings,
                    next_mood=ch.get("next_mood") or "", next_mix=ch.get("next_mix") or "",
+                   urdu_share=music_moods.urdu_share(ch),
                    mix_status=music_moods.mix_summary(settings, ch.get("jobs")),
                    mix_settings={k: music_moods.mix_setting(settings, k)
                                  for k in ("mixes", "mix_minutes", "mix_budget")})
@@ -1601,17 +1607,21 @@ def _next_payload(ch, client_fn, log=print):
                   if j.get("status") in ("running", "done", "uploaded")]
         wanted = (ch.get("next_mood") or "")
         mood_key = wanted if wanted in music_moods.song_moods(moods) else music_moods.pick(moods, recent)
+        # English or Urdu (owner, 10-nov-2026): the language behind its share of the last few songs.
+        lang = music_moods.pick_lang(music_moods.urdu_share(ch), [
+            j.get("lang") for j in sorted(ch.get("jobs") or [], key=lambda j: j.get("at", 0))
+            if j.get("status") in ("running", "done", "uploaded") and j.get("format") != "mix"])
         brief = ""
         if mood_key:
             mood = music_moods.song_moods(moods)[mood_key]
             style, theme, brief = music_moods.song_choice(mood, music_shorts.STYLES,
-                                                          lambda opts: pick_format(ch, opts))
+                                                          lambda opts: pick_format(ch, opts), lang=lang)
         else:
             style = pick_format(ch, music_shorts.STYLES)
             theme = music_shorts.pick_theme()
         # Once a day the theme and style of a viral song Short the research agent studied (within the mood:
         # its theme, and its style only when that style is one of the mood's).
-        idea = remix_idea(ch, log) if not wanted else None
+        idea = remix_idea(ch, log) if not wanted and lang == "english" else None
         if idea:
             theme = idea["text"][:60]
             mood_styles = music_moods.song_moods(moods)[mood_key].get("styles") if mood_key else music_shorts.STYLES
@@ -1625,9 +1635,11 @@ def _next_payload(ch, client_fn, log=print):
         mood_name = music_moods.all_moods(moods)[mood_key]["name"] if mood_key else ""
         return ({**look, "genre": "music", "music_style": style, "music_theme": theme, "frame_outro": False,
                  "music_avoid": (ch.get("used") or [])[-60:], **({"music_dance": True} if dance else {}),
-                 **({"music_mood": mood_key, "music_brief": brief} if mood_key else {})},
-                {"label": f"{'Dance: ' if dance else ''}{mood_name + ': ' if mood_name else ''}{style} song about {theme}",
-                 "format": "dance" if dance else style, "topic": theme, **({"mood": mood_key} if mood_key else {})})
+                 "music_lang": lang, **({"music_mood": mood_key, "music_brief": brief} if mood_key else {})},
+                {"label": f"{'Dance: ' if dance else ''}{'Urdu · ' if lang == 'urdu' else ''}"
+                          f"{mood_name + ': ' if mood_name else ''}{style} song about {theme}",
+                 "format": "dance" if dance else style, "topic": theme, "lang": lang,
+                 **({"mood": mood_key} if mood_key else {})})
     return None, None
 
 
@@ -2158,6 +2170,7 @@ def upload_waiting(ch, job_clips, log=print):
                       "opening": clip.get("opening") or "", "screen": clip.get("hook") or "",
                       **({"series": j["series"], "series_part": j.get("series_part")} if j.get("series") else {}),
                       **({"mood": j["mood"]} if j.get("mood") else {}),
+                      **({"lang": j["lang"]} if j.get("lang") else {}),
                       **({"thumb": j["thumb"]} if j.get("thumb") else {}),
                       **({"outro": j["outro"]} if j.get("outro") is not None else {}),
                       **({"timer": j["timer"]} if j.get("timer") is not None else {}),

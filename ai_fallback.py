@@ -328,6 +328,7 @@ def _openai_text(parts, cfg, json_schema, search):
     if r.status_code != 200:
         raise RuntimeError(f"OpenAI {r.status_code}: {r.text[:300]}")
     data = r.json()
+    log_usage(model, data.get("usage"))
     text = ""
     for item in data.get("output") or []:
         if item.get("type") == "message":
@@ -337,6 +338,51 @@ def _openai_text(parts, cfg, json_schema, search):
     if not text.strip():
         raise RuntimeError(f"OpenAI gave no text ({data.get('status')})")
     return _json_text(text) if want_json else text
+
+
+# $ per million tokens (input, output), OpenAI list prices: only for the owner's cost report, never for decisions.
+TOKEN_PRICES = {"gpt-5": (1.25, 10.0), "gpt-5-mini": (0.25, 2.0), "gpt-5-nano": (0.05, 0.40)}
+USAGE_FILE = os.path.join(ROOT, "state", "openai_usage.jsonl")
+
+
+def log_usage(model, usage):
+    """One line per OpenAI text call (appending is safe across the job processes): what writing really costs
+    (owner, 10-nov-2026: "how much it can cost me")."""
+    if not isinstance(usage, dict):
+        return
+    try:
+        os.makedirs(os.path.dirname(USAGE_FILE), exist_ok=True)
+        with open(USAGE_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "pid": os.getpid(), "model": model,
+                                "in": int(usage.get("input_tokens") or 0),
+                                "out": int(usage.get("output_tokens") or 0)}) + "\n")
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def usage_cost(since="", pid=None):
+    """{"calls", "in", "out", "usd"} of the logged calls at or after ``since`` (an ISO time prefix), only this
+    process's when ``pid`` is given (jobs run side by side)."""
+    tot = {"calls": 0, "in": 0, "out": 0, "usd": 0.0}
+    try:
+        with open(USAGE_FILE, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("t", "") < since or (pid is not None and row.get("pid") != pid):
+                    continue
+                pin, pout = next((v for k, v in sorted(TOKEN_PRICES.items(), key=lambda kv: -len(kv[0]))
+                                  if row.get("model", "").startswith(k)), (1.25, 10.0))
+                tot["calls"] += 1
+                tot["in"] += row["in"]
+                tot["out"] += row["out"]
+                tot["usd"] += (row["in"] * pin + row["out"] * pout) / 1e6
+    except OSError:
+        pass
+    tot["usd"] = round(tot["usd"], 4)
+    return tot
 
 
 SIZES = {"portrait": "1024x1536", "landscape": "1536x1024", "square": "1024x1024"}

@@ -149,7 +149,9 @@ def fetch(url, max_seconds=None, info_out=None):
             if info_out is not None:
                 info_out.update({"id": info.get("id"), "title": info.get("title") or "",
                                  "views": info.get("view_count") or 0, "channel": info.get("channel") or
-                                 info.get("uploader") or "", "seconds": info.get("duration") or 0})
+                                 info.get("uploader") or "", "seconds": info.get("duration") or 0,
+                                 # "Most replayed" graph (replay_heat.py, main.get_viral_clips)
+                                 "heatmap": info.get("heatmap") or []})
             kind, key = choose_track(info)
             if not kind:
                 print("   ℹ️ No YouTube captions on this video — transcribing the audio instead.")

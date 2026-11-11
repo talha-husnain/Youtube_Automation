@@ -1415,8 +1415,13 @@ def run(output_dir, pipeline):
     import toon_mix
     if os.environ.get("TOON_MIX_JOB") == "1":
         return toon_mix.run(output_dir, pipeline)       # the weekly compilation of kept episodes
+    engine = (os.environ.get("TOON_ENGINE") or "talkies").strip().lower()
+    if os.environ.get("TOON_MOTION", "1") != "0" and engine == "talkies":
+        # Lifelike talking babies and animals, talking food and organs (owner, 10-nov-2026): talkies.py.
+        import talkies
+        return talkies.run(output_dir, pipeline)
     if os.environ.get("TOON_MOTION", "1") != "0":
-        # Real animated scenes with lip-sync (owner, 9-nov-2026): toon_motion.py. TOON_MOTION=0: the pictures below.
+        # The 3D cartoon cast animated with lip-sync (9-nov-2026): toon_motion.py. TOON_MOTION=0: the pictures below.
         import toon_motion
         return toon_motion.run(output_dir, pipeline)
     premise = re.sub(r"\s+", " ", os.environ.get("TOON_PREMISE") or "").strip()[:240]

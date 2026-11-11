@@ -194,7 +194,7 @@ def test_videos_are_picked_new_first_round_robin_and_licence_checked(monkeypatch
     cfg = {**ap.DEFAULTS, "channels": [{"url": "A"}, {"url": "B"}], "cc_only": True, "research": False}
     notes = []
     got = ap.pick_videos(cfg, 5, notes.append)
-    assert [(v["title"], n) for v, n in got] == [("b2", 3), ("a1", 2)]
+    assert [(v["title"], n) for v, n in got] == [("b2", 2), ("a1", 2)]          # two moments a video
     assert any("b1" in n for n in notes)
 
 
@@ -841,7 +841,7 @@ def test_research_finds_most_viewed_unused_cc_videos_with_no_channels(monkeypatc
     assert {d for _q, _c, d, _s in asked} == {"medium", "long"} and all(a[1] for a in asked)
     assert "V0000000005" not in seen_ids and "V0000000006" not in seen_ids and "V0000000007" not in seen_ids
     assert [v["id"][-1] for v, _n in picked] == ["1", "2"]                    # by views, 2 per channel, 4 vetted out
-    assert [n for _v, n in picked] == [3, 3]
+    assert [n for _v, n in picked] == [2, 2]                                  # the two best moments of each
     assert any("kept 3 of 4" in n for n in notes)
 
     def broken(*a, **k):
@@ -1127,7 +1127,7 @@ def test_research_leaves_out_a_resting_source(monkeypatch):
     import used_moments
     v = lambda i, ch, views: {"id": f"R{i:010d}", "url": f"https://www.youtube.com/watch?v=R{i:010d}", "title": f"stand up {i}",
                               "channel": ch, "channel_url": f"https://www.youtube.com/@{ch}", "seconds": 900, "views": views}
-    monkeypatch.setattr(channel_tools, "search", lambda q, **k: [v(1, "resting", 900_000), v(2, "fine", 50_000)])
+    monkeypatch.setattr(channel_tools, "search", lambda q, **k: [v(1, "resting", 900_000), v(2, "fine", 150_000)])
     monkeypatch.setattr(used_moments, "summary", lambda url: {"count": 0, "seconds": 0})
     monkeypatch.setattr(short_kit, "gemini", lambda: None)
     monkeypatch.setattr(short_kit, "ask_json", lambda c, schema, contents, **k: schema.model_validate(

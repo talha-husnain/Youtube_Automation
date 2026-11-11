@@ -50,6 +50,9 @@ TAKE_LEAD = 0.35
 TAKE_TAIL = 0.6
 TEXT_ONLY_SECONDS = 3.5
 TAKE_LABEL = "HAMARA TAKE"
+# The host of comedy clips (clip_host.py) and his series.
+HOST_LABEL = "CHACHA JUDGE"
+SERIES_LABEL = "PUNCHLINE ADALAT"
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 
 
@@ -289,7 +292,10 @@ def _take_for(job_dir, job, name):
         voice = None
     voice_s = float(rec.get("voice_seconds") or 0) if voice else 0.0
     seconds = round(voice_s + TAKE_LEAD + TAKE_TAIL, 2) if voice_s else TEXT_ONLY_SECONDS
-    return {"text": text, "seconds": seconds, "voice_seconds": voice_s}, voice
+    take = {"text": text, "seconds": seconds, "voice_seconds": voice_s}
+    if isinstance(rec.get("host"), dict):
+        take["host"] = rec["host"]      # Chacha Judge (clip_host.py): bubbles, laugh edits, verdict
+    return take, voice
 
 
 def take_size(text):
@@ -323,6 +329,159 @@ def take_events(t0, take):
     ]
 
 
+# ---------------------------------------------------------------- Chacha Judge (clip_host.py)
+# On a laugh: the zoom holds ZOOM_HOLD s from the punchline's last word, the emoji pops a beat later,
+# the host's bubble shows in the top band from BUBBLE_LEAD for BUBBLE_SECONDS (the title steps aside).
+ZOOM_HOLD = 1.6
+BUBBLE_LEAD = 0.45
+BUBBLE_SECONDS = 2.6
+BUBBLE_SIZE = 60
+BUBBLE_LINE = 72
+STICKER_SIZE = 150
+HOST_STYLES = [
+    "Style: Bubble,Montserrat ExtraBold,{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,"
+    "1,0,0,0,100,100,0,0,1,0,0,5,40,40,0,1",
+    "Style: BubbleLabel,Montserrat ExtraBold,34,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,"
+    "1,0,0,0,100,100,2,0,1,0,0,5,40,40,0,1",
+    "Style: Verdict,Anton,170,&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,"
+    "0,0,0,0,100,100,3,0,1,8,5,5,40,40,0,1",
+    "Style: Question,Montserrat ExtraBold,60,{gold},{gold},&H00000000,&H96000000,"
+    "1,0,0,0,100,100,1,0,1,5,3,5,60,60,0,1",
+]
+# Synthesised laugh sounds (no file to license, never Content ID): aevalsrc expression, seconds,
+# volume, extra filters. Quiet on purpose: the crowd's own laugh is the point and must stay on top.
+LAUGH_SOUNDS = {
+    "boom": ("0.9*sin(2*PI*(58*t-18*t*t))*exp(-5.5*t)+0.35*sin(2*PI*(116*t-36*t*t))*exp(-7*t)", 0.8, 0.45, ""),
+    "pop": ("0.8*sin(2*PI*(700*t+2600*t*t))*exp(-22*t)", 0.25, 0.35, ""),
+    "tss": ("(2*random(0)-1)*exp(-9*t)", 0.45, 0.3, ",highpass=f=4000"),
+}
+
+
+def laugh_moments(host, duration):
+    """The host's laugh moments inside this clip: [{"at", "bubble", "emoji"}] (a trim may have cut some)."""
+    out = []
+    for lg in (host or {}).get("laughs") or []:
+        try:
+            at = float(lg["at"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0.5 <= at <= duration - 0.5 and clean_title(lg.get("bubble") or ""):
+            out.append({**lg, "at": at})
+    return out
+
+
+def _bubble_lines(text):
+    """One line, or two balanced ones for a longer bubble."""
+    words = text.split()
+    if len(text) <= 22 or len(words) < 3:
+        return [text]
+    best = min(range(1, len(words)), key=lambda k: abs(len(" ".join(words[:k])) - len(" ".join(words[k:]))))
+    return [" ".join(words[:best]), " ".join(words[best:])]
+
+
+def bubbles(host, geo, duration):
+    """The host's bubbles that fit this clip: [{"t0", "t1", "lines", "cx", "cy", "w", "h", "emoji"}],
+    in the top band, so neither a bubble nor its emoji ever covers a face (an emoji on the picture's
+    corner sat on the comedian's face, 11-nov-2026)."""
+    right = ((host or {}).get("look") or {}).get("side") == "right"
+    band = max(geo["y"], 300)
+    out = []
+    for lg in laugh_moments(host, duration):
+        t0 = lg["at"] + BUBBLE_LEAD
+        t1 = min(t0 + BUBBLE_SECONDS, duration)
+        if t1 - t0 < 1.0:
+            continue
+        lines = _bubble_lines(clean_title(lg["bubble"]))
+        w = min(960, max(420, int(max(len(x) for x in lines) * BUBBLE_SIZE * 0.6) + 100))
+        h = 78 + BUBBLE_LINE * len(lines)
+        out.append({"t0": t0, "t1": t1, "lines": lines, "w": w, "h": h, "emoji": lg.get("emoji"),
+                    "cx": OUT_W // 2 + (40 if right else -40), "cy": band // 2 + 10, "right": right})
+    return out
+
+
+def bubble_events(host, geo, duration):
+    """Dialogue lines of the host's bubbles: a speech bubble in the top band with his name on it,
+    popping in BUBBLE_LEAD after the punchline, its tail toward the picture on the clip's side."""
+    look = (host or {}).get("look") or {}
+    fill = _ass_colour(look.get("fill") or GOLD)
+    ink = _ass_colour(look.get("ink") or "#1A1A1A")
+    ev = []
+    for b in bubbles(host, geo, duration):
+        t0, t1, lines, w, h, cx, cy, right = (b["t0"], b["t1"], b["lines"], b["w"], b["h"], b["cx"], b["cy"],
+                                              b["right"])
+        top = cy - h // 2
+        pop = r"\fscx60\fscy60\t(0,160,\fscx106\fscy106)\t(160,280,\fscx100\fscy100)\fad(0,180)"
+        ev.append(f"Dialogue: 6,{_ts(t0)},{_ts(t1)},Shape,,0,0,0,,"
+                  rf"{{\an5\pos({cx},{cy}){pop}\1c{fill}\bord0\shad4\4a&H80&\p1}}{_round_rect(w, h, 34)}{{\p0}}")
+        tail_x = cx + (w // 4 if right else -w // 4)
+        ev.append(f"Dialogue: 6,{_ts(t0)},{_ts(t1)},Shape,,0,0,0,,"
+                  rf"{{\an8\pos({tail_x},{top + h - 2}){pop}\1c{fill}\bord0\shad0\p1}}m 0 0 l 56 0 l 18 44{{\p0}}")
+        ev.append(f"Dialogue: 7,{_ts(t0 + 0.08)},{_ts(t1)},BubbleLabel,,0,0,0,,"
+                  rf"{{\pos({cx},{top + 36})\1c{ink}\alpha&H30&\fad(120,180)}}{HOST_LABEL}")
+        ev.append(f"Dialogue: 7,{_ts(t0 + 0.08)},{_ts(t1)},Bubble,,0,0,0,,"
+                  rf"{{\pos({cx},{top + 60 + BUBBLE_LINE * len(lines) // 2})\1c{ink}\fad(120,180)}}"
+                  + r"\N".join(lines))
+    return ev
+
+
+def title_spans(host, duration):
+    """When the title shows: the whole clip, less the host's bubbles."""
+    spans, t = [], 0.0
+    for b in bubbles(host, {"y": 0}, duration):
+        b0, b1 = b["t0"], b["t1"]
+        if b0 - t > 0.3:
+            spans.append((t, b0))
+        t = b1
+    if duration - t > 0.3:
+        spans.append((t, duration))
+    return spans
+
+
+def verdict_events(t0, take):
+    """The host's verdict after the clip: "PUNCHLINE ADALAT #n" drops in, "FAISLA 8/10" slams down,
+    the spoken line lights up word by word, then the question for the comments."""
+    host = take["host"]
+    t1 = t0 + take["seconds"]
+    cx = OUT_W // 2
+    gold = _ass_colour(GOLD)
+    label = f"{SERIES_LABEL} #{int(host.get('series') or 1)}"
+    w, h = max(520, 30 * len(label) + 120), 96
+    drop = rf"\move({cx},440,{cx},520,0,250)\fad(120,0)"
+    ev = [f"Dialogue: 3,{_ts(t0)},{_ts(t1)},Shape,,0,0,0,,"
+          rf"{{\an5{drop}\1c{gold}\bord0\shad0\p1}}{_round_rect(w, h, h // 2)}{{\p0}}",
+          f"Dialogue: 4,{_ts(t0)},{_ts(t1)},TakeLabel,,0,0,0,,{{\\an5{drop}}}{label}",
+          f"Dialogue: 5,{_ts(t0 + 0.15)},{_ts(t1)},Verdict,,0,0,0,,"
+          rf"{{\pos({cx},720)\fscx260\fscy260\alpha&HFF&\t(0,170,\fscx100\fscy100\alpha&H00&)"
+          rf"\t(170,230,\frz-4)\t(230,290,\frz3)\t(290,350,\frz0)}}FAISLA {{\1c{gold}}}"
+          rf"{int(host.get('score') or 0)}/10"]
+    ev += [e for e in take_events(t0, take) if ",TakeText," in e]
+    question = clean_title(host.get("question") or "").upper()
+    if question:
+        ev.append(f"Dialogue: 5,{_ts(t0 + 0.6)},{_ts(t1)},Question,,0,0,0,,"
+                  rf"{{\pos({cx},1190)\fad(200,0)}}{question}")
+    return ev
+
+
+def laugh_sound(kind, at, k):
+    """Filtergraph piece of one quiet laugh sound at ``at`` seconds, labelled [fx<k>]."""
+    expr, secs, gain, extra = LAUGH_SOUNDS.get(kind) or LAUGH_SOUNDS["boom"]
+    ms = max(0, int(at * 1000))
+    return (f";aevalsrc='{expr}':s=48000:d={secs:g}{extra},volume={gain:g},"
+            f"aformat=channel_layouts=stereo,adelay={ms}|{ms}[fx{k}]")
+
+
+def zoom_filters(geo, zoom, windows):
+    """Filters after the scale that punch in on the comedian (upper middle of the picture) during
+    ``windows`` [(t0, t1)]; "" without windows."""
+    if not windows:
+        return ""
+    zw, zh = int(geo["w"] / zoom) // 2 * 2, int(geo["h"] / zoom) // 2 * 2
+    zx, zy = (geo["w"] - zw) // 2, int((geo["h"] - zh) * 0.35)
+    on = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in windows)
+    return (f",split=2[pb][pz];[pz]crop={zw}:{zh}:{zx}:{zy},scale={geo['w']}:{geo['h']}:flags=lanczos[pzz];"
+            f"[pb][pzz]overlay=0:0:enable='{on}'")
+
+
 def end_card_audio(secs):
     """aevalsrc expression: a rising swoosh into a soft two-tone ding.
 
@@ -346,6 +505,7 @@ def overlay_ass(path, geo, bg, duration, title="", handle="", outro=False,
     # 76 px reads as a headline on a phone; long titles shrink so two lines fit.
     size = 76 if len(title) <= 36 else 64 if len(title) <= 60 else 52
     band_mid = geo["y"] // 2
+    host = (take or {}).get("host")
     lines = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {OUT_W}", f"PlayResY: {OUT_H}",
         "WrapStyle: 0", "ScaledBorderAndShadow: yes", "",
@@ -363,20 +523,26 @@ def overlay_ass(path, geo, bg, duration, title="", handle="", outro=False,
         *(s.format(gold=_ass_colour(GOLD), size=take_size(take["text"]),
                    ink=_ass_colour(bg if _luminance(bg) < 0.4 else "#000000"))
           for s in (TAKE_STYLES if take else [])),
+        *(s.format(gold=_ass_colour(GOLD), size=BUBBLE_SIZE) for s in (HOST_STYLES if host else [])),
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     if title:
         pop = (r"\fad(150,0)\fscx70\fscy70\t(0,260,\fscx106\fscy106)"
                r"\t(260,400,\fscx100\fscy100)")
-        lines.append(f"Dialogue: 1,{_ts(0)},{_ts(duration)},Title,,0,0,0,,"
-                     f"{{\\pos({OUT_W // 2},{band_mid}){pop}}}{title}")
+        back = r"\fad(200,0)"
+        # The host's bubbles take the band for a moment; the title steps aside and comes back.
+        for k, (a, b) in enumerate(title_spans(host, duration) if host else [(0.0, duration)]):
+            lines.append(f"Dialogue: 1,{_ts(a)},{_ts(b)},Title,,0,0,0,,"
+                         f"{{\\pos({OUT_W // 2},{band_mid}){pop if k == 0 else back}}}{title}")
+    if host:
+        lines += bubble_events(host, geo, duration)
     if handle:
         lines.append(f"Dialogue: 1,{_ts(0)},{_ts(duration)},Handle,,0,0,0,,"
                      f"{{\\pos({OUT_W // 2},44)\\alpha&H40&}}{handle}")
     take_s = 0.0
     if take:
-        lines += take_events(duration, take)
+        lines += verdict_events(duration, take) if host else take_events(duration, take)
         take_s = take["seconds"]
     if outro:
         lines += end_card_events(duration + take_s, outro_seconds, handle, bg)
@@ -394,8 +560,25 @@ def _probe(path):
     return w, h, duration
 
 
-def render(input_video, output_video, title=None):
-    """Render one cut clip as a FRAMED 9:16 video. Returns the geometry used."""
+def render(input_video, output_video, title=None, plain=False):
+    """Render one cut clip as a FRAMED 9:16 video. Returns the geometry used.
+
+    A render with the host's layer (clip_host.py) that fails is done again ``plain``: the clip is
+    never lost to a bubble, a zoom or a sticker."""
+    if not plain:
+        try:
+            return _render(input_video, output_video, title, plain=False)
+        except subprocess.CalledProcessError as e:
+            job = load_job(os.path.dirname(os.path.abspath(output_video))) or {}
+            rec = _by_clip_name(job.get("takes"), os.path.basename(output_video)) or {}
+            if not rec.get("host"):
+                raise
+            err = (e.stderr or b"").decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
+            print(f"   ⚠️ Host layer failed in ffmpeg ({err[0][:160]}) — rendering the plain frame.")
+    return _render(input_video, output_video, title, plain=True)
+
+
+def _render(input_video, output_video, title=None, plain=False):
     job_dir = os.path.dirname(os.path.abspath(output_video))
     cfg = settings(job_dir)
     job = load_job(job_dir) or {}
@@ -404,9 +587,17 @@ def render(input_video, output_video, title=None):
         title = _by_clip_name(job.get("titles"), os.path.basename(output_video))
     src_w, src_h, duration = _probe(input_video)
     take, voice = _take_for(job_dir, job, os.path.basename(output_video))
+    if plain and take:
+        take.pop("host", None)       # the verdict line stays, as a plain take
     geo = geometry(src_w, src_h, cfg["crop"], cfg["zoom"])
-    vf = (f"crop={geo['crop_w']}:{geo['crop_h']}:{geo['crop_x']}:{geo['crop_y']},scale={geo['w']}:{geo['h']}:flags=lanczos,"
-          f"pad={OUT_W}:{OUT_H}:{geo['x']}:{geo['y']}:color=0x{cfg['bg'].lstrip('#')},setsar=1")
+    host = (take or {}).get("host")
+    laughs = laugh_moments(host, duration) if host else []
+    look = (host or {}).get("look") or {}
+    zoom_windows = [(lg["at"], min(lg["at"] + ZOOM_HOLD, duration)) for lg in laughs]
+    vf = (f"[0:v]crop={geo['crop_w']}:{geo['crop_h']}:{geo['crop_x']}:{geo['crop_y']},"
+          f"scale={geo['w']}:{geo['h']}:flags=lanczos"
+          + zoom_filters(geo, float(look.get("zoom") or 1.12), zoom_windows)
+          + f",pad={OUT_W}:{OUT_H}:{geo['x']}:{geo['y']}:color=0x{cfg['bg'].lstrip('#')},setsar=1")
     ass_path = None
     title = clean_title(title) if cfg["title"] else ""
     secs = cfg["outro_seconds"]
@@ -425,13 +616,39 @@ def render(input_video, output_video, title=None):
                     handle=cfg["handle"], outro=cfg["outro"], outro_seconds=secs, take=take)
         vf += (f",ass=filename='{escape_filter_value(ass_path)}'"
                f":fontsdir='{escape_filter_value(FONTS_DIR)}'")
-    graph = f"[0:v]{vf}[v]"
+    graph = f"{vf}[v]"
     inputs = ["-i", input_video] + (["-i", voice] if voice else [])
-    if hold:
+    vout = "[v]"
+    stickers_on = []
+    if laughs:
+        # The host's emoji pops on his bubble's outer top corner, in the band: never over a face.
+        try:
+            import stickers
+            idx = 2 if voice else 1
+            for k, b in enumerate(bubbles(host, geo, duration) if stickers.available() else []):
+                path = stickers.path(b["emoji"] if b["emoji"] in stickers.EMOJI else "joy")
+                if not path:
+                    continue
+                sx = b["cx"] + (b["w"] // 2 - 20 if b["right"] else 20 - b["w"] // 2)
+                sy = b["cy"] - b["h"] // 2 + 10
+                t0, t1 = b["t0"] + 0.1, b["t1"]
+                more, filters, vout = stickers.overlay_args(path, idx, t0, t1, sx, sy, size=STICKER_SIZE,
+                                                            src=vout, label=f"hst{k}",
+                                                            alive_until=duration + hold)
+                inputs += more
+                graph += ";" + ";".join(filters)
+                stickers_on.append(b["emoji"])
+                idx += 1
+        except Exception as e:  # noqa: BLE001 — the Short goes out without the emoji
+            print(f"   ⚠️ Host emoji skipped ({type(e).__name__}: {e})")
+    if hold or laughs:
         # Silence pads the clip's audio; the take's voice and the end card's
-        # sound mix in on top.
-        graph += f";[0:a]apad=pad_dur={hold:g}[a0]"
+        # sound mix in on top, and the host's quiet laugh sounds.
+        graph += f";[0:a]apad=pad_dur={hold:g}[a0]" if hold else ";[0:a]anull[a0]"
         mix = ["[a0]"]
+        for k, lg in enumerate(laughs):
+            graph += laugh_sound(look.get("sound"), lg["at"] + 0.02, k)
+            mix.append(f"[fx{k}]")
         if voice:
             at = int((duration + TAKE_LEAD) * 1000)
             graph += (f";[1:a]{LOUDNORM_FILTER},aresample=48000,aformat=channel_layouts=stereo,"
@@ -444,9 +661,9 @@ def render(input_video, output_video, title=None):
             mix.append("[sfx]")
         graph += (f";{''.join(mix)}amix=inputs={len(mix)}:duration=first:normalize=0[a]"
                   if len(mix) > 1 else ";[a0]anull[a]")
-        maps = ["-map", "[v]", "-map", "[a]"]
+        maps = ["-map", vout, "-map", "[a]"]
     else:
-        maps = ["-map", "[v]", "-map", "0:a?"]
+        maps = ["-map", vout, "-map", "0:a?"]
     try:
         subprocess.run(
             ["ffmpeg", "-y", *inputs, "-filter_complex", graph, *maps,
@@ -460,5 +677,7 @@ def render(input_video, output_video, title=None):
     print(f"🖼️ Framed {geo['w']}x{geo['h']} on {cfg['bg']} ({cfg['crop']}, zoom {cfg['zoom']:g})"
           + (f", title: {title}" if title else "")
           + (f", take {take_s:.1f}s" + ("" if voice else " (text only)") if take else "")
+          + (f", host: {len(laughs)} laugh(s) {look.get('sound')}/{look.get('zoom')}/{'+'.join(stickers_on) or 'no emoji'}"
+             if host else "")
           + (", end card" if cfg["outro"] else ""))
     return geo

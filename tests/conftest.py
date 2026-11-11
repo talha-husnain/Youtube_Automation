@@ -45,6 +45,8 @@ os.environ["TEARDOWN"] = "0"            # teardown.py fetches the winners' files
 os.environ["VIRAL_WATCH"] = "0"         # viral_remix.study watching a real video by its link
 os.environ["AUDIENCE_RESEARCH"] = "0"   # viral_remix.study reading a studied video's comments (Data API)
 os.environ["CREATIVE_QA"] = "0"         # creative_qa: a Gemini look at every video before upload
+os.environ["MUSIC_FAL"] = "0"           # music_shorts would sing through fal.ai with the owner's .env key
+os.environ["CLIP_HOST"] = "0"           # clip_host would call the writer for every framed comedy job (its own tests turn it on)
 
 import pytest
 
@@ -62,6 +64,12 @@ def _private_channel_files(tmp_path, monkeypatch):
     monkeypatch.setattr(used_moments, "PATH", str(tmp_path / "used_moments.json"))
     monkeypatch.setattr(autopilot_local, "SETTINGS_FILE", str(tmp_path / "autopilot.json"))
     monkeypatch.setattr(autopilot_local, "LAST_SETTINGS_FILE", str(tmp_path / "last_settings.json"))
+    # The known comedians: no seeds, so research never reads a real channel in a test.
+    import comedy_sources
+    monkeypatch.setattr(comedy_sources, "STATE_FILE", str(tmp_path / "comedy_creators.json"))
+    monkeypatch.setattr(comedy_sources, "SEEDS", {})
+    import clip_host
+    monkeypatch.setattr(clip_host, "SERIES_FILE", str(tmp_path / "punchline_adalat.json"))
     monkeypatch.setattr(what_works, "REPORT_FILE", str(tmp_path / "what_works.json"))
     monkeypatch.setattr(youtube_account, "TOKEN_FILE", str(tmp_path / "youtube_token.json"))
     monkeypatch.setattr(youtube_account, "UPLOADS_FILE", str(tmp_path / "uploads.json"))

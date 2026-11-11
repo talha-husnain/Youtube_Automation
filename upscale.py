@@ -31,18 +31,39 @@ def _jobs(gpus=None):
     return "2:" + ",".join(["2"] * n) + ":2"
 
 
-def _run(src_dir, dst_dir, model, scale):
+def _run(src_dir, dst_dir, model, scale, gpus_first=None):
     """Both GPUs, or the first alone when the other is not there: on 5-nov-2026 Vulkan saw only the Iris Xe (the
-    Arc A370M was gone from the device list) and "-g 0,1" answered "invalid gpu device" for every picture."""
-    for gpus in dict.fromkeys([GPUS, GPUS.split(",")[0]]):
+    Arc A370M was gone from the device list) and "-g 0,1" answered "invalid gpu device" for every picture.
+    The photo model runs on the first GPU alone: with "-g 0,1" it wrote all-black frames (10-nov-2026), alone on
+    GPU 0 the same frame came out right."""
+    first = GPUS.split(",")[0]
+    for gpus in dict.fromkeys([gpus_first or (first if model == PHOTO_MODEL else GPUS), first]):
+        # The photo model with 2 worker threads ("-j 2:2:2") also gave black frames on GPU 0 alone; one thread
+        # ("-j 1:1:1") gave right frames on the same clip (10-nov-2026).
+        jobs = "1:1:1" if model == PHOTO_MODEL else _jobs(gpus)
         try:
             subprocess.run([EXE, "-i", src_dir, "-o", dst_dir, "-n", model, "-s", str(scale), "-f", "png",
-                            "-g", gpus, "-j", _jobs(gpus)], cwd=os.path.dirname(EXE), check=True,
+                            "-g", gpus, "-j", jobs], cwd=os.path.dirname(EXE), check=True,
                            capture_output=True, timeout=TIMEOUT)
             return
         except subprocess.CalledProcessError as e:
             if b"invalid gpu device" not in (e.stderr or b"") or gpus == GPUS.split(",")[0]:
                 raise
+
+
+def _went_dark(src_dir, dst_dir):
+    """True when sharpened frames are far darker than their sources (a few frames across the clip are compared)."""
+    from PIL import Image, ImageStat
+    names = sorted(os.path.basename(p) for p in glob.glob(os.path.join(src_dir, "*.png")))
+    for name in names[:: max(1, len(names) // 4)][:4]:
+        try:
+            a = ImageStat.Stat(Image.open(os.path.join(src_dir, name)).convert("L")).mean[0]
+            b = ImageStat.Stat(Image.open(os.path.join(dst_dir, name)).convert("L")).mean[0]
+        except OSError:
+            return True
+        if a > 20 and b < a * 0.5:
+            return True
+    return False
 
 
 def fps_of(path):
@@ -53,8 +74,9 @@ def fps_of(path):
     return f"{num}/{den or 1}" if num else "30"
 
 
-def video(src, out, scale=2):
-    """``src`` upscaled ``scale`` times (2-4) into ``out``, sound copied. Raises on failure."""
+def video(src, out, scale=2, model=VIDEO_MODEL):
+    """``src`` upscaled ``scale`` times (2-4) into ``out``, sound copied. Raises on failure. ``model``: the
+    cartoon-video weights by default; PHOTO_MODEL (x4 only) for lifelike footage."""
     work = tempfile.mkdtemp(prefix="upscale_")
     try:
         frames, big = os.path.join(work, "in"), os.path.join(work, "out")
@@ -62,9 +84,17 @@ def video(src, out, scale=2):
         os.makedirs(big)
         subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", src, os.path.join(frames, "f%05d.png")],
                        check=True, capture_output=True, timeout=TIMEOUT)
-        _run(frames, big, VIDEO_MODEL, scale)
+        _run(frames, big, model, 4 if model == PHOTO_MODEL else scale)
         if len(glob.glob(os.path.join(big, "*.png"))) != len(glob.glob(os.path.join(frames, "*.png"))):
             raise RuntimeError("Real-ESRGAN left frames out")
+        if _went_dark(frames, big):
+            # Once more on the first GPU alone, then give up (the caller resizes instead): a black video must
+            # never reach an upload (10-nov-2026: a whole sample came out black).
+            for f in glob.glob(os.path.join(big, "*.png")):
+                os.remove(f)
+            _run(frames, big, model, 4 if model == PHOTO_MODEL else scale, gpus_first=GPUS.split(",")[0])
+            if _went_dark(frames, big):
+                raise RuntimeError("Real-ESRGAN gave black frames")
         subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-framerate", fps_of(src),
                         "-i", os.path.join(big, "f%05d.png"), "-i", src, "-map", "0:v", "-map", "1:a?",
                         "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
