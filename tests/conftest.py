@@ -47,6 +47,8 @@ os.environ["AUDIENCE_RESEARCH"] = "0"   # viral_remix.study reading a studied vi
 os.environ["CREATIVE_QA"] = "0"         # creative_qa: a Gemini look at every video before upload
 os.environ["MUSIC_FAL"] = "0"           # music_shorts would sing through fal.ai with the owner's .env key
 os.environ["CLIP_HOST"] = "0"           # clip_host would call the writer for every framed comedy job (its own tests turn it on)
+os.environ["FAL_IMAGES"] = "0"          # ai_fallback would draw backup pictures on fal with the owner's .env key
+os.environ["MOTION"] = "0"              # motion.animate would make Wan 2.2 clips on fal
 
 import pytest
 

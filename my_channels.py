@@ -65,6 +65,27 @@ TRANSIENT_MAX = 6         # a day; past that they count like any other failure
 # (watchdog, laptop reboot) and the job could not be resumed. Waiting for the
 # timeout held the one-job-at-a-time loop for up to 3 hours.
 LOST_AFTER = 600
+# The laptop sleeps (the owner puts it to sleep around 04:00-05:00 and wakes it near 12:40: Windows' event log,
+# 9-11 Nov 2026). A job's clock stops meanwhile; counted as running, a 40-minute horror video woke up "took too
+# long" and was killed. A gap between two loop ticks longer than SLEEP_GAP is a nap and leaves the job's age.
+SLEEP_GAP = 10 * 60
+_naps = []                      # [(woke at, seconds asleep)]
+_tick_at = None
+
+
+def note_tick(now=None):
+    global _tick_at
+    now = time.time() if now is None else now
+    if _tick_at is not None and now - _tick_at > SLEEP_GAP:
+        _naps.append((now, now - _tick_at))
+        del _naps[:-50]
+    _tick_at = now
+
+
+def awake_since(t, now=None):
+    """Seconds since ``t`` that the laptop was awake (naps seen by this process left out)."""
+    now = time.time() if now is None else now
+    return max(0.0, now - t - sum(secs for woke, secs in _naps if woke > t))
 LOST = "the job was lost when the server restarted"
 # A long video needs a few GB while it renders (shots, voices, the join); a
 # full disk fails it at the last step, after all its AI calls were paid.
@@ -1853,8 +1874,8 @@ def refresh_jobs(ch, job_clips, output_dir, now=None):
             changed.append((j["job_id"], "failed", reason or "the job failed", []))
         elif state == "missing" and now - j.get("at", now) > LOST_AFTER:
             changed.append((j["job_id"], "failed", LOST, []))
-        elif now - j.get("at", now) > (MIX_TIMEOUT if j.get("format") == "mix"
-                                       else KINDS.get(ch["kind"], {}).get("timeout", JOB_TIMEOUT)):
+        elif awake_since(j.get("at", now), now) > (MIX_TIMEOUT if j.get("format") == "mix"
+                                                   else KINDS.get(ch["kind"], {}).get("timeout", JOB_TIMEOUT)):
             if cancel_job:
                 try:
                     cancel_job(j["job_id"], "stopped: it took too long")
@@ -2848,6 +2869,7 @@ async def loop_forever(submit, job_clips, output_dir, client_fn, is_active=lambd
     global last_tick
     while True:
         await asyncio.sleep(TICK_SECONDS)
+        note_tick()
         if not is_active():
             continue
         last_tick = time.time()

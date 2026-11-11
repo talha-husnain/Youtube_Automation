@@ -516,6 +516,25 @@ def voice_lines(client, items, job_dir, prefix):
 RETRY_WAIT = 30
 
 
+FREE_VOICE_WAIT = 12 * 60
+
+
+def wait_for_free_voice(most=FREE_VOICE_WAIT):
+    """While the free voice rests after a blip and Gemini has no credit, wait for it (at most ``most`` s): the
+    lines it missed have nowhere else to go (from 6-nov-2026 they went to a Gemini voice with no credit, line
+    after line, and long videos ran out of time). Returns the seconds waited."""
+    import ai_fallback
+    import free_voice
+    info = free_voice.rest_info()
+    if not info or not ai_fallback.status().get("gemini_down"):
+        return 0.0
+    secs = max(0.0, min(float(most), info["until"] - time.time() + 2))
+    if secs:
+        print(f"   ⏳ The free voice rests ({info['reason'][:60]}); waiting {secs / 60:.0f} min for it.")
+        time.sleep(secs)
+    return secs
+
+
 def voice_all(client, items, job_dir, prefix, wait=None):
     """voice_lines, then once more after a pause for the lines that failed;
     raises when a line still has no voice. A quiz went up with 8 of its 10
@@ -526,6 +545,8 @@ def voice_all(client, items, job_dir, prefix, wait=None):
     if missing:
         print(f"   🔁 {len(missing)} voice line(s) failed; trying them again in {RETRY_WAIT if wait is None else wait} s...")
         time.sleep(RETRY_WAIT if wait is None else wait)
+        if wait is None:
+            wait_for_free_voice()
         for k, got in zip(missing, voice_lines(client, [items[k] for k in missing], job_dir, prefix + "r")):
             if got[0]:
                 said[k] = got

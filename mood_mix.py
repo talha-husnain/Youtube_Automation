@@ -216,6 +216,9 @@ def make_tracks(client, mood, minutes, budget, job_dir, log=print):
         names = []
     tracks, total, refused = [], 0.0, 0
     k = 0
+    if not fal and _fal_route():
+        fal = True   # the titles call just found Gemini out of credit
+        most = max(0, int(budget / FAL_TRACK_USD))
     while total < want and len(tracks) < most and refused < TRACK_TRIES:
         sound = sounds[k % len(sounds)]
         prompt = (f"Instrumental only, no vocals, no singing, no spoken words. {sound}. A complete track of about "
@@ -225,6 +228,15 @@ def make_tracks(client, mood, minutes, budget, job_dir, log=print):
         try:
             _lyria_track(client, prompt, out, fal)
         except Exception as e:  # noqa: BLE001 — a refused or failed track: try the next sound
+            import ai_fallback
+            if not fal and ai_fallback.out_of_credit(e) and ms.fal_enabled():
+                # A fresh job does not know yet that Gemini has no credit (11-nov-2026: every track 402,
+                # "Only 0:00 of music" again): the same Lyria through fal from here on.
+                fal = True
+                most = max(len(tracks) + 1, int(budget / FAL_TRACK_USD))
+                log("   ℹ️ Gemini is out of credit, so Lyria makes the tracks through fal.ai ($0.10 each).")
+                k -= 1
+                continue
             refused += 1
             log(f"   ℹ️ Track {k} not made ({type(e).__name__}: {str(e)[:80]}).")
             continue

@@ -938,6 +938,16 @@ def voice_all(client, texts, job_dir, lang, voice, mode="history"):
             break
         print(f"   🔁 Voicing {len(bad)} paragraph(s) again...")
         time.sleep(15 * (attempt + 1))
+        if attempt == 0 and not all(said[k][0] for k in bad):
+            # Lines with no voice at all: the free voice again (after its rest), not only Gemini, which had no
+            # credit from 6-nov-2026 and failed every one slowly.
+            kit.wait_for_free_voice()
+            again = kit.voice_lines(client, [{"text": texts[k], "voice": voice, "style": style, "language": language}
+                                             for k in bad], job_dir, f"hvr{attempt}")
+            for k, got in zip(bad, again):
+                if got and got[0]:
+                    said[k] = got
+            continue
         for k in bad:
             path = os.path.join(job_dir, f".hv_{k + 1}.wav")
             secs = ai_take.speak(client, texts[k], path, voice, style, language=language)
@@ -1827,6 +1837,16 @@ def pictures(client, script, topic, job_dir, log=print, mode="history"):
                 if path:
                     raw[k] = path
                     ai_used += 1
+        if mode == "horror" and order_all and raw.get(order_all[0]) and raw[order_all[0]] not in videos:
+            # The opening painting moves (Wan 2.2 through fal, ~$0.10, motion.py): the first seconds decide
+            # whether a viewer stays, and a still slideshow there read as cheap (owner, 11-nov-2026).
+            import motion
+            k = order_all[0]
+            clip = motion.animate(raw[k], sc[k].picture, os.path.join(job_dir, ".hv_pics", f"mv{k:03d}.mp4"), log=log)
+            if clip:
+                raw[k] = clip
+                import music_shorts
+                videos[clip] = {"path": clip, "kind": "video", "seconds": music_shorts.media_seconds(clip) or 5.0}
     if not raw:
         raise RuntimeError("No pictures could be found or made for this topic.")
     # Scenes still without a picture borrow the nearest one before them (after, at the start).

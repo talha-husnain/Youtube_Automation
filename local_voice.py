@@ -8,10 +8,12 @@ ran ~12x. Slow, so it is the fallback, not the default (VOICE_ENGINE=omni puts i
 
 Licences: code Apache-2.0; its audio tokenizer is Boson AI's Higgs Audio 2 community licence (Llama 3
 style): commercial use allowed, the credit "Built with Higgs Materials licensed from Boson AI USA, Inc."
-on a related about page, and an expanded licence needed past 100,000 annual active users.
+on a related about page, and an expanded licence needed past 100,000 annual active users. BUT the
+pre-trained OmniVoice model itself is CC-BY-NC (model card, "## License": "due to constraints from its
+training data (e.g., Emilia)"), found 11-nov-2026: non-commercial, so it is OFF unless LOCAL_VOICE=1.
 
 It runs in its own venv (torch + transformers 5, D:/youtube/oss/OmniVoice) through omnivoice_worker.py,
-one process per batch of lines, so its packages never meet ours. LOCAL_VOICE=0 turns it off.
+one process per batch of lines, so its packages never meet ours. LOCAL_VOICE=1 turns it on.
 """
 import json
 import os
@@ -52,7 +54,10 @@ def python():
 
 
 def available():
-    return os.environ.get("LOCAL_VOICE", "1").strip() != "0" and os.path.isfile(python()) and os.path.isfile(WORKER)
+    """Opt-in (LOCAL_VOICE=1): OmniVoice's CODE is Apache 2.0, but its trained model is CC-BY-NC, non-commercial,
+    because of its training data (the model card in oss/hf, "## License", read 11-nov-2026). Our channels are
+    built to be monetised, so it stays off unless the owner turns it on for a channel that earns nothing."""
+    return os.environ.get("LOCAL_VOICE", "0").strip() == "1" and os.path.isfile(python()) and os.path.isfile(WORKER)
 
 
 def speed_of(rate):

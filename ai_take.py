@@ -187,6 +187,12 @@ def speak(client, text, path, voice=DEFAULT_VOICE, style=None, language="Roman U
                     w.writeframes(data)
                 return _wav_seconds(path)
             except Exception as e:  # noqa: BLE001 — next attempt / model
+                import ai_fallback
+                if ai_fallback.out_of_credit(e):
+                    # Every Gemini voice draws on the same prepaid balance: the other models and the retry would
+                    # each wait and fail too (a 64-paragraph horror video spent its 3 hours on this, 10-nov-2026).
+                    print(f"   ⚠️ Gemini voice: no credit ({model}); the line goes back to the free voices.")
+                    return None
                 busy = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
                 if attempt == 0:
                     time.sleep(15 if busy else 1)

@@ -24,6 +24,7 @@ import contextvars
 import io
 import json
 import os
+import re
 import threading
 import time
 
@@ -337,7 +338,40 @@ def _openai_text(parts, cfg, json_schema, search):
                     text += c.get("text") or ""
     if not text.strip():
         raise RuntimeError(f"OpenAI gave no text ({data.get('status')})")
+    if search:
+        _LAST_SOURCES[threading.get_ident()] = citations(data)
     return _json_text(text) if want_json else text
+
+
+# The web pages the last searched OpenAI answer cited, per thread (backup() reads them right after the call).
+_LAST_SOURCES = {}
+_UTM = re.compile(r"[?&]utm_source=openai(?=&|$)")
+
+
+def citations(data):
+    """[(title, url)] of an OpenAI Responses answer's url_citation notes, first seen first, one per page."""
+    seen, out = set(), []
+    for item in data.get("output") or []:
+        for c in item.get("content") or [] if item.get("type") == "message" else []:
+            for a in c.get("annotations") or []:
+                if a.get("type") != "url_citation" or not a.get("url"):
+                    continue
+                url = _UTM.sub("", a["url"]).rstrip("?&")
+                if url in seen:
+                    continue
+                seen.add(url)
+                out.append(((a.get("title") or "").strip(), url))
+    return out
+
+
+def _grounded(text, sources):
+    """A candidate shaped like Gemini's search grounding, so every reader of
+    candidates[0].grounding_metadata.grounding_chunks[].web finds the backup's sources (from 6-nov-2026 the
+    controversy and money channels got "0 sources" for every video: OpenAI searched, nobody saw its links)."""
+    from types import SimpleNamespace as NS
+    chunks = [NS(web=NS(uri=url, title=title or url)) for title, url in sources]
+    return NS(grounding_metadata=NS(grounding_chunks=chunks, web_search_queries=[]), finish_reason="STOP",
+              content=NS(parts=[NS(text=text, inline_data=None)], role="model"))
 
 
 # $ per million tokens (input, output), OpenAI list prices: only for the owner's cost report, never for decisions.
@@ -409,6 +443,54 @@ def _crop(png, ratio):
             nh = round(w / ratio)
             img = img.crop((0, (h - nh) // 2, w, (h - nh) // 2 + nh))
     return _image_bytes(img)
+
+
+FAL_IMAGE_MODEL = "fal-ai/flux-2/flash"
+
+
+def fal_images_ok(parts):
+    """A NEW picture from a prompt only (no picture to edit), a fal key and today's cap not reached."""
+    try:
+        import ai_influencer
+        if not ai_influencer.key():
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    if os.environ.get("FAL_IMAGES", "1").strip() == "0" or any(p[0] == "image" for p in parts):
+        return False
+    return (_read().get("fal_images") or {}).get(time.strftime("%Y-%m-%d"), 0) < _int_env("FAL_IMAGES_PER_DAY", 150)
+
+
+def _fal_image(parts, cfg):
+    """Gemini's picture through fal's Flux 2 Flash ($0.005 a megapixel: ~$0.01 for a 16:9 scene, Gemini's was
+    ~$0.067). From 6-nov-2026 Gemini had no credit and only the cartoon channel had a backup, so history and
+    horror scenes, mix paintings and song stills fell back to unrelated stock (a European mill in a Pakistani
+    village story). The size follows the request's aspect ratio, the long side 1344 (2K asks: 1920)."""
+    import tempfile
+    import talkies
+    ratio = _aspect(cfg)
+    long_side = 1920 if str(_get(_get(cfg, "image_config"), "image_size") or "").upper() == "2K" else 1344
+    w, h = (long_side, long_side / ratio) if ratio >= 1 else (long_side * ratio, long_side)
+    w, h = max(256, int(w) // 16 * 16), max(256, int(h) // 16 * 16)
+    prompt = "\n".join(p[1] for p in parts if p[0] == "text")[:4000]
+    body = talkies.fal_job(os.environ.get("FAL_IMAGE_MODEL") or FAL_IMAGE_MODEL,
+                           {"prompt": prompt, "image_size": {"width": w, "height": h}, "num_images": 1,
+                            "output_format": "png", "enable_safety_checker": True})
+    images = body.get("images") if isinstance(body, dict) else None
+    if not images or not images[0].get("url"):
+        raise RuntimeError(f"fal gave no picture: {str(body)[:200]}")
+    fd, tmp = tempfile.mkstemp(suffix=".png")
+    os.close(fd)
+    try:
+        talkies._download(images[0]["url"], tmp)
+        with open(tmp, "rb") as f:
+            data = f.read()
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    day = time.strftime("%Y-%m-%d")
+    _update(lambda d: d.update(fal_images={day: (d.get("fal_images") or {}).get(day, 0) + 1}))
+    return data
 
 
 def _openai_image(parts, cfg):
@@ -490,6 +572,15 @@ def backup(contents, config=None):
     parts = _parts(contents)
     modalities = [str(m).upper() for m in (_get(config, "response_modalities") or [])]
     if any("IMAGE" in m for m in modalities):
+        if fal_images_ok(parts):
+            try:
+                img = _fal_image(parts, config)
+                _used("fal-image")
+                return Response(image=img, provider="fal")
+            except Exception as e:  # noqa: BLE001 — the OpenAI route, where it is allowed
+                _say("fal-image-failed:" + str(e)[:40], f"   ⚠️ The fal picture failed ({str(e)[:120]}).")
+                if not images_allowed():
+                    raise
         if not images_allowed():
             raise Unsupported("backup pictures are for the cartoon channel only")
         img = _openai_image(parts, config)
@@ -501,9 +592,14 @@ def backup(contents, config=None):
     errors = []
     if openai_key():
         try:
-            text = _openai_text(parts, config, js, _wants_search(_get(config, "tools")))
+            search = _wants_search(_get(config, "tools"))
+            _LAST_SOURCES.pop(threading.get_ident(), None)
+            text = _openai_text(parts, config, js, search)
             _used("openai")
-            return Response(text=text, provider="openai")
+            resp = Response(text=text, provider="openai")
+            if search:
+                resp.candidates = [_grounded(text, _LAST_SOURCES.pop(threading.get_ident(), None) or [])]
+            return resp
         except Exception as e:  # noqa: BLE001 — Ollama next
             errors.append(f"OpenAI: {str(e)[:200]}")
             _say("openai-failed:" + str(e)[:40], f"   ⚠️ The OpenAI backup failed ({str(e)[:120]}); trying Ollama.")

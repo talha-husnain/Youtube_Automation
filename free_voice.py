@@ -68,6 +68,14 @@ def resting():
 
 NETWORK_ERRORS = ("ClientConnector", "Cannot connect to host", "name resolution", "getaddrinfo", "TimeoutError")
 NETWORK_REST = 10 * 60
+# A line this long may take the service longer than TIMEOUT: its time grows with the text, and a timeout on it is
+# retried, never read as an outage.
+SHORT_LINE = 300
+CHARS_PER_SECOND = 8
+
+
+def timeout_for(text):
+    return max(TIMEOUT, len(text or "") / CHARS_PER_SECOND)
 
 
 def _rest(reason, seconds=COOLDOWN):
@@ -141,7 +149,7 @@ def speak(text, path, voice, rate="+0%", pitch="+0Hz"):
         try:
             # The pitch only when one is set: the narrators' calls (and their test fakes) stay as they were.
             say = _say(text, voice, rate, mp3, pitch) if pitch != "+0Hz" else _say(text, voice, rate, mp3)
-            words = asyncio.run(asyncio.wait_for(say, TIMEOUT))
+            words = asyncio.run(asyncio.wait_for(say, timeout_for(text)))
             if not os.path.isfile(mp3) or os.path.getsize(mp3) < 2000:
                 raise ValueError("no audio")
             subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", mp3, "-ar", "24000", "-ac", "1",
@@ -159,6 +167,11 @@ def speak(text, path, voice, rate="+0%", pitch="+0Hz"):
             if "403" in str(e) or "429" in str(e):
                 _rest(str(e))
                 break
+            timed_out = isinstance(e, (asyncio.TimeoutError, TimeoutError))
+            if timed_out and len(text) > SHORT_LINE:
+                # A long paragraph that ran past its time is that paragraph, not an outage: resting the voice
+                # for 10 minutes sent a horror video's 64 paragraphs to a Gemini voice with no credit (10-nov-2026).
+                continue
             if any(m in f"{type(e).__name__} {e}" for m in NETWORK_ERRORS):
                 # The host cannot be reached at all (its name stopped resolving on
                 # this network for minutes, 15-oct-2026): every line burned ~10 s of

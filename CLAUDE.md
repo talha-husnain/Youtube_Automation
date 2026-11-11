@@ -858,9 +858,11 @@ never finished:
     720p: 360p clips cost a third. One GPU alone took ~100 s.
   - `local_voice.py` + `omnivoice_worker.py`: OmniVoice (k2-fsa, Apache code; its audio tokenizer is
     Boson's Higgs Audio 2 community licence: commercial OK, "Built with Higgs Materials licensed from
-    Boson AI USA, Inc." on an about page, expanded licence past 100k annual active users). Reads the
+    Boson AI USA, Inc." on an about page, expanded licence past 100k annual active users). **But the
+    pre-trained model is CC-BY-NC** (its model card, "## License", training data Emilia; found 11-nov-2026),
+    so it is OFF unless `LOCAL_VOICE=1` (opt-in since then). Reads the
     lines the edge voice fails before the paid Gemini voice (short_kit.voice_lines, Quran translations);
-    `VOICE_ENGINE=omni` puts it first, `LOCAL_VOICE=0` (tests) turns it off. Its own venv in
+    `VOICE_ENGINE=omni` puts it first. Its own venv in
     D:\youtube\oss\OmniVoice (torch + transformers 5), one worker process per batch, HF_HUB_OFFLINE=1.
     One designed voice per gender is made once (state/voices/omni_<gender>.pt) and cloned for every
     line: a designed voice comes out different on each call. Whisper heard Urdu narration and a Quran
@@ -2267,6 +2269,34 @@ container before stopping the old one (rolling update) and both share
 
 Before pushing, still batch small commits (tests, docs) with the next real
 change: every deploy is a ~5 min build plus a handover.
+
+## While Gemini has no credit (from 6-nov-2026) and the 11-nov-2026 fixes
+
+- **Searched backup answers carry their sources** (`ai_fallback.citations`, `_grounded`): OpenAI's web search
+  answers came back as plain text, so every `grounding_metadata.grounding_chunks` reader saw 0 sources and the
+  controversy and money channels refused every video for 5 days ("Not enough reliable sources (0)"). The backup
+  now turns OpenAI's `url_citation` notes into a Gemini-shaped candidate (utm_source=openai dropped).
+- **Backup pictures through fal** (`ai_fallback._fal_image`, Flux 2 Flash, ~$0.005/MP, `FAL_IMAGES_PER_DAY` 150,
+  `FAL_IMAGES=0` off; tests off): every NEW picture (history/horror scenes, mix paintings, song stills,
+  thumbnails) when Gemini cannot answer; edits of a picture keep the OpenAI route (cartoon only). Alibaba's
+  Z-Image Turbo (`FAL_IMAGE_MODEL=fal-ai/z-image/turbo`, same price) was tried: it drifted (added a train).
+- **Moving opening shot on horror videos** (`motion.py`): Alibaba's Wan 2.2 A14B Turbo image-to-video on fal
+  ($0.10 a 720p clip, ~4 min in fal's queue), ping-ponged to ~10 s so a looped shot never jumps, freeze-checked,
+  `MOTION_PER_DAY` 6, `MOTION=0` off (tests). fal retires its Wan 2.2 endpoints on 4 Jan 2027: `MOTION_ENDPOINT`.
+- **Voices without Gemini**: `ai_take.speak` stops at the first no-credit answer (all its TTS models share the
+  balance; a 64-paragraph horror video spent its 3 h retrying them), a long paragraph's edge timeout scales with
+  its length and never rests the free voice (`free_voice.timeout_for`, `SHORT_LINE`), lines with no voice wait
+  for the free voice's rest when Gemini is down (`short_kit.wait_for_free_voice`), and history's retry goes
+  through `voice_lines`, not Gemini alone. Takes and Chacha Judge verdicts use `voice_lines` too.
+- **Mixes**: `mood_mix.make_tracks` moves to fal Lyria at the first 402 (a fresh job did not know Gemini was down).
+- **The laptop sleeps** ~04:00-05:00 to ~12:40 (Start menu sleep/power-off by the owner, Windows event log
+  187/1074): `my_channels.note_tick`/`awake_since` leave naps out of a job's age, so a job does not wake up
+  "took too long". A reboot still kills running jobs (`_requeue` puts their ideas back).
+- **Comedy** (main channel): `comedy_sources.py` (comedians posting their own sets under CC, read whole through
+  the Data API), `replay_heat.py` (yt-dlp `heatmap` = Most replayed, also from the captions path's info),
+  `clip_host.py` "Chacha Judge" (joke bubbles in the top band on 1-2 laughs, zoom + Noto emoji on the bubble's
+  corner + a synthesised sound, PUNCHLINE ADALAT #n verdict card; `framed_layout.render` re-renders plain if the
+  host layer fails), 2 clips a video, min views 100k. Research in docs/research-2026-11-11/.
 
 ## CI: a green pipeline closes the task, not the push
 - After every `git push`, wait for the commit's workflow and confirm it is green: `ci-wait` (Victor's Mac) or `gh run watch $(gh run list -c $(git rev-parse HEAD) -L1 --json databaseId -q ".[0].databaseId") --exit-status`.
